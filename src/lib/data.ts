@@ -64,7 +64,7 @@ export const treatments: Treatment[] = [
       "Sérum et protection adaptés à emporter",
     ],
     image:
-      "https://images.unsplash.com/photo-1570172619604-42b92985d5ea?auto=format&fit=crop&w=1600&q=80",
+      "https://images.unsplash.com/photo-1552693673-1bf958298935?auto=format&fit=crop&w=1600&q=80",
   },
   {
     slug: "rituel-or",
@@ -230,7 +230,7 @@ export const treatments: Treatment[] = [
       "Conseil de rythme et d'entretien",
     ],
     image:
-      "https://images.unsplash.com/photo-1519824145371-296454c2c61a?auto=format&fit=crop&w=1600&q=80",
+      "https://images.unsplash.com/photo-1596755389378-c31d21fd1273?auto=format&fit=crop&w=1600&q=80",
   },
 ];
 
@@ -247,7 +247,7 @@ export const team = [
     role: "Experte regard",
     bio: "Sourcils, cils, teinture végétale. Inès lit l'architecture d'un visage en quelques secondes et refuse les poses trop denses. Son credo : un regard que l'on remarque, pas que l'on déchiffre.",
     image:
-      "https://images.unsplash.com/photo-1531123897727-8f1bd90c4f8d?auto=format&fit=crop&w=800&q=80",
+      "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=800&q=80",
   },
   {
     name: "Léa Fontaine",

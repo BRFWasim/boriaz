@@ -1,6 +1,6 @@
 import Image from "next/image";
 import Link from "next/link";
-import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
 import {
   categoryLabel,
   formatPrice,
@@ -18,10 +18,15 @@ export function TreatmentCard({
   return (
     <article
       className={cn(
-        "group flex h-full flex-col overflow-hidden border border-border bg-card",
+        "group relative flex h-full flex-col overflow-hidden border border-border bg-card",
         featured && "md:flex-row"
       )}
     >
+      <Link
+        href={`/soins/${treatment.slug}`}
+        className="absolute inset-0 z-10"
+        aria-label={`Découvrir ${treatment.name}`}
+      />
       <div
         className={cn(
           "relative aspect-[4/5] overflow-hidden bg-muted",
@@ -30,7 +35,7 @@ export function TreatmentCard({
       >
         <Image
           src={treatment.image}
-          alt={treatment.name}
+          alt=""
           fill
           sizes="(min-width: 768px) 40vw, 100vw"
           className="object-cover transition-transform duration-700 group-hover:scale-[1.04]"
@@ -45,22 +50,22 @@ export function TreatmentCard({
         <p className="mt-4 flex-1 text-sm leading-relaxed text-foreground/80">
           {treatment.short}
         </p>
-        <div className="mt-6 flex flex-wrap gap-3">
-          <Button
-            nativeButton={false}
-            render={<Link href={`/soins/${treatment.slug}`} />}
-            variant="outline"
-            className="btn-couture border-foreground/20"
+        <div className="relative z-20 mt-6 flex flex-wrap gap-3">
+          <Link
+            href={`/soins/${treatment.slug}`}
+            className={cn(
+              buttonVariants({ variant: "outline" }),
+              "btn-couture border-foreground/20"
+            )}
           >
             Découvrir
-          </Button>
-          <Button
-            nativeButton={false}
-            render={<Link href={`/reserver?soin=${treatment.slug}`} />}
-            className="btn-couture"
+          </Link>
+          <Link
+            href={`/reserver?soin=${treatment.slug}`}
+            className={cn(buttonVariants(), "btn-couture")}
           >
             Réserver
-          </Button>
+          </Link>
         </div>
       </div>
     </article>

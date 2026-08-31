@@ -78,7 +78,7 @@ export default function HomePage() {
         </div>
         <div className="relative aspect-[4/5] overflow-hidden bg-muted">
           <Image
-            src="https://images.unsplash.com/photo-1560750588-73207b1ef5bf?auto=format&fit=crop&w=1200&q=80"
+            src="https://images.unsplash.com/photo-1507652313519-d4e9174996dd?auto=format&fit=crop&w=1200&q=80"
             alt="Intérieur feutré de l'institut"
             fill
             className="object-cover"
