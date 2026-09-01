@@ -22,7 +22,18 @@ Pour chaque baleine :
 - positions ouvertes : crypto, long/short, taille en $ et en quantité, levier, prix d’entrée, mark, PnL latent, SL/TP s’ils sont posés (avec distance en % au mark), heure d’ouverture (date + « il y a X »)
 - historique des clôtures récentes : entrée → sortie, SL/TP touché le cas échéant, PnL réalisé
 
-Filtres côté client : recherche alias/adresse, tri (portefeuille, PnL 24h, nombre de positions), filtre par crypto.
+Filtres : recherche alias/adresse, tri (portefeuille, PnL 24h, nombre de positions), filtre par crypto.
+
+Interface **Simple** (cartes, lisible au pouce) ou **Avancé** (tableau complet sur bureau, cartes détaillées sur téléphone). Le choix est mémorisé.
+
+Les positions sont relues **toutes les ~20 secondes**. Si une baleine clôture pour en ouvrir une autre, la nouvelle position apparaît au cycle suivant (ce n’est pas du tick-par-tick).
+
+### Téléphone et ordinateur
+
+C’est une PWA autonome : ouvrez l’URL, puis installez-la.
+
+- iPhone / iPad : bouton Partager → **Sur l’écran d’accueil**
+- Android / Chrome / bureau : **Installer l’application** dans la barre d’adresse
 
 ## Données
 
@@ -37,7 +48,7 @@ Filtres côté client : recherche alias/adresse, tri (portefeuille, PnL 24h, nom
 
 Les 10 adresses sont celles du **plus gros portefeuille leaderboard** qui ont un **compte perps actif** (positions ouvertes ou capitaux perps). Les wallets 100 % spot, sans activité perpétuels, sont écartés.
 
-Rafraîchissement toutes les **45 secondes**, avec cache serveur pour rester dans les limites de l’API.
+Rafraîchissement des positions toutes les **20 secondes** (cache serveur). L’historique des fills est relu si le set de positions change, sinon toutes les 60 s.
 
 ## Stack
 

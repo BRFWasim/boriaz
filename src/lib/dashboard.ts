@@ -29,7 +29,8 @@ import type {
 } from "./types";
 
 const WHALE_COUNT = 10;
-const DETAILS_TTL_MS = 45_000;
+const DETAILS_TTL_MS = 20_000;
+const HISTORY_TTL_MS = 60_000;
 const SELECTION_TTL_MS = 10 * 60_000;
 const SCAN_LIMIT = 140;
 const MIN_PERP_EQUITY = 50_000;
@@ -53,6 +54,10 @@ interface CacheBox<T> {
 let selectionCache: CacheBox<SelectedRow[]> | null = null;
 let detailsCache: CacheBox<DashboardPayload> | null = null;
 let inflight: Promise<DashboardPayload> | null = null;
+const historyCache = new Map<
+  string,
+  CacheBox<{ keys: string; fills: Fill[]; historical: HistoricalOrder[] }>
+>();
 
 export function getRefreshSeconds(): number {
   return Math.round(DETAILS_TTL_MS / 1000);
@@ -96,7 +101,7 @@ async function refreshDashboard(): Promise<DashboardPayload> {
       info: INFO_URL,
     },
     scanNote:
-      "Les 10 adresses affichées sont celles du leaderboard avec le plus gros portefeuille qui ont un compte perpétuels actif (positions ouvertes ou capitaux perps). Les portefeuilles 100 % spot, sans activité perps, sont écartés.",
+      "Les 10 adresses affichées sont celles du leaderboard avec le plus gros portefeuille qui ont un compte perpétuels actif (positions ouvertes ou capitaux perps). Les portefeuilles 100 % spot, sans activité perps, sont écartés. Une clôture suivie d’une nouvelle position apparaît au cycle suivant (~20 s).",
     cached: false,
   };
   detailsCache = { at: Date.now(), value: payload };
@@ -163,16 +168,51 @@ function isActivePerpTrader(state: ClearinghouseState): boolean {
   return open || equity >= MIN_PERP_EQUITY;
 }
 
+function openPositionKeys(state: ClearinghouseState): string {
+  return (state.assetPositions ?? [])
+    .filter((item) => Math.abs(parseNum(item.position?.szi)) > 0)
+    .map(
+      (item) =>
+        `${item.position.coin}:${Math.sign(parseNum(item.position.szi))}`,
+    )
+    .sort()
+    .join("|");
+}
+
+async function loadFills(
+  address: string,
+  keys: string,
+): Promise<{ fills: Fill[]; historical: HistoricalOrder[] }> {
+  const cached = historyCache.get(address);
+  if (
+    cached &&
+    cached.value.keys === keys &&
+    Date.now() - cached.at < HISTORY_TTL_MS
+  ) {
+    return cached.value;
+  }
+
+  const [fills, historical] = await Promise.all([
+    fetchUserFills(address).catch(() => [] as Fill[]),
+    fetchHistoricalOrders(address).catch(() => [] as HistoricalOrder[]),
+  ]);
+  const value = { keys, fills, historical };
+  historyCache.set(address, { at: Date.now(), value });
+  return value;
+}
+
 async function hydrateWhale(
   row: SelectedRow,
   marks: Map<string, number>,
 ): Promise<Whale> {
-  const [state, orders, fills, historical] = await Promise.all([
+  const [state, orders] = await Promise.all([
     fetchClearinghouse(row.address),
     fetchOpenOrders(row.address).catch(() => [] as FrontendOrder[]),
-    fetchUserFills(row.address).catch(() => [] as Fill[]),
-    fetchHistoricalOrders(row.address).catch(() => [] as HistoricalOrder[]),
   ]);
+  const { fills, historical } = await loadFills(
+    row.address,
+    openPositionKeys(state),
+  );
 
   const rawPositions = (state.assetPositions ?? [])
     .map((item) => item.position)

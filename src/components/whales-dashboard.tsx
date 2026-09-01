@@ -1,8 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangleIcon, FishIcon, RefreshCwIcon, SearchIcon } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import {
+  AlertTriangleIcon,
+  FishIcon,
+  LayoutListIcon,
+  RefreshCwIcon,
+  SearchIcon,
+  SmartphoneIcon,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -15,9 +21,10 @@ import {
 } from "@/components/ui/select";
 import { WhaleCard } from "@/components/whale-card";
 import { formatAgo, formatExactTime } from "@/lib/format";
-import type { DashboardPayload, SortKey } from "@/lib/types";
+import type { DashboardPayload, SortKey, UiMode } from "@/lib/types";
 
-const POLL_MS = 45_000;
+const POLL_MS = 20_000;
+const MODE_KEY = "hl-whales-ui-mode";
 
 export function WhalesDashboard() {
   const [data, setData] = useState<DashboardPayload | null>(null);
@@ -27,6 +34,7 @@ export function WhalesDashboard() {
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SortKey>("portfolio");
   const [coin, setCoin] = useState("all");
+  const [mode, setModeState] = useUiMode();
   const [now, setNow] = useState(() => Date.now());
 
   const load = useCallback(async (silent = false) => {
@@ -80,6 +88,10 @@ export function WhalesDashboard() {
     };
   }, [load]);
 
+  function chooseMode(next: UiMode) {
+    setModeState(next);
+  }
+
   const coinFilter =
     coin !== "all" && data && !data.coins.includes(coin) ? "all" : coin;
 
@@ -111,29 +123,29 @@ export function WhalesDashboard() {
   }, [data, query, sort, coinFilter]);
 
   return (
-    <div className="min-h-svh">
-      <header className="border-b border-border/80 bg-[linear-gradient(180deg,oklch(0.18_0.03_250),transparent)]">
-        <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
+    <div className="min-h-svh pb-[max(1.5rem,env(safe-area-inset-bottom))]">
+      <header className="sticky top-0 z-20 border-b border-border/80 bg-background/90 pt-[env(safe-area-inset-top)] backdrop-blur-md">
+        <div className="mx-auto flex w-full max-w-7xl flex-col gap-4 px-4 py-4 sm:px-6 lg:px-8">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
               <p className="flex items-center gap-2 text-xs tracking-[0.22em] text-primary uppercase">
                 <FishIcon className="size-4" />
                 Hyperliquid · Perpétuels
               </p>
-              <h1 className="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl">
+              <h1 className="mt-1 text-xl font-semibold tracking-tight sm:text-3xl">
                 Les 10 plus grosses baleines
               </h1>
-              <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-                Positions ouvertes, levier, niveaux SL/TP lorsqu’ils existent, et
-                clôtures récentes — à partir de l’API publique Hyperliquid, sans
-                clé.
-              </p>
             </div>
-            <div className="flex flex-col items-start gap-2 sm:items-end">
-              <div className="flex items-center gap-2">
-                <Badge variant="secondary" className="numeric">
-                  Rafraîchissement {nextIn}s
-                </Badge>
+            <div className="flex flex-col items-stretch gap-2 sm:items-end">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="inline-flex items-center gap-2 rounded-full border border-long/30 bg-long/10 px-2.5 py-1 text-xs text-long">
+                  <span className="relative flex size-2">
+                    <span className="absolute inline-flex size-2 animate-ping rounded-full bg-long opacity-70" />
+                    <span className="relative inline-flex size-2 rounded-full bg-long" />
+                  </span>
+                  Quasi en direct · {nextIn}s
+                </span>
+                <ModeSwitch mode={mode} onChange={chooseMode} />
                 <Button
                   type="button"
                   size="sm"
@@ -153,18 +165,32 @@ export function WhalesDashboard() {
             </div>
           </div>
 
-          <div className="flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/8 px-4 py-3 text-sm text-amber-100/90">
+          <p className="text-sm text-muted-foreground">
+            Si une baleine clôture une position pour en ouvrir une autre, la
+            nouvelle apparaît ici au cycle suivant (environ 20 secondes). Ce
+            n’est pas du tick-par-tick comme le carnet Hyperliquid.
+          </p>
+
+          <div className="flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/8 px-3 py-2.5 text-sm text-amber-100/90">
             <AlertTriangleIcon className="mt-0.5 size-4 shrink-0 text-amber-400" />
             <p>
-              Ceci n’est pas un conseil financier. Les positions des baleines
-              peuvent changer en quelques secondes ; les stops et take-profit ne
-              sont affichés que s’ils sont réellement posés en carnet. Un compte
-              peut clôturer, inverser ou retirer un SL/TP avant que cette page ne
-              se mette à jour.
+              Pas un conseil financier. Les baleines peuvent changer de position
+              en quelques secondes. Un SL/TP n’est affiché que s’il est vraiment
+              posé.
             </p>
           </div>
 
-          <div className="grid gap-3 md:grid-cols-[1fr_12rem_12rem]">
+          <div className="flex items-start gap-3 rounded-xl border border-border bg-muted/40 px-3 py-2.5 text-sm">
+            <SmartphoneIcon className="mt-0.5 size-4 shrink-0 text-primary" />
+            <p>
+              <span className="font-medium">Sur téléphone et bureau :</span>{" "}
+              ouvrez cette page, puis installez-la pour l’utiliser comme une
+              app. iPhone : Partager → Sur l’écran d’accueil. Chrome / Android /
+              ordinateur : Installer dans la barre d’adresse.
+            </p>
+          </div>
+
+          <div className="grid gap-2 sm:grid-cols-[1fr_11rem_11rem]">
             <div className="relative">
               <Label htmlFor="search" className="sr-only">
                 Rechercher une baleine
@@ -174,8 +200,8 @@ export function WhalesDashboard() {
                 id="search"
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="Rechercher par alias, rang ou adresse 0x…"
-                className="h-9 pl-8"
+                placeholder="Alias, rang ou adresse 0x…"
+                className="h-10 pl-8 sm:h-9"
               />
             </div>
             <div>
@@ -190,7 +216,7 @@ export function WhalesDashboard() {
                   }
                 }}
               >
-                <SelectTrigger className="h-9 w-full" id="sort">
+                <SelectTrigger className="h-10 w-full sm:h-9" id="sort">
                   <SelectValue placeholder="Trier" />
                 </SelectTrigger>
                 <SelectContent>
@@ -205,7 +231,7 @@ export function WhalesDashboard() {
                 Filtrer par crypto
               </Label>
               <Select value={coinFilter} onValueChange={(value) => value && setCoin(value)}>
-                <SelectTrigger className="h-9 w-full" id="coin">
+                <SelectTrigger className="h-10 w-full sm:h-9" id="coin">
                   <SelectValue placeholder="Crypto" />
                 </SelectTrigger>
                 <SelectContent>
@@ -222,7 +248,7 @@ export function WhalesDashboard() {
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-7xl space-y-5 px-4 py-6 sm:px-6 lg:px-8">
+      <main className="mx-auto w-full max-w-7xl space-y-4 px-4 py-5 sm:px-6 lg:px-8">
         {loading && !data ? <LoadingState /> : null}
 
         {error && !data ? (
@@ -248,20 +274,21 @@ export function WhalesDashboard() {
         ) : null}
 
         {whales.map((whale) => (
-          <WhaleCard key={whale.address} whale={whale} coinFilter={coinFilter} />
+          <WhaleCard
+            key={whale.address}
+            whale={whale}
+            coinFilter={coinFilter}
+            mode={mode}
+          />
         ))}
 
         {data ? (
           <footer className="space-y-2 pb-8 text-xs text-muted-foreground">
             <p>{data.scanNote}</p>
             <p>
-              Sources : leaderboard public ({data.source.leaderboard}) et{" "}
-              <code>POST {data.source.info}</code> (
-              <code>clearinghouseState</code>, <code>frontendOpenOrders</code> /{" "}
-              <code>openOrders</code>, <code>userFills</code>,{" "}
-              <code>historicalOrders</code>, <code>metaAndAssetCtxs</code>).
-              Cache serveur {data.nextRefreshSec}s pour respecter les limites de
-              l’API.
+              Sources publiques Hyperliquid. Positions relues toutes les{" "}
+              {data.nextRefreshSec}s. Historique des fills si le set de
+              positions change, sinon toutes les 60s.
             </p>
           </footer>
         ) : null}
@@ -270,17 +297,73 @@ export function WhalesDashboard() {
   );
 }
 
+function useUiMode(): [UiMode, (mode: UiMode) => void] {
+  const mode = useSyncExternalStore(subscribeMode, getMode, () => "simple" as const);
+  const setMode = (next: UiMode) => {
+    window.localStorage.setItem(MODE_KEY, next);
+    window.dispatchEvent(new Event("hl-ui-mode"));
+  };
+  return [mode, setMode];
+}
+
+function subscribeMode(onStoreChange: () => void) {
+  window.addEventListener("storage", onStoreChange);
+  window.addEventListener("hl-ui-mode", onStoreChange);
+  return () => {
+    window.removeEventListener("storage", onStoreChange);
+    window.removeEventListener("hl-ui-mode", onStoreChange);
+  };
+}
+
+function getMode(): UiMode {
+  const saved = window.localStorage.getItem(MODE_KEY);
+  return saved === "advanced" ? "advanced" : "simple";
+}
+
+function ModeSwitch({
+  mode,
+  onChange,
+}: {
+  mode: UiMode;
+  onChange: (mode: UiMode) => void;
+}) {
+  return (
+    <div className="inline-flex rounded-lg border border-border bg-muted/40 p-0.5">
+      <Button
+        type="button"
+        size="sm"
+        variant={mode === "simple" ? "default" : "ghost"}
+        className="h-7 px-2.5"
+        onClick={() => onChange("simple")}
+      >
+        <SmartphoneIcon />
+        Simple
+      </Button>
+      <Button
+        type="button"
+        size="sm"
+        variant={mode === "advanced" ? "default" : "ghost"}
+        className="h-7 px-2.5"
+        onClick={() => onChange("advanced")}
+      >
+        <LayoutListIcon />
+        Avancé
+      </Button>
+    </div>
+  );
+}
+
 function LoadingState() {
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        Lecture du leaderboard, puis des comptes perps, positions et ordres
-        déclencheurs. Comptez une quinzaine de secondes au premier chargement.
+        Lecture du leaderboard et des comptes perps. Une quinzaine de secondes
+        au premier chargement, puis mise à jour automatique.
       </p>
       {Array.from({ length: 3 }).map((_, index) => (
         <div
           key={index}
-          className="h-48 animate-pulse rounded-xl border border-border bg-card/60"
+          className="h-40 animate-pulse rounded-xl border border-border bg-card/60"
         />
       ))}
     </div>

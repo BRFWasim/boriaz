@@ -6,6 +6,8 @@ export type ExitReason = "sl" | "tp" | "trigger" | "manual";
 
 export type SortKey = "portfolio" | "pnl24h" | "positions";
 
+export type UiMode = "simple" | "advanced";
+
 export interface LeaderboardRow {
   ethAddress: string;
   accountValue: string;

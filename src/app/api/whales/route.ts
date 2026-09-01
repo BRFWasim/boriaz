@@ -18,7 +18,7 @@ export async function GET() {
         whales: [],
         coins: [],
         fetchedAt: Date.now(),
-        nextRefreshSec: 45,
+        nextRefreshSec: 20,
       },
       { status: 502 },
     );
