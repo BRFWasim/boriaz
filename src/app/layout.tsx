@@ -1,48 +1,32 @@
 import type { Metadata } from "next";
-import { Cormorant_Garamond, Outfit } from "next/font/google";
-import { SiteFooter } from "@/components/site-footer";
-import { SiteHeader } from "@/components/site-header";
-import { site } from "@/lib/data";
+import { DM_Sans, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 
-const cormorant = Cormorant_Garamond({
-  variable: "--font-cormorant",
+const sans = DM_Sans({
+  variable: "--font-sans",
   subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
 });
 
-const outfit = Outfit({
-  variable: "--font-outfit",
+const mono = JetBrains_Mono({
+  variable: "--font-mono",
   subsets: ["latin"],
 });
 
 export const metadata: Metadata = {
-  title: {
-    default: `${site.name} — ${site.tagline}`,
-    template: `%s · ${site.name}`,
-  },
+  title: "Baleines Hyperliquid — perpétuels",
   description:
-    "Institut de beauté d'exception à Paris 7e. Soins visage signature, rituels corps, regard et manucure, sur rendez-vous.",
-  openGraph: {
-    title: `${site.name} — ${site.tagline}`,
-    description:
-      "Soins visage, rituels corps et regard, dans une maison confidentielle du 7e arrondissement.",
-    locale: "fr_FR",
-    type: "website",
-  },
+    "Suivi des 10 plus gros traders perpétuels du leaderboard Hyperliquid : positions, levier, SL/TP, PnL et historique de clôture.",
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default function RootLayout({
+  children,
+}: Readonly<{ children: React.ReactNode }>) {
   return (
     <html
       lang="fr"
-      className={`${cormorant.variable} ${outfit.variable} h-full antialiased`}
+      className={`dark ${sans.variable} ${mono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col bg-background text-foreground">
-        <SiteHeader />
-        <main className="flex flex-1 flex-col">{children}</main>
-        <SiteFooter />
-      </body>
+      <body className="min-h-full bg-background text-foreground">{children}</body>
     </html>
   );
 }

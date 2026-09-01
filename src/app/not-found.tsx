@@ -3,26 +3,15 @@ import { Button } from "@/components/ui/button";
 
 export default function NotFound() {
   return (
-    <div className="mx-auto flex max-w-xl flex-1 flex-col items-center justify-center px-4 py-24 text-center">
-      <p className="label-kicker">404</p>
-      <h1 className="mt-4 font-serif text-4xl sm:text-5xl">Page introuvable</h1>
-      <p className="mt-4 text-muted-foreground">
-        Cette adresse n&apos;existe pas dans la Maison. Revenez à l&apos;accueil,
-        ou parcourez la carte des soins.
+    <div className="mx-auto flex min-h-svh max-w-lg flex-col items-center justify-center px-4 text-center">
+      <p className="text-xs tracking-[0.22em] text-primary uppercase">404</p>
+      <h1 className="mt-4 text-3xl font-semibold">Page introuvable</h1>
+      <p className="mt-3 text-muted-foreground">
+        Ce tableau de bord n’a qu’une page : le suivi des baleines Hyperliquid.
       </p>
-      <div className="mt-8 flex flex-wrap justify-center gap-3">
-        <Button nativeButton={false} render={<Link href="/" />} className="btn-couture">
-          Accueil
-        </Button>
-        <Button
-          nativeButton={false}
-          render={<Link href="/soins" />}
-          variant="outline"
-          className="btn-couture"
-        >
-          Les soins
-        </Button>
-      </div>
+      <Button nativeButton={false} render={<Link href="/" />} className="mt-8">
+        Retour au dashboard
+      </Button>
     </div>
   );
 }

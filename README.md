@@ -1,8 +1,8 @@
-# Maison Liora
+# Baleines Hyperliquid
 
-Site vitrine d'un institut de beauté premium à Paris 7e. Accueil cinématographique, carte des soins, tarifs, présentation de la maison et demande de rendez-vous.
+Dashboard web de suivi des **10 plus gros traders perpétuels** (« baleines ») du leaderboard Hyperliquid. Une seule page, données 100 % publiques, **aucune clé API**.
 
-Le brief Word d'origine n'était pas lisible depuis l'environnement de développement : le site a été conçu comme une maison confidentielle (soins visage, corps, regard, manucure) avec une identité ivoire / espresso / champagne.
+Ce n’est **pas un conseil financier**. Les positions peuvent changer en quelques secondes. Un stop-loss ou un take-profit n’est affiché que s’il existe réellement en carnet — jamais inventé.
 
 ## Lancer en local
 
@@ -11,19 +11,33 @@ npm install
 npm run dev
 ```
 
-Le serveur écoute sur [http://127.0.0.1:4317](http://127.0.0.1:4317).
+Ouvrir [http://127.0.0.1:4317](http://127.0.0.1:4317).
 
-## Pages
+## Ce que la page montre
 
-- `/` — accueil, signatures, avis
-- `/soins` — carte filtrable
-- `/soins/[slug]` — détail d'un protocole
-- `/carte` — tarifs
-- `/institut` — esprit et équipe
-- `/reserver` — demande de rendez-vous
-- `/contact` — adresse, horaires, message
+Pour chaque baleine :
 
-Les formulaires valident les champs côté client et simulent un envoi (aucune base de données, aucun secret requis).
+- alias (ou `Baleine #rang`), rang leaderboard, adresse tronquée copiable
+- valeur du compte perps, PnL 24h, win rate (clôtures des fills récents)
+- positions ouvertes : crypto, long/short, taille en $ et en quantité, levier, prix d’entrée, mark, PnL latent, SL/TP s’ils sont posés (avec distance en % au mark), heure d’ouverture (date + « il y a X »)
+- historique des clôtures récentes : entrée → sortie, SL/TP touché le cas échéant, PnL réalisé
+
+Filtres côté client : recherche alias/adresse, tri (portefeuille, PnL 24h, nombre de positions), filtre par crypto.
+
+## Données
+
+| Besoin | Source |
+| --- | --- |
+| Classement des plus gros portefeuilles | Leaderboard public Hyperliquid (`stats-data.hyperliquid.xyz/Mainnet/leaderboard`). Le `POST /info` avec `type: "leaderboard"` n’est pas exposé par l’API info actuelle ; repli automatique si jamais il le devient. |
+| Capitaux et positions | `POST https://api.hyperliquid.xyz/info` · `clearinghouseState` |
+| SL / TP (ordres déclencheurs) | `frontendOpenOrders` (repli `openOrders`) |
+| Heure d’ouverture, win rate, clôtures | `userFills` |
+| SL/TP touché à la clôture | `historicalOrders` |
+| Prix de marché | `metaAndAssetCtxs` |
+
+Les 10 adresses sont celles du **plus gros portefeuille leaderboard** qui ont un **compte perps actif** (positions ouvertes ou capitaux perps). Les wallets 100 % spot, sans activité perpétuels, sont écartés.
+
+Rafraîchissement toutes les **45 secondes**, avec cache serveur pour rester dans les limites de l’API.
 
 ## Stack
 

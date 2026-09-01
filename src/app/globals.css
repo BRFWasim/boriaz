@@ -7,14 +7,11 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-outfit), ui-sans-serif, system-ui, sans-serif;
-  --font-serif: var(--font-cormorant), ui-serif, Georgia, serif;
-  --font-mono: var(--font-geist-mono);
-  --font-heading: var(--font-cormorant), ui-serif, Georgia, serif;
-  --color-gold: var(--gold);
-  --color-gold-soft: var(--gold-soft);
-  --color-ink: var(--ink);
-  --color-ivory: var(--ivory);
+  --font-sans: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-mono), ui-monospace, SFMono-Regular, monospace;
+  --font-heading: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  --color-long: var(--long);
+  --color-short: var(--short);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -54,46 +51,44 @@
 }
 
 :root {
-  --ivory: oklch(0.97 0.012 85);
-  --ink: oklch(0.22 0.03 45);
-  --gold: oklch(0.72 0.08 75);
-  --gold-soft: oklch(0.86 0.04 80);
-  --background: oklch(0.97 0.012 85);
-  --foreground: oklch(0.22 0.03 45);
-  --card: oklch(0.985 0.008 85);
-  --card-foreground: oklch(0.22 0.03 45);
-  --popover: oklch(0.985 0.008 85);
-  --popover-foreground: oklch(0.22 0.03 45);
-  --primary: oklch(0.26 0.035 45);
-  --primary-foreground: oklch(0.97 0.012 85);
-  --secondary: oklch(0.93 0.018 80);
-  --secondary-foreground: oklch(0.26 0.035 45);
-  --muted: oklch(0.94 0.016 82);
-  --muted-foreground: oklch(0.48 0.03 50);
-  --accent: oklch(0.93 0.02 78);
-  --accent-foreground: oklch(0.26 0.035 45);
-  --destructive: oklch(0.55 0.16 25);
-  --border: oklch(0.88 0.02 80);
-  --input: oklch(0.88 0.02 80);
-  --ring: oklch(0.72 0.08 75);
-  --chart-1: oklch(0.72 0.08 75);
-  --chart-2: oklch(0.55 0.05 50);
-  --chart-3: oklch(0.44 0.04 45);
-  --chart-4: oklch(0.35 0.03 45);
-  --chart-5: oklch(0.26 0.035 45);
-  --radius: 0.25rem;
-  --sidebar: oklch(0.97 0.012 85);
-  --sidebar-foreground: oklch(0.22 0.03 45);
-  --sidebar-primary: oklch(0.26 0.035 45);
-  --sidebar-primary-foreground: oklch(0.97 0.012 85);
-  --sidebar-accent: oklch(0.93 0.018 80);
-  --sidebar-accent-foreground: oklch(0.26 0.035 45);
-  --sidebar-border: oklch(0.88 0.02 80);
-  --sidebar-ring: oklch(0.72 0.08 75);
+  --background: oklch(0.145 0.02 250);
+  --foreground: oklch(0.94 0.01 90);
+  --card: oklch(0.185 0.022 250);
+  --card-foreground: oklch(0.94 0.01 90);
+  --popover: oklch(0.185 0.022 250);
+  --popover-foreground: oklch(0.94 0.01 90);
+  --primary: oklch(0.8 0.11 195);
+  --primary-foreground: oklch(0.18 0.03 240);
+  --secondary: oklch(0.24 0.025 250);
+  --secondary-foreground: oklch(0.92 0.01 90);
+  --muted: oklch(0.23 0.02 250);
+  --muted-foreground: oklch(0.72 0.02 230);
+  --accent: oklch(0.26 0.03 230);
+  --accent-foreground: oklch(0.94 0.01 90);
+  --destructive: oklch(0.65 0.18 25);
+  --border: oklch(0.3 0.025 250);
+  --input: oklch(0.3 0.025 250);
+  --ring: oklch(0.8 0.11 195);
+  --long: oklch(0.8 0.16 155);
+  --short: oklch(0.72 0.17 25);
+  --chart-1: oklch(0.8 0.11 195);
+  --chart-2: oklch(0.8 0.16 155);
+  --chart-3: oklch(0.72 0.17 25);
+  --chart-4: oklch(0.78 0.12 85);
+  --chart-5: oklch(0.7 0.08 280);
+  --radius: 0.65rem;
+  --sidebar: oklch(0.185 0.022 250);
+  --sidebar-foreground: oklch(0.94 0.01 90);
+  --sidebar-primary: oklch(0.8 0.11 195);
+  --sidebar-primary-foreground: oklch(0.18 0.03 240);
+  --sidebar-accent: oklch(0.26 0.03 230);
+  --sidebar-accent-foreground: oklch(0.94 0.01 90);
+  --sidebar-border: oklch(0.3 0.025 250);
+  --sidebar-ring: oklch(0.8 0.11 195);
 }
 
 html {
-  color-scheme: light;
+  color-scheme: dark;
   scroll-behavior: smooth;
 }
 
@@ -107,28 +102,9 @@ html {
   html {
     @apply font-sans;
   }
-  h1,
-  h2,
-  h3,
-  h4 {
-    @apply font-serif tracking-tight;
-  }
 }
 
-@utility label-kicker {
-  font-size: 0.7rem;
-  font-weight: 500;
-  letter-spacing: 0.28em;
-  text-transform: uppercase;
-  color: var(--gold);
-}
-
-@utility btn-couture {
-  height: 3rem;
-  padding-inline: 1.75rem;
-  border-radius: 0;
-  font-size: 0.72rem;
-  font-weight: 500;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
+@utility numeric {
+  font-family: var(--font-mono), ui-monospace, SFMono-Regular, monospace;
+  font-variant-numeric: tabular-nums;
 }

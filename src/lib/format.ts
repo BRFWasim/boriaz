@@ -1,0 +1,83 @@
+import { format, formatDistanceStrict } from "date-fns";
+import { fr } from "date-fns/locale";
+
+export function parseNum(value: string | number | null | undefined): number {
+  if (value === null || value === undefined || value === "") return 0;
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+export function formatUsd(value: number, opts?: { compact?: boolean; digits?: number }): string {
+  const compact = opts?.compact ?? Math.abs(value) >= 10_000;
+  const sign = value < 0 ? "−" : "";
+  const abs = Math.abs(value);
+
+  if (compact) {
+    const nf = (div: number, digits: number) =>
+      new Intl.NumberFormat("fr-FR", { maximumFractionDigits: digits }).format(abs / div);
+    if (abs >= 1_000_000_000) return `${sign}${nf(1_000_000_000, 2)} Md$`;
+    if (abs >= 1_000_000) return `${sign}${nf(1_000_000, 2)} M$`;
+    if (abs >= 1_000) return `${sign}${nf(1_000, 1)} k$`;
+  }
+
+  return new Intl.NumberFormat("fr-FR", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: opts?.digits ?? (abs < 10 ? 4 : abs < 100 ? 2 : 0),
+  }).format(value);
+}
+
+export function formatQty(value: number): string {
+  const abs = Math.abs(value);
+  const digits = abs >= 1000 ? 2 : abs >= 1 ? 4 : abs >= 0.01 ? 5 : 6;
+  return new Intl.NumberFormat("fr-FR", { maximumFractionDigits: digits }).format(value);
+}
+
+export function formatPx(value: number): string {
+  const abs = Math.abs(value);
+  const digits = abs >= 1000 ? 1 : abs >= 1 ? 4 : 6;
+  return new Intl.NumberFormat("fr-FR", {
+    minimumFractionDigits: abs >= 1000 ? 1 : 2,
+    maximumFractionDigits: digits,
+  }).format(value);
+}
+
+export function formatPct(value: number, digits = 2): string {
+  const sign = value > 0 ? "+" : value < 0 ? "−" : "";
+  return `${sign}${new Intl.NumberFormat("fr-FR", { maximumFractionDigits: digits }).format(Math.abs(value))} %`;
+}
+
+export function formatWinRate(value: number | null, sample: number): string {
+  if (value === null || sample === 0) return "n/d";
+  return `${new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 1 }).format(value * 100)} %`;
+}
+
+export function truncateAddress(address: string): string {
+  if (address.length < 12) return address;
+  return `${address.slice(0, 6)}…${address.slice(-4)}`;
+}
+
+export function formatExactTime(ts: number): string {
+  return format(new Date(ts), "dd MMM yyyy 'à' HH:mm:ss", { locale: fr });
+}
+
+export function formatAgo(ts: number, now = Date.now()): string {
+  return formatDistanceStrict(new Date(ts), new Date(now), {
+    addSuffix: true,
+    locale: fr,
+  }).replace("environ ", "");
+}
+
+export function displayCoin(coin: string): { dex: string | null; symbol: string } {
+  const idx = coin.indexOf(":");
+  if (idx > 0) {
+    return { dex: coin.slice(0, idx), symbol: coin.slice(idx + 1) };
+  }
+  return { dex: null, symbol: coin };
+}
+
+export function signedClass(value: number): string {
+  if (value > 0) return "text-long";
+  if (value < 0) return "text-short";
+  return "text-muted-foreground";
+}
