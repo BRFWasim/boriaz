@@ -26,15 +26,15 @@ Tu n’as **besoin d’aucune clé** pour :
 Hyperliquid seul donne déjà **tous les wallets publics**.  
 Arkham/Nansen servent surtout à **nommer** des adresses, voir des flux CEX, et élargir hors Hyperliquid.
 
-## Format à coller au prochain message
+## Telegram (@BoriazBot)
 
-```
-OPENAI_API_KEY=sk-...
-COINGECKO_API_KEY=...
-TELEGRAM_BOT_TOKEN=...
-TELEGRAM_CHAT_ID=...
-ARKHAM_API_KEY=...
-NANSEN_API_KEY=...
-```
+1. Ouvre https://t.me/BoriazBot  
+2. Envoie `/start`  
+3. Dans l’onglet **Analyse BTC**, clique **Lier Telegram** puis **Envoyer un test**
 
-(Envoie seulement celles que tu as.)
+Tu recevras :
+- alertes **short + spot**
+- accumulations spot notables
+- timings BTC (zone d’achat / biais baissier)
+
+`t.me/BoriazBot` n’est **pas** un chat ID : c’est le bot. Le chat ID numérique est capturé après ton `/start`.
