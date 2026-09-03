@@ -70,8 +70,8 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
       }
     }
     void loadFull();
-    const fullId = window.setInterval(() => void loadFull(), 45_000);
-    const liveId = window.setInterval(() => void loadLive(), 8_000);
+    const fullId = window.setInterval(() => void loadFull(), 60_000);
+    const liveId = window.setInterval(() => void loadLive(), 4_000);
     return () => {
       alive = false;
       window.clearInterval(fullId);
@@ -110,7 +110,7 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
           Signaux live · watchlist
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Prix rafraîchis ~8 s · signaux ~45 s · paper 1000 €
+          Prix spot live ~4 s · entrée/TP/SL figés jusqu’au prochain signal · paper 1000 €
           {liveAt ? ` · maj ${new Date(liveAt).toLocaleTimeString("fr-FR")}` : ""}
         </p>
       </section>
@@ -140,6 +140,12 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
         <p className="font-medium text-foreground">Comment lire une entrée ?</p>
         <p className="mt-1">{data.howto.entry}</p>
         <p className="mt-1">{data.howto.paper}</p>
+        {data.howto.live ? (
+          <p className="mt-1">{data.howto.live}</p>
+        ) : null}
+        {data.warning ? (
+          <p className="mt-2 text-amber-200">{data.warning}</p>
+        ) : null}
       </section>
 
       {data.best && data.best.action !== "wait" && data.best.confidence >= 55 ? (

@@ -89,8 +89,12 @@ async function loadState(): Promise<PriceWatchState> {
 async function saveState(state: PriceWatchState): Promise<void> {
   memory = state;
   try {
+    try {
     await ensureDataDir();
     await fs.writeFile(stateFile(), JSON.stringify(state), "utf8");
+  } catch {
+    // ignore EROFS /tmp
+  }
   } catch {
     // ignore disk errors in cloud sandbox
   }

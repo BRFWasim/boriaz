@@ -1,42 +1,90 @@
-import { getWatchlistSnapshot, runPriceWatch } from "@/lib/price-watch";
-import { loadPaperTrades, computePaperAccount, loadPrefs } from "@/lib/persist";
+import { getWatchlistSnapshot } from "@/lib/price-watch";
+import {
+  computePaperAccount,
+  loadPaperTrades,
+  loadPrefs,
+} from "@/lib/persist";
+import { postInfo } from "@/lib/hyperliquid";
+import { parseNum } from "@/lib/format";
+import { WATCHLIST } from "@/lib/price-watch";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
-/** Endpoint léger pour prix + paper mark-to-market (~temps réel). */
+/** Prix mids ultra-légers + paper mark-to-market. Pas d’écriture FS obligatoire. */
 export async function GET() {
   try {
-    await runPriceWatch().catch(() => undefined);
-    const [snap, prefs, trades] = await Promise.all([
-      getWatchlistSnapshot(),
-      loadPrefs(),
-      loadPaperTrades(),
-    ]);
-    const prices: Record<string, number> = {};
-    for (const q of snap.quotes) prices[q.coin] = q.price;
+    let quotes: {
+      coin: string;
+      label: string;
+      price: number;
+      change15mPct: number | null;
+      change1hPct: number | null;
+      change2hPct: number | null;
+    }[] = [];
 
-    // Mark-to-market rapide sans clôturer
+    try {
+      // Mids directs = le plus live possible
+      const mids = (await postInfo({ type: "allMids" })) as Record<
+        string,
+        string
+      >;
+      quotes = WATCHLIST.map((w) => ({
+        coin: w.coin,
+        label: w.label,
+        price: parseNum(mids[w.coin] ?? "0"),
+        change15mPct: null,
+        change1hPct: null,
+        change2hPct: null,
+      })).filter((q) => q.price > 0);
+
+      // Enrichit % si snapshot déjà chaud
+      try {
+        const snap = await getWatchlistSnapshot();
+        const by = new Map(snap.quotes.map((q) => [q.coin, q]));
+        quotes = quotes.map((q) => {
+          const s = by.get(q.coin);
+          return s
+            ? {
+                ...q,
+                change15mPct: s.change15mPct,
+                change1hPct: s.change1hPct,
+                change2hPct: s.change2hPct,
+              }
+            : q;
+        });
+      } catch {
+        // ignore
+      }
+    } catch {
+      const snap = await getWatchlistSnapshot();
+      quotes = snap.quotes;
+    }
+
+    const prefs = await loadPrefs().catch(() => null);
+    const trades = await loadPaperTrades().catch(() => []);
+    const prices: Record<string, number> = {};
+    for (const q of quotes) prices[q.coin] = q.price;
+
     for (const t of trades) {
       const px = prices[t.coin];
-      if (!px || (t.status !== "open" && t.status !== "pending")) continue;
+      if (!px || t.status !== "open") continue;
       t.markPx = px;
-      if (t.status === "open") {
-        const movePct =
-          t.side === "long"
-            ? ((px - t.entry) / t.entry) * 100
-            : ((t.entry - px) / t.entry) * 100;
-        t.pnlPct = movePct * t.leverage;
-        t.pnlEur = t.marginEur * (t.pnlPct / 100);
-      }
+      const movePct =
+        t.side === "long"
+          ? ((px - t.entry) / t.entry) * 100
+          : ((t.entry - px) / t.entry) * 100;
+      t.pnlPct = movePct * t.leverage;
+      t.pnlEur = t.marginEur * (t.pnlPct / 100);
     }
 
     const account = computePaperAccount(
       trades,
-      prefs.paperBankrollEur || 1000,
+      prefs?.paperBankrollEur || 1000,
     );
 
     return Response.json({
-      quotes: snap.quotes,
+      quotes,
       account,
       paper: trades.filter(
         (t) => t.status === "open" || t.status === "pending",
@@ -45,8 +93,12 @@ export async function GET() {
     });
   } catch (e) {
     return Response.json(
-      { error: e instanceof Error ? e.message : "Live indisponible" },
-      { status: 502 },
+      {
+        error: e instanceof Error ? e.message : "Live indisponible",
+        quotes: [],
+        fetchedAt: Date.now(),
+      },
+      { status: 200 },
     );
   }
 }

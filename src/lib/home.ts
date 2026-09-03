@@ -1,6 +1,11 @@
 import { getTradeSignals, type DirectionSignal } from "./trade-signal";
 import { getWatchlistSnapshot } from "./price-watch";
 import { cryptoMeta } from "./crypto-meta";
+import {
+  computePaperAccount,
+  loadPaperTrades,
+  loadPrefs,
+} from "./persist";
 import type { PaperAccount, PaperTrade } from "./user-types";
 
 export interface HomeCard {
@@ -37,17 +42,38 @@ export interface HomePayload {
   howto: {
     entry: string;
     paper: string;
+    live: string;
   };
+  warning: string | null;
 }
 
 export async function getHomeSnapshot(): Promise<HomePayload> {
-  const [signals, quotes] = await Promise.all([
-    getTradeSignals({ notify: true }),
-    getWatchlistSnapshot(),
-  ]);
+  let warning: string | null = null;
+  let signals: Awaited<ReturnType<typeof getTradeSignals>> | null = null;
+  let quotes: Awaited<ReturnType<typeof getWatchlistSnapshot>> | null = null;
 
-  const byCoin = new Map(signals.signals.map((s) => [s.coin, s]));
-  const cards: HomeCard[] = quotes.quotes.map((q) => {
+  try {
+    quotes = await getWatchlistSnapshot();
+  } catch (e) {
+    warning = e instanceof Error ? e.message : "Prix indisponibles";
+  }
+
+  try {
+    // notify:false sur l’accueil pour éviter écritures/TG lourdes à chaque refresh
+    signals = await getTradeSignals({ notify: false });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Signaux indisponibles";
+    warning = warning ? `${warning} · ${msg}` : msg;
+  }
+
+  const prefs = await loadPrefs().catch(() => null);
+  const bankroll = prefs?.paperBankrollEur || 1000;
+  const paper = signals?.paper ?? (await loadPaperTrades().catch(() => []));
+  const account =
+    signals?.account ?? computePaperAccount(paper, bankroll);
+
+  const byCoin = new Map((signals?.signals ?? []).map((s) => [s.coin, s]));
+  const cards: HomeCard[] = (quotes?.quotes ?? []).map((q) => {
     const sig = byCoin.get(q.coin);
     const meta = cryptoMeta(q.coin);
     return {
@@ -79,18 +105,22 @@ export async function getHomeSnapshot(): Promise<HomePayload> {
 
   return {
     cards,
-    best: signals.best,
-    account: signals.account,
-    paperOpen: signals.paper.filter(
+    best: signals?.best ?? null,
+    account,
+    paperOpen: paper.filter(
       (p) => p.status === "open" || p.status === "pending",
     ),
     fetchedAt: Date.now(),
-    disclaimer: signals.disclaimer,
+    disclaimer:
+      signals?.disclaimer ??
+      "Suggestions éducatives. Paper = simulation 1000 €. Pas un conseil financier.",
     howto: {
       entry:
-        "« Entrer maintenant » = ordre marché au prix affiché. « Limite » = poser un ordre au niveau entrée et attendre qu’il soit touché — ne force pas si le prix ne vient jamais.",
+        "Entrée / TP / SL sont FIGÉS pour le setup affiché (comme un ordre planifié). Le prix SPOT bouge en live. Mode Marché = tu peux entrer au spot maintenant ; Mode Limite = attendre que le spot touche l’entrée.",
       paper:
-        "Paper trade = simulation avec 1000 € de départ. Chaque signal ouvre une position virtuelle (marge % du capital × levier). Le PnL € montre ce que tu aurais gagné/perdu en suivant les trades.",
+        "Paper trade = compte virtuel 1000 € qui suit les signaux. PnL € = ce que tu aurais gagné/perdu.",
+      live: "Les prix spot se rafraîchissent toutes les ~4 s. Les niveaux entrée/TP/SL ne bougent que quand un nouveau signal est calculé (~1–3 min).",
     },
+    warning,
   };
 }

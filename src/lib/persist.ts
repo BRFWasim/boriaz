@@ -12,14 +12,46 @@ import { dataPath, ensureDataDir } from "./data-dir";
 export type { EntryMode, JournalEntry, PaperAccount, PaperTrade, UserPrefs };
 export { DEFAULT_PREFS };
 
-function prefsFile() { return dataPath(".user-prefs.json"); }
-function journalFile() { return dataPath(".signal-journal.json"); }
-function paperFile() { return dataPath(".paper-trades.json"); }
-function macroAlertsFile() { return dataPath(".macro-alerts-sent.json"); }
+/** Fallback mémoire si /tmp échoue (ne doit jamais planter l’API). */
+const mem = new Map<string, string>();
+
+function prefsFile() {
+  return dataPath(".user-prefs.json");
+}
+function journalFile() {
+  return dataPath(".signal-journal.json");
+}
+function paperFile() {
+  return dataPath(".paper-trades.json");
+}
+function macroAlertsFile() {
+  return dataPath(".macro-alerts-sent.json");
+}
+
+async function readText(file: string): Promise<string | null> {
+  try {
+    const raw = await fs.readFile(file, "utf8");
+    mem.set(file, raw);
+    return raw;
+  } catch {
+    return mem.get(file) ?? null;
+  }
+}
+
+async function writeText(file: string, raw: string): Promise<void> {
+  mem.set(file, raw);
+  try {
+    await ensureDataDir();
+    await fs.writeFile(file, raw, "utf8");
+  } catch {
+    // EROFS ou autre : on garde la mémoire process — l’UI ne crash plus
+  }
+}
 
 export async function loadPrefs(): Promise<UserPrefs> {
   try {
-    const raw = await fs.readFile(prefsFile(), "utf8");
+    const raw = await readText(prefsFile());
+    if (!raw) return { ...DEFAULT_PREFS };
     return { ...DEFAULT_PREFS, ...(JSON.parse(raw) as UserPrefs) };
   } catch {
     return { ...DEFAULT_PREFS };
@@ -29,8 +61,7 @@ export async function loadPrefs(): Promise<UserPrefs> {
 export async function savePrefs(prefs: Partial<UserPrefs>): Promise<UserPrefs> {
   const cur = await loadPrefs();
   const next = { ...cur, ...prefs };
-  await ensureDataDir();
-  await fs.writeFile(prefsFile(), JSON.stringify(next, null, 2), "utf8");
+  await writeText(prefsFile(), JSON.stringify(next, null, 2));
   return next;
 }
 
@@ -52,23 +83,22 @@ export async function appendJournal(
   };
   let list: JournalEntry[] = [];
   try {
-    list = JSON.parse(await fs.readFile(journalFile(), "utf8")) as JournalEntry[];
+    const raw = await readText(journalFile());
+    if (raw) list = JSON.parse(raw) as JournalEntry[];
   } catch {
     list = [];
   }
   list.unshift(full);
   list = list.slice(0, 200);
-  await ensureDataDir();
-  await fs.writeFile(journalFile(), JSON.stringify(list), "utf8");
+  await writeText(journalFile(), JSON.stringify(list));
   return full;
 }
 
 export async function readJournal(limit = 50): Promise<JournalEntry[]> {
   try {
-    const list = JSON.parse(
-      await fs.readFile(journalFile(), "utf8"),
-    ) as JournalEntry[];
-    return list.slice(0, limit);
+    const raw = await readText(journalFile());
+    if (!raw) return [];
+    return (JSON.parse(raw) as JournalEntry[]).slice(0, limit);
   } catch {
     return [];
   }
@@ -93,7 +123,8 @@ function normalizeTrade(raw: Partial<PaperTrade> & PaperTrade): PaperTrade {
     marginEur,
     notionalEur: raw.notionalEur ?? marginEur * leverage,
     entryMode: raw.entryMode ?? "market_now",
-    status: raw.status === "open" || raw.status === "pending" ? raw.status : raw.status,
+    status:
+      raw.status === "open" || raw.status === "pending" ? raw.status : raw.status,
     closedAt: raw.closedAt ?? null,
     exitPx: raw.exitPx ?? null,
     markPx: raw.markPx ?? null,
@@ -105,16 +136,17 @@ function normalizeTrade(raw: Partial<PaperTrade> & PaperTrade): PaperTrade {
 
 export async function loadPaperTrades(): Promise<PaperTrade[]> {
   try {
-    const raw = JSON.parse(await fs.readFile(paperFile(), "utf8")) as Partial<PaperTrade>[];
-    return raw.map((t) => normalizeTrade(t as PaperTrade));
+    const raw = await readText(paperFile());
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as Partial<PaperTrade>[];
+    return parsed.map((t) => normalizeTrade(t as PaperTrade));
   } catch {
     return [];
   }
 }
 
 export async function savePaperTrades(trades: PaperTrade[]): Promise<void> {
-  await ensureDataDir();
-  await fs.writeFile(paperFile(), JSON.stringify(trades.slice(0, 120)), "utf8");
+  await writeText(paperFile(), JSON.stringify(trades.slice(0, 120)));
 }
 
 export function computePaperAccount(
@@ -148,7 +180,6 @@ export function computePaperAccount(
     else if (pnl < 0) lossCount += 1;
   }
 
-  // Cash = start - margins ouvertes + réalisé
   const cashEur = bankrollStartEur - marginUsed + realized;
   const equityEur = cashEur + marginUsed + unrealized;
 
@@ -224,20 +255,14 @@ export async function openPaperTrade(input: {
 
 export async function loadMacroAlertKeys(): Promise<Set<string>> {
   try {
-    const arr = JSON.parse(
-      await fs.readFile(macroAlertsFile(), "utf8"),
-    ) as string[];
-    return new Set(arr);
+    const raw = await readText(macroAlertsFile());
+    if (!raw) return new Set();
+    return new Set(JSON.parse(raw) as string[]);
   } catch {
     return new Set();
   }
 }
 
 export async function saveMacroAlertKeys(keys: Set<string>): Promise<void> {
-  await ensureDataDir();
-  await fs.writeFile(
-    macroAlertsFile(),
-    JSON.stringify([...keys].slice(-200)),
-    "utf8",
-  );
+  await writeText(macroAlertsFile(), JSON.stringify([...keys].slice(-200)));
 }

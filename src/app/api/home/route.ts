@@ -1,6 +1,7 @@
 import { getHomeSnapshot } from "@/lib/home";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 export const maxDuration = 90;
 
 export async function GET() {

@@ -22,8 +22,12 @@ export async function resolveChatId(): Promise<string | null> {
 }
 
 export async function saveChatId(chatId: string): Promise<void> {
-  await ensureDataDir();
-  await fs.writeFile(chatFile(), `${chatId}\n`, "utf8");
+  try {
+    await ensureDataDir();
+    await fs.writeFile(chatFile(), `${chatId}\n`, "utf8");
+  } catch {
+    // ignore EROFS
+  }
 }
 
 export async function discoverChatIdFromUpdates(): Promise<{
