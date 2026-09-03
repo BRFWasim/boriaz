@@ -344,10 +344,11 @@ export function computeWinRate(fills: Fill[]): { rate: number | null; sample: nu
 export function windowPerf(
   row: { windowPerformances: [string, { pnl: string; roi: string; vlm: string }][] },
   window: string,
-): { pnl: number; roi: number } {
+): { pnl: number; roi: number; volume: number } {
   const found = row.windowPerformances?.find((item) => item[0] === window)?.[1];
   return {
     pnl: parseNum(found?.pnl),
     roi: parseNum(found?.roi),
+    volume: parseNum(found?.vlm),
   };
 }

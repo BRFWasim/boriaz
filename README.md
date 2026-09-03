@@ -13,42 +13,49 @@ npm run dev
 
 Ouvrir [http://127.0.0.1:4317](http://127.0.0.1:4317).
 
+Build production :
+
+```bash
+npm run build
+npm start
+```
+
 ## Ce que la page montre
 
-Pour chaque baleine :
+### Vue marché (agrégat des 10)
+- Equity totale, exposition brute, longs vs shorts, biais net
+- PnL latent et PnL 24h agrégés
+- Cryptos les plus suivies (nombre de baleines, long/short/net, funding 8h)
+- Win rate moyen et profils les plus risqués (score interne)
 
-- alias (ou `Baleine #rang`), rang leaderboard, adresse tronquée copiable
-- valeur du compte perps, PnL 24h, win rate (clôtures des fills récents)
-- positions ouvertes : crypto, long/short, taille en $ et en quantité, levier, prix d’entrée, mark, PnL latent, SL/TP s’ils sont posés (avec distance en % au mark), heure d’ouverture (date + « il y a X »)
-- historique des clôtures récentes : entrée → sortie, SL/TP touché le cas échéant, PnL réalisé
+### Par baleine
+- Alias / rang, adresse tronquée copiable
+- Portefeuille perps, PnL & ROI (24h / 7j / 30j / all-time), volume 24h
+- Win rate, profit factor, expectancy, frais (sur l’échantillon de fills)
+- Exposition long/short, levier moyen, marge utilisée, withdrawable
+- PnL latent, funding depuis ouverture, concentration, positions near-liq
+- Score de risque (0–100) : levier, marge, proximité liquidation, SL absents, concentration
+- Positions : crypto, sens, taille $, qty, levier, entrée, mark, move %, liq + distance %, funding, SL/TP, heure d’ouverture
+- Clôtures récentes : entrée→sortie, PnL réalisé, SL/TP touché le cas échéant
 
-Filtres : recherche alias/adresse, tri (portefeuille, PnL 24h, nombre de positions), filtre par crypto.
+Filtres : recherche, tri (portefeuille, PnL 24h, PnL latent, positions, risque, win rate), filtre crypto.
 
-Interface **Simple** (cartes, lisible au pouce) ou **Avancé** (tableau complet sur bureau, cartes détaillées sur téléphone). Le choix est mémorisé.
+Modes **Simple** / **Avancé** (mémorisés). Rafraîchissement ~20 s.
 
-Les positions sont relues **toutes les ~20 secondes**. Si une baleine clôture pour en ouvrir une autre, la nouvelle position apparaît au cycle suivant (ce n’est pas du tick-par-tick).
+### Téléphone et ordinateur (PWA)
+- iPhone / iPad : Partager → Sur l’écran d’accueil
+- Android / Chrome / bureau : Installer l’application
 
-### Téléphone et ordinateur
-
-C’est une PWA autonome : ouvrez l’URL, puis installez-la.
-
-- iPhone / iPad : bouton Partager → **Sur l’écran d’accueil**
-- Android / Chrome / bureau : **Installer l’application** dans la barre d’adresse
-
-## Données
+## Données (aucune clé)
 
 | Besoin | Source |
 | --- | --- |
-| Classement des plus gros portefeuilles | Leaderboard public Hyperliquid (`stats-data.hyperliquid.xyz/Mainnet/leaderboard`). Le `POST /info` avec `type: "leaderboard"` n’est pas exposé par l’API info actuelle ; repli automatique si jamais il le devient. |
-| Capitaux et positions | `POST https://api.hyperliquid.xyz/info` · `clearinghouseState` |
-| SL / TP (ordres déclencheurs) | `frontendOpenOrders` (repli `openOrders`) |
-| Heure d’ouverture, win rate, clôtures | `userFills` |
-| SL/TP touché à la clôture | `historicalOrders` |
-| Prix de marché | `metaAndAssetCtxs` |
-
-Les 10 adresses sont celles du **plus gros portefeuille leaderboard** qui ont un **compte perps actif** (positions ouvertes ou capitaux perps). Les wallets 100 % spot, sans activité perpétuels, sont écartés.
-
-Rafraîchissement des positions toutes les **20 secondes** (cache serveur). L’historique des fills est relu si le set de positions change, sinon toutes les 60 s.
+| Classement | `https://stats-data.hyperliquid.xyz/Mainnet/leaderboard` (repli si `info` leaderboard un jour) |
+| Capitaux / positions | `POST https://api.hyperliquid.xyz/info` · `clearinghouseState` |
+| SL / TP | `frontendOpenOrders` (repli `openOrders`) |
+| Fills / win rate / clôtures | `userFills` |
+| SL/TP à la clôture | `historicalOrders` |
+| Mark, funding, OI, volume | `metaAndAssetCtxs` |
 
 ## Stack
 

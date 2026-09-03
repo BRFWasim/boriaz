@@ -47,9 +47,26 @@ export function formatPct(value: number, digits = 2): string {
   return `${sign}${new Intl.NumberFormat("fr-FR", { maximumFractionDigits: digits }).format(Math.abs(value))} %`;
 }
 
+export function formatRoi(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return "n/d";
+  return formatPct(value * 100, 2);
+}
+
+export function formatFundingRate(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return "n/d";
+  return formatPct(value * 100, 4);
+}
+
 export function formatWinRate(value: number | null, sample: number): string {
   if (value === null || sample === 0) return "n/d";
   return `${new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 1 }).format(value * 100)} %`;
+}
+
+export function riskClass(label: string): string {
+  if (label === "critique") return "text-short";
+  if (label === "élevé") return "text-amber-300";
+  if (label === "modéré") return "text-primary";
+  return "text-long";
 }
 
 export function truncateAddress(address: string): string {

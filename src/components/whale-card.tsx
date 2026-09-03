@@ -9,11 +9,14 @@ import {
   displayCoin,
   formatAgo,
   formatExactTime,
+  formatFundingRate,
   formatPct,
   formatPx,
   formatQty,
+  formatRoi,
   formatUsd,
   formatWinRate,
+  riskClass,
   signedClass,
   truncateAddress,
 } from "@/lib/format";
@@ -107,23 +110,117 @@ export function WhaleCard({
             />
             <Stat
               label="PnL 24h"
-              value={formatUsd(whale.pnl24h)}
-              className={signedClass(whale.pnl24h)}
+              value={formatUsd(whale.day.pnl)}
+              className={signedClass(whale.day.pnl)}
+              hint={dense ? undefined : `ROI ${formatRoi(whale.day.roi)}`}
             />
             <Stat
               label="Win rate"
-              value={formatWinRate(whale.winRate, whale.winSample)}
+              value={formatWinRate(whale.tradeStats.winRate, whale.tradeStats.sample)}
               hint={
                 dense
                   ? undefined
-                  : whale.winSample
-                    ? `Sur ${whale.winSample} clôtures`
+                  : whale.tradeStats.sample
+                    ? `${whale.tradeStats.sample} clôtures · PF ${
+                        whale.tradeStats.profitFactor === null
+                          ? "n/d"
+                          : Number.isFinite(whale.tradeStats.profitFactor)
+                            ? whale.tradeStats.profitFactor.toFixed(2)
+                            : "∞"
+                      }`
                     : "Pas assez de clôtures"
               }
             />
-            <Stat label="Positions" value={String(whale.positions.length)} />
+            <Stat
+              label="Risque"
+              value={`${whale.riskScore}/100`}
+              className={riskClass(whale.riskLabel)}
+              hint={dense ? whale.riskLabel : `${whale.riskLabel} · biais ${whale.bias}`}
+            />
           </div>
         </div>
+        {!dense ? (
+          <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4 lg:grid-cols-8">
+            <Mini label="PnL 7j" value={formatUsd(whale.week.pnl)} className={signedClass(whale.week.pnl)} />
+            <Mini label="PnL 30j" value={formatUsd(whale.month.pnl)} className={signedClass(whale.month.pnl)} />
+            <Mini label="All-time" value={formatUsd(whale.allTime.pnl)} className={signedClass(whale.allTime.pnl)} />
+            <Mini label="Vol. 24h" value={formatUsd(whale.day.volume)} />
+            <Mini label="Long" value={formatUsd(whale.exposure.longUsd)} className="text-long" />
+            <Mini label="Short" value={formatUsd(whale.exposure.shortUsd)} className="text-short" />
+            <Mini
+              label="Levier moy."
+              value={`${whale.exposure.avgLeverage.toFixed(1)}×`}
+            />
+            <Mini
+              label="Marge"
+              value={formatPct(whale.exposure.marginRatio, 1).replace("+", "")}
+            />
+            <Mini
+              label="PnL latent"
+              value={formatUsd(whale.exposure.unrealizedTotal)}
+              className={signedClass(whale.exposure.unrealizedTotal)}
+            />
+            <Mini
+              label="Funding ouvert"
+              value={formatUsd(whale.exposure.fundingOpenTotal)}
+              className={signedClass(-whale.exposure.fundingOpenTotal)}
+            />
+            <Mini
+              label="SL / TP"
+              value={`${whale.exposure.protectedWithSl}/${whale.positions.length} · ${whale.exposure.protectedWithTp}/${whale.positions.length}`}
+            />
+            <Mini
+              label="Near liq."
+              value={String(whale.exposure.nearLiquidationCount)}
+              className={
+                whale.exposure.nearLiquidationCount > 0 ? "text-short" : undefined
+              }
+            />
+            <Mini
+              label="Expectancy"
+              value={
+                whale.tradeStats.expectancy === null
+                  ? "n/d"
+                  : formatUsd(whale.tradeStats.expectancy)
+              }
+              className={
+                whale.tradeStats.expectancy === null
+                  ? undefined
+                  : signedClass(whale.tradeStats.expectancy)
+              }
+            />
+            <Mini
+              label="Concentration"
+              value={
+                whale.exposure.concentrationTopCoin
+                  ? `${whale.exposure.concentrationTopCoin} ${formatPct(
+                      whale.exposure.concentrationTopPct,
+                      0,
+                    ).replace("+", "")}`
+                  : "n/d"
+              }
+            />
+            <Mini label="Withdrawable" value={formatUsd(whale.exposure.withdrawable)} />
+            <Mini label="Frais (échantillon)" value={formatUsd(whale.tradeStats.feesPaid)} />
+          </div>
+        ) : (
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+            <span>
+              Long {formatUsd(whale.exposure.longUsd)} / Short{" "}
+              {formatUsd(whale.exposure.shortUsd)}
+            </span>
+            <span>Levier moy. {whale.exposure.avgLeverage.toFixed(1)}×</span>
+            <span>
+              Latent{" "}
+              <span className={signedClass(whale.exposure.unrealizedTotal)}>
+                {formatUsd(whale.exposure.unrealizedTotal)}
+              </span>
+            </span>
+            <span>
+              SL {whale.exposure.protectedWithSl}/{whale.positions.length}
+            </span>
+          </div>
+        )}
         {whale.error ? (
           <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
             Données partielles : {whale.error}
@@ -248,7 +345,7 @@ function PositionTable({
 }) {
   return (
     <div className="overflow-x-auto rounded-lg border border-border/70">
-      <table className="w-full min-w-[980px] text-left text-sm">
+      <table className="w-full min-w-[1180px] text-left text-sm">
         <thead className="bg-muted/50 text-[11px] tracking-wide text-muted-foreground uppercase">
           <tr>
             <th className="px-3 py-2 font-medium">Crypto</th>
@@ -258,6 +355,8 @@ function PositionTable({
             <th className="px-3 py-2 font-medium">Entrée</th>
             <th className="px-3 py-2 font-medium">Marché</th>
             <th className="px-3 py-2 font-medium">PnL latent</th>
+            <th className="px-3 py-2 font-medium">Liq. / dist.</th>
+            <th className="px-3 py-2 font-medium">Funding</th>
             <th className="px-3 py-2 font-medium">Stop-loss</th>
             <th className="px-3 py-2 font-medium">Take-profit</th>
             <th className="px-3 py-2 font-medium">Ouverture</th>
@@ -340,6 +439,15 @@ function PositionTile({
         <span className="numeric text-muted-foreground">
           Mark {position.markPx !== null ? formatPx(position.markPx) : "n/d"}
         </span>
+        {position.distanceToLiqPct !== null ? (
+          <span
+            className={`numeric ${
+              position.distanceToLiqPct < 8 ? "text-short" : "text-muted-foreground"
+            }`}
+          >
+            Liq {formatPct(position.distanceToLiqPct, 1).replace("+", "")}
+          </span>
+        ) : null}
       </div>
       <div className={`mt-2 grid gap-2 ${dense ? "grid-cols-2" : "grid-cols-1 sm:grid-cols-3"}`}>
         <ProtectionChip kind="sl" level={position.sl} compact={dense} />
@@ -425,6 +533,23 @@ function Stat({
   );
 }
 
+function Mini({
+  label,
+  value,
+  className,
+}: {
+  label: string;
+  value: string;
+  className?: string;
+}) {
+  return (
+    <div className="rounded-md bg-muted/30 px-2 py-1.5">
+      <p className="text-[10px] tracking-wide text-muted-foreground uppercase">{label}</p>
+      <p className={`numeric mt-0.5 font-medium ${className ?? ""}`}>{value}</p>
+    </div>
+  );
+}
+
 function PositionRow({
   position,
 }: {
@@ -460,6 +585,39 @@ function PositionRow({
       </td>
       <td className={`numeric px-3 py-2.5 ${signedClass(position.unrealizedPnl)}`}>
         {formatUsd(position.unrealizedPnl)}
+        {position.moveFromEntryPct !== null ? (
+          <div className="text-[11px] text-muted-foreground">
+            {formatPct(position.moveFromEntryPct, 2)} vs entrée
+          </div>
+        ) : null}
+      </td>
+      <td className="numeric px-3 py-2.5 text-xs">
+        {position.liquidationPx !== null ? (
+          <>
+            <div>{formatPx(position.liquidationPx)}</div>
+            <div
+              className={
+                position.distanceToLiqPct !== null && position.distanceToLiqPct < 8
+                  ? "text-short"
+                  : "text-muted-foreground"
+              }
+            >
+              {position.distanceToLiqPct !== null
+                ? `${formatPct(position.distanceToLiqPct, 1).replace("+", "")} au mark`
+                : "dist. n/d"}
+            </div>
+          </>
+        ) : (
+          <span className="italic text-muted-foreground">n/d</span>
+        )}
+      </td>
+      <td className="numeric px-3 py-2.5 text-xs">
+        <div className={signedClass(-position.fundingSinceOpen)}>
+          {formatUsd(position.fundingSinceOpen)} depuis ouv.
+        </div>
+        <div className="text-muted-foreground">
+          taux {formatFundingRate(position.fundingRate8h)}
+        </div>
       </td>
       <td className="px-3 py-2.5">
         <ProtectionCell kind="sl" level={position.sl} />

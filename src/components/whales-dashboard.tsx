@@ -19,6 +19,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { MarketOverviewPanel } from "@/components/market-overview";
 import { WhaleCard } from "@/components/whale-card";
 import { formatAgo, formatExactTime } from "@/lib/format";
 import type { DashboardPayload, SortKey, UiMode } from "@/lib/types";
@@ -115,8 +116,15 @@ export function WhalesDashboard() {
       );
     });
     list = [...list].sort((a, b) => {
-      if (sort === "pnl24h") return b.pnl24h - a.pnl24h;
+      if (sort === "pnl24h") return b.day.pnl - a.day.pnl;
       if (sort === "positions") return b.positions.length - a.positions.length;
+      if (sort === "unrealized") {
+        return b.exposure.unrealizedTotal - a.exposure.unrealizedTotal;
+      }
+      if (sort === "risk") return b.riskScore - a.riskScore;
+      if (sort === "winrate") {
+        return (b.tradeStats.winRate ?? -1) - (a.tradeStats.winRate ?? -1);
+      }
       return b.portfolioUsd - a.portfolioUsd;
     });
     return list;
@@ -211,7 +219,14 @@ export function WhalesDashboard() {
               <Select
                 value={sort}
                 onValueChange={(value) => {
-                  if (value === "portfolio" || value === "pnl24h" || value === "positions") {
+                  if (
+                    value === "portfolio" ||
+                    value === "pnl24h" ||
+                    value === "positions" ||
+                    value === "unrealized" ||
+                    value === "risk" ||
+                    value === "winrate"
+                  ) {
                     setSort(value);
                   }
                 }}
@@ -222,7 +237,10 @@ export function WhalesDashboard() {
                 <SelectContent>
                   <SelectItem value="portfolio">Tri : portefeuille</SelectItem>
                   <SelectItem value="pnl24h">Tri : PnL 24h</SelectItem>
+                  <SelectItem value="unrealized">Tri : PnL latent</SelectItem>
                   <SelectItem value="positions">Tri : nb de positions</SelectItem>
+                  <SelectItem value="risk">Tri : risque</SelectItem>
+                  <SelectItem value="winrate">Tri : win rate</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -266,6 +284,8 @@ export function WhalesDashboard() {
             Rafraîchissement échoué : {error}. Les dernières données restent affichées.
           </p>
         ) : null}
+
+        {data?.overview ? <MarketOverviewPanel overview={data.overview} /> : null}
 
         {data && whales.length === 0 ? (
           <p className="rounded-xl border border-dashed px-4 py-10 text-center text-sm text-muted-foreground">

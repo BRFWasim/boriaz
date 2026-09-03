@@ -133,9 +133,30 @@ export async function fetchHistoricalOrders(user: string): Promise<HistoricalOrd
 
 export async function fetchMetaAndCtxs(): Promise<{
   universe: { name: string }[];
-  ctxs: { markPx: string }[];
+  ctxs: {
+    markPx: string;
+    oraclePx?: string;
+    midPx?: string;
+    funding?: string;
+    openInterest?: string;
+    dayNtlVlm?: string;
+    premium?: string;
+  }[];
 }> {
-  const payload = await postInfo<[{ universe: { name: string }[] }, { markPx: string }[]]>({
+  const payload = await postInfo<
+    [
+      { universe: { name: string }[] },
+      {
+        markPx: string;
+        oraclePx?: string;
+        midPx?: string;
+        funding?: string;
+        openInterest?: string;
+        dayNtlVlm?: string;
+        premium?: string;
+      }[],
+    ]
+  >({
     type: "metaAndAssetCtxs",
   });
   if (!Array.isArray(payload) || payload.length < 2) {

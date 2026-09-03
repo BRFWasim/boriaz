@@ -1,3 +1,17 @@
+import {
+  biasFromNet,
+  buildMarketMaps,
+  buildOverview,
+  computeExposure,
+  computeTradeStats,
+  distanceToLiquidationPct,
+  emptyExposure,
+  emptyTradeStats,
+  emptyWindow,
+  fullWindow,
+  moveFromEntryPct,
+  scoreRisk,
+} from "./analysis";
 import { parseNum } from "./format";
 import {
   fetchClearinghouse,
@@ -12,11 +26,7 @@ import {
 } from "./hyperliquid";
 import {
   attachProtections,
-  buildMarkMap,
-  computeWinRate,
-  findOpenTime,
   reconstructClosed,
-  windowPerf,
 } from "./positions";
 import type {
   ClearinghouseState,
@@ -26,24 +36,29 @@ import type {
   HistoricalOrder,
   OpenPosition,
   Whale,
+  WindowStats,
 } from "./types";
 
 const WHALE_COUNT = 10;
 const DETAILS_TTL_MS = 20_000;
 const HISTORY_TTL_MS = 60_000;
 const SELECTION_TTL_MS = 10 * 60_000;
-const SCAN_LIMIT = 140;
+const SCAN_LIMIT = 160;
 const MIN_PERP_EQUITY = 50_000;
 const PROBE_CONCURRENCY = 6;
 const DETAIL_CONCURRENCY = 3;
+const CLOSED_LIMIT = 16;
+const NEAR_LIQ_WARN_PCT = 8;
 
 interface SelectedRow {
   address: string;
   alias: string;
   rank: number;
   leaderboardValue: number;
-  pnl24h: number;
-  roi24h: number;
+  day: WindowStats;
+  week: WindowStats;
+  month: WindowStats;
+  allTime: WindowStats;
 }
 
 interface CacheBox<T> {
@@ -77,12 +92,15 @@ export async function getWhaleDashboard(): Promise<DashboardPayload> {
 
 async function refreshDashboard(): Promise<DashboardPayload> {
   const selected = await selectWhales();
-  const meta = await fetchMetaAndCtxs().catch(() => ({ universe: [], ctxs: [] }));
-  const marks = buildMarkMap(meta.universe, meta.ctxs);
+  const meta = await fetchMetaAndCtxs().catch(() => ({
+    universe: [],
+    ctxs: [],
+  }));
+  const maps = buildMarketMaps(meta.universe, meta.ctxs);
 
   const whales = await mapPool(selected, DETAIL_CONCURRENCY, async (row) => {
     try {
-      return await hydrateWhale(row, marks);
+      return await hydrateWhale(row, maps);
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Erreur de chargement";
@@ -94,6 +112,7 @@ async function refreshDashboard(): Promise<DashboardPayload> {
   const payload: DashboardPayload = {
     whales,
     coins,
+    overview: buildOverview(whales),
     fetchedAt: Date.now(),
     nextRefreshSec: getRefreshSeconds(),
     source: {
@@ -101,7 +120,7 @@ async function refreshDashboard(): Promise<DashboardPayload> {
       info: INFO_URL,
     },
     scanNote:
-      "Les 10 adresses affichées sont celles du leaderboard avec le plus gros portefeuille qui ont un compte perpétuels actif (positions ouvertes ou capitaux perps). Les portefeuilles 100 % spot, sans activité perps, sont écartés. Une clôture suivie d’une nouvelle position apparaît au cycle suivant (~20 s).",
+      "Les 10 adresses sont les plus gros portefeuilles du leaderboard avec un compte perps actif. Facteurs lus : equity, PnL/ROI/volume (jour·semaine·mois·all-time), win rate, profit factor, expectancy, expositions long/short, levier moyen, marge, funding, distance à la liquidation, SL/TP, concentration. Une clôture + nouvelle entrée apparaît au cycle suivant (~20 s).",
     cached: false,
   };
   detailsCache = { at: Date.now(), value: payload };
@@ -122,7 +141,11 @@ async function selectWhales(): Promise<SelectedRow[]> {
   const selected: SelectedRow[] = [];
   const slice = ranked.slice(0, SCAN_LIMIT);
 
-  for (let i = 0; i < slice.length && selected.length < WHALE_COUNT; i += PROBE_CONCURRENCY) {
+  for (
+    let i = 0;
+    i < slice.length && selected.length < WHALE_COUNT;
+    i += PROBE_CONCURRENCY
+  ) {
     const batch = slice.slice(i, i + PROBE_CONCURRENCY);
     const probed = await Promise.all(
       batch.map(async (row, offset) => {
@@ -137,14 +160,15 @@ async function selectWhales(): Promise<SelectedRow[]> {
     for (const item of probed) {
       if (!item || selected.length >= WHALE_COUNT) continue;
       if (!isActivePerpTrader(item.state)) continue;
-      const day = windowPerf(item.row, "day");
       selected.push({
         address: item.row.ethAddress,
         alias: item.row.displayName?.trim() || `Baleine #${item.index + 1}`,
         rank: item.index + 1,
         leaderboardValue: parseNum(item.row.accountValue),
-        pnl24h: day.pnl,
-        roi24h: day.roi,
+        day: fullWindow(item.row, "day"),
+        week: fullWindow(item.row, "week"),
+        month: fullWindow(item.row, "month"),
+        allTime: fullWindow(item.row, "allTime"),
       });
     }
   }
@@ -203,7 +227,7 @@ async function loadFills(
 
 async function hydrateWhale(
   row: SelectedRow,
-  marks: Map<string, number>,
+  maps: ReturnType<typeof buildMarketMaps>,
 ): Promise<Whale> {
   const [state, orders] = await Promise.all([
     fetchClearinghouse(row.address),
@@ -220,7 +244,14 @@ async function hydrateWhale(
     .map((position) => {
       const qtySigned = parseNum(position.szi);
       const side: OpenPosition["side"] = qtySigned > 0 ? "long" : "short";
-      const { time, inferred } = findOpenTime(fills, position.coin, qtySigned);
+      const markPx = maps.marks.get(position.coin) ?? null;
+      const entryPx = parseNum(position.entryPx);
+      const liquidationPxRaw = position.liquidationPx;
+      const liquidationPx =
+        liquidationPxRaw === null || liquidationPxRaw === undefined
+          ? null
+          : parseNum(liquidationPxRaw) || null;
+      const { time, inferred } = findOpenTimeLocal(fills, position.coin, qtySigned);
       return {
         coin: position.coin,
         side,
@@ -228,9 +259,24 @@ async function hydrateWhale(
         notionalUsd: Math.abs(parseNum(position.positionValue)),
         leverage: position.leverage?.value ?? 0,
         leverageType: position.leverage?.type ?? "cross",
-        entryPx: parseNum(position.entryPx),
-        markPx: marks.get(position.coin) ?? null,
+        entryPx,
+        markPx,
         unrealizedPnl: parseNum(position.unrealizedPnl),
+        returnOnEquity:
+          position.returnOnEquity !== undefined
+            ? parseNum(position.returnOnEquity)
+            : null,
+        liquidationPx,
+        distanceToLiqPct: distanceToLiquidationPct(side, markPx, liquidationPx),
+        marginUsed: parseNum(position.marginUsed),
+        fundingSinceOpen: parseNum(position.cumFunding?.sinceOpen),
+        fundingAllTime: parseNum(position.cumFunding?.allTime),
+        moveFromEntryPct: moveFromEntryPct(side, entryPx, markPx),
+        fundingRate8h: maps.funding.has(position.coin)
+          ? maps.funding.get(position.coin)!
+          : null,
+        openInterest: maps.openInterest.get(position.coin) ?? null,
+        dayVolume: maps.dayVolume.get(position.coin) ?? null,
         openedAt: time,
         openedAtInferred: inferred,
       };
@@ -238,21 +284,70 @@ async function hydrateWhale(
     .sort((a, b) => b.notionalUsd - a.notionalUsd);
 
   const positions = attachProtections(rawPositions, orders);
-  const win = computeWinRate(fills);
+  const tradeStats = computeTradeStats(fills);
+  const equity = parseNum(state.marginSummary?.accountValue);
+  const marginUsed = parseNum(state.marginSummary?.totalMarginUsed);
+  const withdrawable = parseNum(state.withdrawable);
+  const exposure = computeExposure(positions, {
+    marginUsed,
+    equity,
+    withdrawable,
+  });
+  const risk = scoreRisk(exposure, positions.length);
+  const bias = biasFromNet(exposure.netUsd, exposure.grossUsd);
 
   return {
     address: row.address,
     alias: row.alias,
     rank: row.rank,
     leaderboardValue: row.leaderboardValue,
-    portfolioUsd: parseNum(state.marginSummary?.accountValue),
-    pnl24h: row.pnl24h,
-    roi24h: row.roi24h,
-    winRate: win.rate,
-    winSample: win.sample,
+    portfolioUsd: equity,
+    day: row.day,
+    week: row.week,
+    month: row.month,
+    allTime: row.allTime,
+    pnl24h: row.day.pnl,
+    roi24h: row.day.roi,
+    winRate: tradeStats.winRate,
+    winSample: tradeStats.sample,
+    tradeStats,
+    exposure,
+    riskScore: risk.score,
+    riskLabel: risk.label,
+    bias,
     positions,
-    closed: reconstructClosed(fills, historical, 10),
+    closed: reconstructClosed(fills, historical, CLOSED_LIMIT),
   };
+}
+
+function findOpenTimeLocal(
+  fills: Fill[],
+  coin: string,
+  signedQty: number,
+): { time: number | null; inferred: boolean } {
+  const sign = Math.sign(signedQty);
+  if (sign === 0) return { time: null, inferred: false };
+  const coinFills = fills
+    .filter((fill) => {
+      if (fill.coin !== coin) return false;
+      if (fill.coin.startsWith("@")) return false;
+      const dir = fill.dir ?? "";
+      return dir !== "Buy" && dir !== "Sell";
+    })
+    .sort((a, b) => b.time - a.time);
+  if (!coinFills.length) return { time: null, inferred: false };
+  let openTime = coinFills[0].time;
+  let foundBoundary = false;
+  for (const fill of coinFills) {
+    openTime = fill.time;
+    const start = parseNum(fill.startPosition);
+    if (Math.abs(start) < 1e-10 || Math.sign(start) !== sign) {
+      foundBoundary = true;
+      break;
+    }
+  }
+  if (!foundBoundary) return { time: null, inferred: false };
+  return { time: openTime, inferred: true };
 }
 
 function fallbackWhale(row: SelectedRow, error: string): Whale {
@@ -262,10 +357,19 @@ function fallbackWhale(row: SelectedRow, error: string): Whale {
     rank: row.rank,
     leaderboardValue: row.leaderboardValue,
     portfolioUsd: row.leaderboardValue,
-    pnl24h: row.pnl24h,
-    roi24h: row.roi24h,
+    day: row.day,
+    week: row.week,
+    month: row.month,
+    allTime: row.allTime,
+    pnl24h: row.day.pnl,
+    roi24h: row.day.roi,
     winRate: null,
     winSample: 0,
+    tradeStats: emptyTradeStats(),
+    exposure: emptyExposure(),
+    riskScore: 0,
+    riskLabel: "faible",
+    bias: "neutre",
     positions: [],
     closed: [],
     error,
@@ -279,3 +383,5 @@ function uniqueCoins(whales: Whale[]): string[] {
   }
   return [...set].sort((a, b) => a.localeCompare(b));
 }
+
+export { NEAR_LIQ_WARN_PCT, emptyWindow };
