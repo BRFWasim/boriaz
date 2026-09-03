@@ -17,6 +17,8 @@ export function BtcAnalysisPanel() {
   const [data, setData] = useState<BtcAnalysisPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [tgMsg, setTgMsg] = useState<string | null>(null);
+  const [tgBusy, setTgBusy] = useState(false);
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -57,10 +59,50 @@ export function BtcAnalysisPanel() {
     };
   }, [load]);
 
+  async function linkTelegram() {
+    setTgBusy(true);
+    setTgMsg(null);
+    try {
+      const res = await fetch("/api/telegram/setup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "link" }),
+      });
+      const json = (await res.json()) as {
+        chatId: string | null;
+        detail: string;
+      };
+      setTgMsg(json.detail);
+      await load(true);
+    } catch (err) {
+      setTgMsg(err instanceof Error ? err.message : "Échec liaison Telegram");
+    } finally {
+      setTgBusy(false);
+    }
+  }
+
+  async function testTelegram() {
+    setTgBusy(true);
+    setTgMsg(null);
+    try {
+      const res = await fetch("/api/telegram/setup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "test" }),
+      });
+      const json = (await res.json()) as { ok?: boolean; error?: string };
+      setTgMsg(json.ok ? "Message test envoyé ✅" : json.error || "Échec test");
+    } catch (err) {
+      setTgMsg(err instanceof Error ? err.message : "Échec test");
+    } finally {
+      setTgBusy(false);
+    }
+  }
+
   if (loading && !data) {
     return (
       <p className="animate-pulse text-sm text-muted-foreground">
-        Calcul RSI / MACD / EMA sur bougies BTC 4h Hyperliquid…
+        Calcul RSI / MACD / EMA + analyses ChatGPT & Claude…
       </p>
     );
   }
@@ -91,12 +133,12 @@ export function BtcAnalysisPanel() {
       <section className="rounded-xl border border-border/80 bg-card/70 p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h2 className="text-lg font-semibold">BTC · analyse live</h2>
+            <h2 className="text-lg font-semibold">BTC · analyse live complète</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              Bougies {data.interval} (Hyperliquid) · horizon {data.horizon}
+              Bougies {data.interval} Hyperliquid · {data.horizon}
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Badge variant="outline" className={biasClass}>
               Avis {data.bias} · score {data.score}
             </Badge>
@@ -203,6 +245,18 @@ export function BtcAnalysisPanel() {
 
         <Sparkline candles={data.candles} />
 
+        <div className="mt-4 rounded-lg border border-primary/30 bg-primary/8 p-3">
+          <p className="text-xs tracking-wide text-primary uppercase">
+            Timing d’achat (règles + confluence)
+          </p>
+          <p className="mt-1 font-medium">
+            {data.buyTiming.action.replaceAll("_", " ")} · confiance{" "}
+            {data.buyTiming.confidence}/100
+          </p>
+          <p className="mt-1 text-sm text-muted-foreground">{data.buyTiming.reason}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{data.buyTiming.levels}</p>
+        </div>
+
         <div className="mt-4 rounded-lg border border-border/60 bg-muted/30 p-3">
           <p className="font-medium">{data.summary}</p>
           <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-muted-foreground">
@@ -215,56 +269,78 @@ export function BtcAnalysisPanel() {
 
       <section className="rounded-xl border border-border/80 bg-card/70 p-4">
         <h3 className="text-sm font-medium tracking-wide text-muted-foreground uppercase">
-          Avis IA complet
+          Telegram · @BoriazBot
         </h3>
-        {data.ai.enabled && data.ai.text ? (
-          <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed">
-            {data.ai.text}
-          </p>
-        ) : (
-          <div className="mt-3 rounded-lg border border-dashed border-border px-3 py-4 text-sm text-muted-foreground">
-            <p>
-              Prêt. Envoie une clé au prochain message pour activer l’analyse IA :
-            </p>
-            <ul className="mt-2 list-disc pl-5">
-              <li>
-                <code>OPENAI_API_KEY</code> (recommandé) —{" "}
-                <a
-                  className="text-primary underline"
-                  href="https://platform.openai.com/api-keys"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  platform.openai.com/api-keys
-                </a>
-              </li>
-              <li>
-                ou <code>ANTHROPIC_API_KEY</code> —{" "}
-                <a
-                  className="text-primary underline"
-                  href="https://console.anthropic.com/"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  console.anthropic.com
-                </a>
-              </li>
-            </ul>
-            {data.ai.error ? (
-              <p className="mt-2 text-xs">{data.ai.error}</p>
-            ) : null}
-          </div>
-        )}
-        {data.ai.provider ? (
-          <p className="mt-2 text-xs text-muted-foreground">
-            Provider : {data.ai.provider}
-          </p>
-        ) : null}
+        <p className="mt-2 text-sm text-muted-foreground">
+          1) Ouvre Telegram et envoie <code>/start</code> à{" "}
+          <a
+            className="text-primary underline"
+            href="https://t.me/BoriazBot"
+            target="_blank"
+            rel="noreferrer"
+          >
+            @BoriazBot
+          </a>
+          . 2) Clique « Lier Telegram ». 3) Teste l’envoi.
+        </p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Button size="sm" onClick={() => void linkTelegram()} disabled={tgBusy}>
+            Lier Telegram
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void testTelegram()}
+            disabled={tgBusy}
+          >
+            Envoyer un test
+          </Button>
+          <Badge variant={data.telegram.linked ? "secondary" : "outline"}>
+            {data.telegram.linked ? "Lié" : "Pas encore lié"}
+          </Badge>
+        </div>
+        {tgMsg ? <p className="mt-2 text-sm text-muted-foreground">{tgMsg}</p> : null}
       </section>
 
       <section className="rounded-xl border border-border/80 bg-card/70 p-4">
         <h3 className="text-sm font-medium tracking-wide text-muted-foreground uppercase">
-          Contexte hors Hyperliquid (CoinGecko)
+          ChatGPT
+        </h3>
+        {data.ai.openai.text ? (
+          <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed">
+            {data.ai.openai.text}
+          </p>
+        ) : (
+          <p className="mt-3 text-sm text-muted-foreground">
+            {data.ai.openai.error || "Pas de réponse ChatGPT"}
+          </p>
+        )}
+      </section>
+
+      <section className="rounded-xl border border-border/80 bg-card/70 p-4">
+        <h3 className="text-sm font-medium tracking-wide text-muted-foreground uppercase">
+          Claude
+        </h3>
+        {data.ai.anthropic.text ? (
+          <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed">
+            {data.ai.anthropic.text}
+          </p>
+        ) : (
+          <p className="mt-3 text-sm text-muted-foreground">
+            {data.ai.anthropic.error || "Pas de réponse Claude"}
+          </p>
+        )}
+      </section>
+
+      {data.ai.consensus ? (
+        <section className="rounded-xl border border-long/30 bg-long/8 p-4 text-sm">
+          {data.ai.consensus}
+        </section>
+      ) : null}
+
+      <section className="rounded-xl border border-border/80 bg-card/70 p-4">
+        <h3 className="text-sm font-medium tracking-wide text-muted-foreground uppercase">
+          Contexte CoinGecko
         </h3>
         {data.external.coingecko.enabled ? (
           <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -313,8 +389,7 @@ export function BtcAnalysisPanel() {
           </div>
         ) : (
           <p className="mt-2 text-sm text-muted-foreground">
-            CoinGecko indisponible pour le moment (rate-limit public possible).
-            Clé Pro optionnelle : <code>COINGECKO_API_KEY</code>.
+            CoinGecko indisponible pour le moment.
           </p>
         )}
         <p className="mt-3 text-xs text-muted-foreground">

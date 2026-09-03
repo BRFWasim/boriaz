@@ -1,3 +1,4 @@
+import { dispatchWhaleAlerts } from "@/lib/alerts";
 import { getWhaleDashboard } from "@/lib/dashboard";
 
 export const dynamic = "force-dynamic";
@@ -6,6 +7,11 @@ export const maxDuration = 60;
 export async function GET() {
   try {
     const payload = await getWhaleDashboard();
+    try {
+      await dispatchWhaleAlerts(payload);
+    } catch {
+      // ne bloque pas le dashboard
+    }
     return Response.json(payload);
   } catch (error) {
     const message =

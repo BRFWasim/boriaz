@@ -36,6 +36,7 @@ yarn-error.log*
 .env*
 !.env.example
 !.env.example.*
+.telegram-chat-id
 
 # vercel
 .vercel

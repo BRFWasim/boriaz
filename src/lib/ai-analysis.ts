@@ -30,10 +30,14 @@ export function ruleBasedBtcView(ind: IndicatorSnapshot): {
   if (ind.macd !== null && ind.macdSignal !== null && ind.macdHist !== null) {
     if (ind.macdHist > 0 && ind.macd > ind.macdSignal) {
       score += 2;
-      bullets.push("MACD au-dessus de sa signal (histogramme > 0) : biais haussier court terme.");
+      bullets.push(
+        "MACD au-dessus de sa signal (histogramme > 0) : biais haussier court terme.",
+      );
     } else if (ind.macdHist < 0 && ind.macd < ind.macdSignal) {
       score -= 2;
-      bullets.push("MACD sous sa signal (histogramme < 0) : biais baissier court terme.");
+      bullets.push(
+        "MACD sous sa signal (histogramme < 0) : biais baissier court terme.",
+      );
     } else {
       bullets.push("MACD mixte / en transition.");
     }
@@ -54,7 +58,9 @@ export function ruleBasedBtcView(ind: IndicatorSnapshot): {
   if (ind.ema200 !== null) {
     if (ind.price > ind.ema200) {
       score += 1;
-      bullets.push("Prix au-dessus de l’EMA200 : tendance long terme encore haussière.");
+      bullets.push(
+        "Prix au-dessus de l’EMA200 : tendance long terme encore haussière.",
+      );
     } else {
       score -= 1;
       bullets.push("Prix sous l’EMA200 : tendance long terme sous pression.");
@@ -67,7 +73,9 @@ export function ruleBasedBtcView(ind: IndicatorSnapshot): {
       bullets.push("Prix sur la bande de Bollinger haute : extension possible.");
     } else if (ind.price <= ind.bbLower) {
       score += 1;
-      bullets.push("Prix sur la bande de Bollinger basse : compression / rebond possible.");
+      bullets.push(
+        "Prix sur la bande de Bollinger basse : compression / rebond possible.",
+      );
     }
   }
 
@@ -92,107 +100,170 @@ export function ruleBasedBtcView(ind: IndicatorSnapshot): {
   return { bias, score, summary, bullets };
 }
 
-export async function maybeAiBtcCommentary(input: {
+export interface DualAiResult {
+  enabled: boolean;
+  openai: { text: string | null; error: string | null };
+  anthropic: { text: string | null; error: string | null };
+  consensus: string | null;
+  providers: string[];
+}
+
+function buildPrompt(input: {
   indicators: IndicatorSnapshot;
   bias: SignalBias;
   bullets: string[];
-}): Promise<{ provider: string | null; text: string | null; error: string | null }> {
-  const openai = process.env.OPENAI_API_KEY?.trim();
-  const anthropic = process.env.ANTHROPIC_API_KEY?.trim();
-  const prompt = `Tu es un analyste crypto prudent. Donne une analyse BTC moyen terme (quelques jours à 2 semaines) en français, 4-7 phrases max.
-Ce n'est PAS un conseil financier. Base-toi uniquement sur ces indicateurs:
+  external?: Record<string, unknown>;
+  role: "openai" | "anthropic";
+}): string {
+  const angle =
+    input.role === "openai"
+      ? "Insiste sur le plan d'action clair (zones d'achat/invalidations) et le timing moyen terme."
+      : "Insiste sur les risques, les faux signaux et les scénarios alternatifs.";
+  return `Tu es un analyste crypto prudent. Analyse BTC en français (moyen terme: jours → ~2 semaines).
+Ce n'est PAS un conseil financier. ${angle}
+
+Indicateurs:
 ${JSON.stringify(input.indicators, null, 2)}
-Biais règles: ${input.bias}
-Points: ${input.bullets.join(" | ")}
-Structure: 1) contexte 2) signaux techniques 3) scénarios haussier/baissier 4) niveaux à surveiller 5) rappel risque.`;
 
-  if (openai) {
-    try {
-      const res = await fetch("https://api.openai.com/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${openai}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini",
-          temperature: 0.3,
-          messages: [
-            {
-              role: "system",
-              content:
-                "Analyste crypto factuel. Pas de promesse de gain. Français clair.",
-            },
-            { role: "user", content: prompt },
-          ],
-        }),
-      });
-      const json = (await res.json()) as {
-        choices?: { message?: { content?: string } }[];
-        error?: { message?: string };
-      };
-      if (!res.ok) {
-        return {
-          provider: "openai",
-          text: null,
-          error: json.error?.message || `OpenAI HTTP ${res.status}`,
-        };
-      }
-      return {
-        provider: "openai",
-        text: json.choices?.[0]?.message?.content?.trim() || null,
-        error: null,
-      };
-    } catch (error) {
-      return {
-        provider: "openai",
-        text: null,
-        error: error instanceof Error ? error.message : "Erreur OpenAI",
-      };
+Contexte externe:
+${JSON.stringify(input.external ?? {}, null, 2)}
+
+Biais règles locales: ${input.bias}
+Points techniques: ${input.bullets.join(" | ")}
+
+Structure obligatoire:
+1) Contexte prix / tendance
+2) Lecture RSI + MACD + EMAs + Bollinger
+3) Scénario haussier (niveaux)
+4) Scénario baissier (niveaux)
+5) Meilleure zone d'achat éventuelle OU pourquoi patienter
+6) Invalidation
+7) Rappel risque
+Max ~10 phrases, style net et concret.`;
+}
+
+async function askOpenAi(prompt: string): Promise<{ text: string | null; error: string | null }> {
+  const openai = process.env.OPENAI_API_KEY?.trim();
+  if (!openai) return { text: null, error: "OPENAI_API_KEY manquante" };
+  try {
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${openai}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini",
+        temperature: 0.25,
+        messages: [
+          {
+            role: "system",
+            content:
+              "Analyste crypto factuel. Pas de promesse de gain. Français clair.",
+          },
+          { role: "user", content: prompt },
+        ],
+      }),
+    });
+    const json = (await res.json()) as {
+      choices?: { message?: { content?: string } }[];
+      error?: { message?: string };
+    };
+    if (!res.ok) {
+      return { text: null, error: json.error?.message || `OpenAI HTTP ${res.status}` };
     }
+    return {
+      text: json.choices?.[0]?.message?.content?.trim() || null,
+      error: null,
+    };
+  } catch (error) {
+    return {
+      text: null,
+      error: error instanceof Error ? error.message : "Erreur OpenAI",
+    };
   }
+}
 
-  if (anthropic) {
-    try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "x-api-key": anthropic,
-          "anthropic-version": "2023-06-01",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: process.env.ANTHROPIC_MODEL?.trim() || "claude-3-5-haiku-latest",
-          max_tokens: 700,
-          messages: [{ role: "user", content: prompt }],
-        }),
-      });
-      const json = (await res.json()) as {
-        content?: { type: string; text?: string }[];
-        error?: { message?: string };
-      };
-      if (!res.ok) {
-        return {
-          provider: "anthropic",
-          text: null,
-          error: json.error?.message || `Anthropic HTTP ${res.status}`,
-        };
-      }
-      const text = json.content?.find((c) => c.type === "text")?.text?.trim() || null;
-      return { provider: "anthropic", text, error: null };
-    } catch (error) {
+async function askAnthropic(prompt: string): Promise<{ text: string | null; error: string | null }> {
+  const anthropic = process.env.ANTHROPIC_API_KEY?.trim();
+  if (!anthropic) return { text: null, error: "ANTHROPIC_API_KEY manquante" };
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": anthropic,
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model:
+          process.env.ANTHROPIC_MODEL?.trim() || "claude-haiku-4-5-20251001",
+        max_tokens: 900,
+        messages: [{ role: "user", content: prompt }],
+      }),
+    });
+    const json = (await res.json()) as {
+      content?: { type: string; text?: string }[];
+      error?: { message?: string };
+    };
+    if (!res.ok) {
       return {
-        provider: "anthropic",
         text: null,
-        error: error instanceof Error ? error.message : "Erreur Anthropic",
+        error: json.error?.message || `Anthropic HTTP ${res.status}`,
       };
     }
+    const text =
+      json.content?.find((c) => c.type === "text")?.text?.trim() || null;
+    return { text, error: null };
+  } catch (error) {
+    return {
+      text: null,
+      error: error instanceof Error ? error.message : "Erreur Anthropic",
+    };
+  }
+}
+
+export async function dualAiBtcCommentary(input: {
+  indicators: IndicatorSnapshot;
+  bias: SignalBias;
+  bullets: string[];
+  external?: Record<string, unknown>;
+}): Promise<DualAiResult> {
+  const [openai, anthropic] = await Promise.all([
+    askOpenAi(
+      buildPrompt({
+        ...input,
+        role: "openai",
+      }),
+    ),
+    askAnthropic(
+      buildPrompt({
+        ...input,
+        role: "anthropic",
+      }),
+    ),
+  ]);
+
+  const providers: string[] = [];
+  if (openai.text) providers.push("chatgpt");
+  if (anthropic.text) providers.push("claude");
+
+  let consensus: string | null = null;
+  if (openai.text && anthropic.text) {
+    consensus = [
+      "Synthèse croisée ChatGPT + Claude",
+      "Les deux modèles ont produit une lecture. Compare zones d’achat, invalidations et risques avant toute décision.",
+      "Ce n’est pas un conseil financier.",
+    ].join("\n");
+  } else if (openai.text || anthropic.text) {
+    consensus = "Une seule IA a répondu ; la seconde est indisponible ou en erreur.";
   }
 
   return {
-    provider: null,
-    text: null,
-    error:
-      "Ajoute OPENAI_API_KEY ou ANTHROPIC_API_KEY dans .env.local pour activer l’avis IA.",
+    enabled: providers.length > 0,
+    openai,
+    anthropic,
+    consensus,
+    providers,
   };
 }

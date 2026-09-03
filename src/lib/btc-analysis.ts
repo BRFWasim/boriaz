@@ -1,4 +1,5 @@
-import { maybeAiBtcCommentary, ruleBasedBtcView } from "./ai-analysis";
+import { dualAiBtcCommentary, ruleBasedBtcView } from "./ai-analysis";
+import { dispatchBtcAlerts, inferBuyTiming } from "./alerts";
 import { parseNum } from "./format";
 import { fetchCandleSnapshot } from "./hyperliquid";
 import {
@@ -11,9 +12,12 @@ import {
   sma,
 } from "./indicators";
 import { getIntegrationStatus } from "./integrations";
+import { resolveChatId } from "./telegram";
 import type { BtcAnalysisPayload, Candle, IndicatorSnapshot } from "./types";
 
-export async function getBtcAnalysis(): Promise<BtcAnalysisPayload> {
+export async function getBtcAnalysis(options?: {
+  notify?: boolean;
+}): Promise<BtcAnalysisPayload> {
   const interval = "4h";
   const endTime = Date.now();
   const startTime = endTime - 180 * 4 * 3600 * 1000;
@@ -79,15 +83,26 @@ export async function getBtcAnalysis(): Promise<BtcAnalysisPayload> {
   };
 
   const view = ruleBasedBtcView(indicators);
-  const ai = await maybeAiBtcCommentary({
+  const buyTiming = inferBuyTiming({
+    bias: view.bias,
+    score: view.score,
+    rsi: indicators.rsi14,
+    macdHist: indicators.macdHist,
+    price: indicators.price,
+    support: indicators.support,
+    bbLower: indicators.bbLower,
+  });
+  const external = await fetchCoinGeckoContext();
+  const ai = await dualAiBtcCommentary({
     indicators,
     bias: view.bias,
     bullets: view.bullets,
+    external: external.coingecko,
   });
-  const external = await fetchCoinGeckoContext();
   const integrations = getIntegrationStatus();
+  const linked = Boolean(await resolveChatId());
 
-  return {
+  const payload: BtcAnalysisPayload = {
     symbol: "BTC",
     interval,
     candles: candles.slice(-90),
@@ -97,18 +112,31 @@ export async function getBtcAnalysis(): Promise<BtcAnalysisPayload> {
     horizon: "moyen terme (quelques jours → ~2 semaines, base 4h)",
     summary: view.summary,
     bullets: view.bullets,
+    buyTiming,
     ai: {
-      enabled: Boolean(ai.text),
-      provider: ai.provider,
-      text: ai.text,
-      error: ai.error,
+      enabled: ai.enabled,
+      providers: ai.providers,
+      consensus: ai.consensus,
+      openai: ai.openai,
+      anthropic: ai.anthropic,
     },
+    telegram: { linked },
     external,
     integrations,
     fetchedAt: Date.now(),
     disclaimer:
-      "Analyse technique automatisée + IA optionnelle. Ce n’est pas un conseil financier. Les marchés crypto sont volatils.",
+      "Analyse technique + ChatGPT + Claude. Ce n’est pas un conseil financier. Les marchés crypto sont volatils.",
   };
+
+  if (options?.notify !== false) {
+    const dispatch = await dispatchBtcAlerts(payload);
+    payload.telegram.lastDispatch = {
+      sent: dispatch.sent,
+      errors: dispatch.errors,
+    };
+  }
+
+  return payload;
 }
 
 async function fetchCoinGeckoContext(): Promise<BtcAnalysisPayload["external"]> {
@@ -122,13 +150,24 @@ async function fetchCoinGeckoContext(): Promise<BtcAnalysisPayload["external"]> 
     },
   };
   try {
-    const headers: Record<string, string> = { Accept: "application/json" };
     const key = process.env.COINGECKO_API_KEY?.trim();
-    if (key) headers["x-cg-pro-api-key"] = key;
-    const url = key
-      ? "https://pro-api.coingecko.com/api/v3/coins/bitcoin?localization=false&tickers=false&community_data=false&developer_data=false"
-      : "https://api.coingecko.com/api/v3/coins/bitcoin?localization=false&tickers=false&community_data=false&developer_data=false";
-    const res = await fetch(url, { headers, cache: "no-store" });
+    const headers: Record<string, string> = { Accept: "application/json" };
+    let url =
+      "https://api.coingecko.com/api/v3/coins/bitcoin?localization=false&tickers=false&community_data=false&developer_data=false";
+    if (key) {
+      // Clés CG-… = souvent Demo API
+      headers["x-cg-demo-api-key"] = key;
+      headers["x-cg-pro-api-key"] = key;
+    }
+    let res = await fetch(url, { headers, cache: "no-store" });
+    if (!res.ok && key) {
+      url =
+        "https://pro-api.coingecko.com/api/v3/coins/bitcoin?localization=false&tickers=false&community_data=false&developer_data=false";
+      res = await fetch(url, {
+        headers: { Accept: "application/json", "x-cg-pro-api-key": key },
+        cache: "no-store",
+      });
+    }
     if (!res.ok) return empty;
     const json = (await res.json()) as {
       market_data?: {

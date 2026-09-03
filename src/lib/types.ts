@@ -381,11 +381,22 @@ export interface BtcAnalysisPayload {
   horizon: string;
   summary: string;
   bullets: string[];
+  buyTiming: {
+    action: "acheter_zone" | "surveiller_achat" | "patienter" | "eviter";
+    confidence: number;
+    reason: string;
+    levels: string;
+  };
   ai: {
     enabled: boolean;
-    provider: string | null;
-    text: string | null;
-    error: string | null;
+    providers: string[];
+    consensus: string | null;
+    openai: { text: string | null; error: string | null };
+    anthropic: { text: string | null; error: string | null };
+  };
+  telegram: {
+    linked: boolean;
+    lastDispatch?: { sent: number; errors: string[] };
   };
   external: {
     coingecko: {
