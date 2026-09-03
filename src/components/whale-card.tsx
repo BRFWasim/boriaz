@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { CheckIcon, CopyIcon } from "lucide-react";
+import { CryptoLogo } from "@/components/crypto-logo";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -420,6 +421,7 @@ function PositionTile({
     <article className="rounded-xl border border-border/70 bg-muted/25 px-3 py-3">
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <CryptoLogo symbol={coin.symbol} size={18} />
           <span className="font-semibold">{coin.symbol}</span>
           {coin.dex ? (
             <span className="text-[11px] text-muted-foreground">{coin.dex}</span>

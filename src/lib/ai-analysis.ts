@@ -82,6 +82,38 @@ export function ruleBasedBtcView(ind: IndicatorSnapshot): {
   if (ind.change24hPct !== null) {
     bullets.push(`Variation 24h : ${ind.change24hPct.toFixed(2)} %.`);
   }
+  if (ind.stochK !== null && ind.stochD !== null) {
+    if (ind.stochK <= 20) {
+      score += 1;
+      bullets.push(
+        `Stochastique %K ${ind.stochK.toFixed(0)} : zone basse.`,
+      );
+    } else if (ind.stochK >= 80) {
+      score -= 1;
+      bullets.push(
+        `Stochastique %K ${ind.stochK.toFixed(0)} : zone haute.`,
+      );
+    } else {
+      bullets.push(
+        `Stochastique %K/%D : ${ind.stochK.toFixed(0)} / ${ind.stochD.toFixed(0)}.`,
+      );
+    }
+  }
+  if (ind.adx14 !== null) {
+    bullets.push(
+      ind.adx14 >= 25
+        ? `ADX ${ind.adx14.toFixed(0)} : tendance marquée.`
+        : `ADX ${ind.adx14.toFixed(0)} : marché peu directionnel.`,
+    );
+  }
+  if (ind.roc12 !== null) {
+    bullets.push(`ROC12 : ${ind.roc12.toFixed(2)} %.`);
+  }
+  if (ind.volumeRatio !== null) {
+    bullets.push(
+      `Volume vs moyenne : ×${ind.volumeRatio.toFixed(2)}.`,
+    );
+  }
   if (ind.support !== null && ind.resistance !== null) {
     bullets.push(
       `Supports / résistances locaux : ${smartPx(ind.support)} / ${smartPx(ind.resistance)}.`,
@@ -332,5 +364,202 @@ export async function dualAiBtcCommentary(input: {
     cached: false,
   };
   aiCache = { key, at: Date.now(), value };
+  return value;
+}
+
+export interface AssetAiBrief {
+  coin: string;
+  text: string;
+}
+
+export interface WatchlistAiResult {
+  enabled: boolean;
+  cached: boolean;
+  skipped: boolean;
+  error: string | null;
+  briefs: AssetAiBrief[];
+  provider: string | null;
+}
+
+let watchAiCacheLive: {
+  key: string;
+  at: number;
+  value: WatchlistAiResult;
+} | null = null;
+
+/**
+ * Une seule requête Haiku pour toute la watchlist (beaucoup moins cher que 8× dual IA).
+ */
+export async function batchWatchlistAi(input: {
+  assets: {
+    coin: string;
+    bias: SignalBias;
+    score: number;
+    buyZone: string;
+    indicators: IndicatorSnapshot;
+  }[];
+  includeAi?: boolean;
+}): Promise<WatchlistAiResult> {
+  if (input.includeAi === false) {
+    return {
+      enabled: false,
+      cached: false,
+      skipped: true,
+      error: null,
+      briefs: [],
+      provider: null,
+    };
+  }
+
+  const key = input.assets
+    .map(
+      (a) =>
+        `${a.coin}:${Math.round(a.indicators.price * 100)}:${a.bias}:${a.score}`,
+    )
+    .join("|");
+  if (
+    watchAiCacheLive &&
+    watchAiCacheLive.key === key &&
+    Date.now() - watchAiCacheLive.at < AI_CACHE_TTL_MS
+  ) {
+    return { ...watchAiCacheLive.value, cached: true };
+  }
+
+  const compact = input.assets.map((a) => ({
+    coin: a.coin,
+    bias: a.bias,
+    score: a.score,
+    zone: a.buyZone,
+    ind: {
+      ...compactInd(a.indicators),
+      stochK: round(a.indicators.stochK, 1),
+      adx: round(a.indicators.adx14, 1),
+      roc: round(a.indicators.roc12, 2),
+    },
+  }));
+
+  const prompt = `Analyste crypto prudent. FR. PAS un conseil financier.
+Pour CHAQUE coin, 3–5 phrases : tendance, RSI/MACD/Stoch/ADX, zone d'achat, invalidation.
+Sépare chaque coin avec === COIN === (ex: === BTC ===).
+Données: ${JSON.stringify(compact)}`;
+
+  let text: string | null = null;
+  let provider: string | null = null;
+  let error: string | null = null;
+
+  const anthropicKey = process.env.ANTHROPIC_API_KEY?.trim();
+  if (anthropicKey) {
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "x-api-key": anthropicKey,
+          "anthropic-version": "2023-06-01",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model:
+            process.env.ANTHROPIC_MODEL?.trim() || "claude-haiku-4-5-20251001",
+          max_tokens: 1200,
+          messages: [{ role: "user", content: prompt }],
+        }),
+      });
+      const json = (await res.json()) as {
+        content?: { type: string; text?: string }[];
+        error?: { message?: string };
+      };
+      if (res.ok) {
+        text =
+          json.content?.find((c) => c.type === "text")?.text?.trim() || null;
+        provider = "claude";
+      } else {
+        error = json.error?.message || `Anthropic HTTP ${res.status}`;
+      }
+    } catch (e) {
+      error = e instanceof Error ? e.message : "Erreur Anthropic";
+    }
+  }
+
+  if (!text) {
+    const openaiKey = process.env.OPENAI_API_KEY?.trim();
+    if (openaiKey) {
+      try {
+        const res = await fetch("https://api.openai.com/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${openaiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini",
+            temperature: 0.2,
+            max_tokens: 1400,
+            messages: [
+              {
+                role: "system",
+                content:
+                  "Analyste crypto. Pour chaque coin: === COIN === puis 3-5 phrases. FR.",
+              },
+              { role: "user", content: prompt },
+            ],
+          }),
+        });
+        const json = (await res.json()) as {
+          choices?: { message?: { content?: string } }[];
+          error?: { message?: string };
+        };
+        if (res.ok) {
+          text = json.choices?.[0]?.message?.content?.trim() || null;
+          provider = "chatgpt";
+          error = null;
+        } else if (!error) {
+          error = json.error?.message || `OpenAI HTTP ${res.status}`;
+        }
+      } catch (e) {
+        if (!error) error = e instanceof Error ? e.message : "Erreur OpenAI";
+      }
+    } else if (!error) {
+      error = "IA indisponible";
+    }
+  }
+
+  const briefs: AssetAiBrief[] = [];
+  if (text) {
+    const parts = text.split(/===\s*([A-Z0-9]+)\s*===/i);
+    if (parts.length >= 3) {
+      for (let i = 1; i < parts.length; i += 2) {
+        const coin = parts[i]!.toUpperCase();
+        const body = parts[i + 1]?.trim();
+        if (body) briefs.push({ coin, text: body });
+      }
+    }
+    // Fallback: titres markdown / "RENDER :"
+    if (briefs.length < input.assets.length) {
+      for (const a of input.assets) {
+        if (briefs.some((b) => b.coin === a.coin)) continue;
+        const re = new RegExp(
+          `(?:^|\\n)\\s*(?:#+\\s*)?(?:\\*\\*)?${a.coin}(?:\\*\\*)?\\s*[:\\-–]\\s*([\\s\\S]*?)(?=\\n\\s*(?:#+\\s*)?(?:\\*\\*)?(?:${input.assets.map((x) => x.coin).join("|")})(?:\\*\\*)?\\s*[:\\-–]|$)`,
+          "i",
+        );
+        const m = re.exec(text);
+        if (m?.[1]?.trim()) {
+          briefs.push({ coin: a.coin, text: m[1].trim() });
+        }
+      }
+    }
+    if (!briefs.length) {
+      briefs.push({ coin: "ALL", text });
+    }
+  }
+
+  const value: WatchlistAiResult = {
+    enabled: briefs.length > 0,
+    cached: false,
+    skipped: false,
+    error,
+    briefs,
+    provider,
+  };
+  watchAiCacheLive = { key, at: Date.now(), value };
   return value;
 }

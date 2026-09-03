@@ -131,3 +131,98 @@ export function lastNumber(values: Array<number | null>): number | null {
   }
   return null;
 }
+
+/** Stochastic %K / %D */
+export function stochastic(
+  highs: number[],
+  lows: number[],
+  closes: number[],
+  period = 14,
+  smooth = 3,
+): { k: Array<number | null>; d: Array<number | null> } {
+  const rawK: Array<number | null> = Array(closes.length).fill(null);
+  for (let i = period - 1; i < closes.length; i++) {
+    const hh = Math.max(...highs.slice(i - period + 1, i + 1));
+    const ll = Math.min(...lows.slice(i - period + 1, i + 1));
+    rawK[i] = hh === ll ? 50 : ((closes[i]! - ll) / (hh - ll)) * 100;
+  }
+  const kVals = rawK.map((v) => v ?? 0);
+  const first = rawK.findIndex((v) => v !== null);
+  const k: Array<number | null> = Array(closes.length).fill(null);
+  const d: Array<number | null> = Array(closes.length).fill(null);
+  if (first < 0) return { k, d };
+  const kSmooth = sma(kVals.slice(first), smooth);
+  for (let i = 0; i < kSmooth.length; i++) {
+    k[first + i] = kSmooth[i];
+  }
+  const dSmooth = sma(
+    k.map((v) => v ?? 0).slice(first),
+    smooth,
+  );
+  for (let i = 0; i < dSmooth.length; i++) {
+    d[first + i] = dSmooth[i];
+  }
+  return { k, d };
+}
+
+/** Rate of change % */
+export function roc(values: number[], period = 12): Array<number | null> {
+  const out: Array<number | null> = Array(values.length).fill(null);
+  for (let i = period; i < values.length; i++) {
+    const prev = values[i - period]!;
+    out[i] = prev === 0 ? null : ((values[i]! - prev) / prev) * 100;
+  }
+  return out;
+}
+
+/** ADX simplifié (tendance 0–100) */
+export function adx(
+  highs: number[],
+  lows: number[],
+  closes: number[],
+  period = 14,
+): Array<number | null> {
+  const n = closes.length;
+  const out: Array<number | null> = Array(n).fill(null);
+  if (n < period * 2) return out;
+  const tr: number[] = [0];
+  const plusDM: number[] = [0];
+  const minusDM: number[] = [0];
+  for (let i = 1; i < n; i++) {
+    const up = highs[i]! - highs[i - 1]!;
+    const down = lows[i - 1]! - lows[i]!;
+    plusDM.push(up > down && up > 0 ? up : 0);
+    minusDM.push(down > up && down > 0 ? down : 0);
+    tr.push(
+      Math.max(
+        highs[i]! - lows[i]!,
+        Math.abs(highs[i]! - closes[i - 1]!),
+        Math.abs(lows[i]! - closes[i - 1]!),
+      ),
+    );
+  }
+  let atr = tr.slice(1, period + 1).reduce((a, b) => a + b, 0) / period;
+  let pDM = plusDM.slice(1, period + 1).reduce((a, b) => a + b, 0) / period;
+  let mDM = minusDM.slice(1, period + 1).reduce((a, b) => a + b, 0) / period;
+  const dx: number[] = [];
+  for (let i = period; i < n; i++) {
+    if (i > period) {
+      atr = (atr * (period - 1) + tr[i]!) / period;
+      pDM = (pDM * (period - 1) + plusDM[i]!) / period;
+      mDM = (mDM * (period - 1) + minusDM[i]!) / period;
+    }
+    const pDI = atr ? (pDM / atr) * 100 : 0;
+    const mDI = atr ? (mDM / atr) * 100 : 0;
+    const sum = pDI + mDI;
+    dx.push(sum === 0 ? 0 : (Math.abs(pDI - mDI) / sum) * 100);
+  }
+  if (dx.length < period) return out;
+  let adxVal = dx.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  const start = period * 2 - 1;
+  out[start] = adxVal;
+  for (let i = period; i < dx.length; i++) {
+    adxVal = (adxVal * (period - 1) + dx[i]!) / period;
+    out[period + i] = adxVal;
+  }
+  return out;
+}

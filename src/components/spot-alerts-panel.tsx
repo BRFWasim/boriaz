@@ -1,5 +1,6 @@
 "use client";
 
+import { CryptoLogo } from "@/components/crypto-logo";
 import { Badge } from "@/components/ui/badge";
 import {
   formatAgo,
@@ -210,7 +211,10 @@ function LivePricesBar({
             key={q.coin}
             className="min-w-[7.5rem] rounded-lg bg-muted/35 px-3 py-2"
           >
-            <p className="text-[11px] text-muted-foreground">{q.label}</p>
+            <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              <CryptoLogo symbol={q.coin} size={14} />
+              {q.label}
+            </p>
             <p className="numeric mt-0.5 text-sm font-medium">
               {formatPx(q.price)}
             </p>

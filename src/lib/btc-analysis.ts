@@ -1,32 +1,38 @@
-import { dualAiBtcCommentary } from "./ai-analysis";
+import { batchWatchlistAi, dualAiBtcCommentary } from "./ai-analysis";
 import { dispatchBtcAlerts } from "./alerts";
 import {
   analyzeCoinFrames,
   analyzeWatchlistBuyZones,
 } from "./market-analysis";
 import { getIntegrationStatus } from "./integrations";
-import { getWatchlistSnapshot, runPriceWatch } from "./price-watch";
+import { fetchNansenSnapshot } from "./nansen";
+import { WATCHLIST, getWatchlistSnapshot, runPriceWatch } from "./price-watch";
 import { resolveChatId } from "./telegram";
-import type { BtcAnalysisPayload } from "./types";
+import type { BtcAnalysisPayload, TimeframeFrame } from "./types";
 
 const ANALYSIS_TTL_MS = 55_000;
-let analysisCache: { at: number; value: BtcAnalysisPayload; withAi: boolean } | null =
-  null;
+let analysisCache: {
+  at: number;
+  value: BtcAnalysisPayload;
+  withAi: boolean;
+} | null = null;
 let inflight: Promise<BtcAnalysisPayload> | null = null;
 
 export async function getBtcAnalysis(options?: {
   notify?: boolean;
-  /** true = appelle ChatGPT+Claude (sinon règles seules / cache IA). */
   includeAi?: boolean;
   force?: boolean;
 }): Promise<BtcAnalysisPayload> {
   const includeAi = options?.includeAi === true;
   const notify = options?.notify === true;
 
-  if (!options?.force && analysisCache && Date.now() - analysisCache.at < ANALYSIS_TTL_MS) {
+  if (
+    !options?.force &&
+    analysisCache &&
+    Date.now() - analysisCache.at < ANALYSIS_TTL_MS
+  ) {
     const hit = analysisCache.value;
-    // Cache technique OK ; si on demande l’IA et qu’elle a été skip, on recalcule.
-    if (!(includeAi && (hit.ai.skipped || !hit.ai.enabled))) {
+    if (!(includeAi && (hit.ai.skipped || hit.watchAi?.skipped))) {
       const snap = await getWatchlistSnapshot();
       return {
         ...hit,
@@ -46,43 +52,120 @@ export async function getBtcAnalysis(options?: {
     try {
       await runPriceWatch();
     } catch {
-      // mids optionnels
+      // ignore
     }
 
-    const [btcFrames, solFrames, watchBuyZones] = await Promise.all([
-      analyzeCoinFrames("BTC", [
-        { interval: "1h", horizon: "court terme (1h, heures → 1–2 jours)" },
-        { interval: "4h", horizon: "moyen terme (4h, jours → ~2 semaines)" },
-        { interval: "1d", horizon: "long terme (1d, semaines → mois)" },
-      ]),
-      analyzeCoinFrames("SOL", [
-        { interval: "1h", horizon: "court terme SOL (1h)" },
-        { interval: "4h", horizon: "moyen terme SOL (4h)" },
-      ]),
+    const watchCoins = WATCHLIST.map((w) => w.coin);
+
+    const frameJobs = watchCoins.map(async (coin) => {
+      if (coin === "BTC") {
+        return analyzeCoinFrames(coin, [
+          { interval: "1h", horizon: "court terme (1h)" },
+          { interval: "4h", horizon: "moyen terme (4h)" },
+          { interval: "1d", horizon: "long terme (1d)" },
+        ]);
+      }
+      if (coin === "SOL" || coin === "UNI") {
+        // UNI = analyse forcée multi-TF comme demandé
+        return analyzeCoinFrames(coin, [
+          { interval: "1h", horizon: `court terme ${coin} (1h)` },
+          { interval: "4h", horizon: `moyen terme ${coin} (4h)` },
+          { interval: "1d", horizon: `long terme ${coin} (1d)` },
+        ]);
+      }
+      return analyzeCoinFrames(coin, [
+        { interval: "4h", horizon: `moyen terme ${coin} (4h)` },
+      ]);
+    });
+
+    const [allFrames, watchBuyZones, nansen] = await Promise.all([
+      Promise.all(frameJobs),
       analyzeWatchlistBuyZones(),
+      fetchNansenSnapshot(),
     ]);
 
+    const byCoin = new Map<string, TimeframeFrame[]>();
+    watchCoins.forEach((coin, i) => {
+      byCoin.set(coin, allFrames[i] ?? []);
+    });
+
+    const btcFrames = byCoin.get("BTC") ?? [];
+    const solFrames = byCoin.get("SOL") ?? [];
     const primary =
       btcFrames.find((f) => f.interval === "4h") ?? btcFrames[0];
     if (!primary) {
       throw new Error("Impossible de charger les bougies BTC Hyperliquid.");
     }
 
-    const solPrimary =
-      solFrames.find((f) => f.interval === "4h") ?? solFrames[0] ?? null;
-    const solHint = solPrimary
-      ? `bias ${solPrimary.bias} score ${solPrimary.score} zone ${solPrimary.buyZone.label} RSI ${solPrimary.indicators.rsi14?.toFixed(0) ?? "?"}`
-      : undefined;
+    const assetInputs = watchCoins
+      .map((coin) => {
+        const frames = byCoin.get(coin) ?? [];
+        const main =
+          frames.find((f) => f.interval === "4h") ?? frames[0] ?? null;
+        if (!main) return null;
+        return {
+          coin,
+          bias: main.bias,
+          score: main.score,
+          buyZone: main.buyZone.label,
+          indicators: main.indicators,
+          frames,
+          buyZoneFull: main.buyZone,
+        };
+      })
+      .filter(Boolean) as {
+      coin: string;
+      bias: TimeframeFrame["bias"];
+      score: number;
+      buyZone: string;
+      indicators: TimeframeFrame["indicators"];
+      frames: TimeframeFrame[];
+      buyZoneFull: TimeframeFrame["buyZone"];
+    }[];
 
     const external = await fetchCoinGeckoContext();
-    const ai = await dualAiBtcCommentary({
-      indicators: primary.indicators,
-      bias: primary.bias,
-      bullets: primary.bullets,
-      external: external.coingecko,
-      solHint,
-      includeAi,
-      symbol: "BTC",
+    const [watchAi, dualFixed] = await Promise.all([
+      batchWatchlistAi({
+        assets: assetInputs.map((a) => ({
+          coin: a.coin,
+          bias: a.bias,
+          score: a.score,
+          buyZone: a.buyZone,
+          indicators: a.indicators,
+        })),
+        includeAi,
+      }),
+      dualAiBtcCommentary({
+        indicators: primary.indicators,
+        bias: primary.bias,
+        bullets: primary.bullets,
+        external: external.coingecko,
+        includeAi,
+        symbol: "BTC",
+        solHint: solFrames[0]
+          ? `SOL ${solFrames.find((f) => f.interval === "4h")?.bias ?? solFrames[0].bias}`
+          : undefined,
+      }),
+    ]);
+
+    const aiBriefByCoin = new Map(
+      watchAi.briefs.map((b) => [b.coin.toUpperCase(), b.text]),
+    );
+
+    const assetAnalyses = assetInputs.map((a) => {
+      const label =
+        WATCHLIST.find((w) => w.coin === a.coin)?.label ?? a.coin;
+      return {
+        coin: a.coin,
+        label,
+        timeframes: a.frames,
+        buyZone: a.buyZoneFull,
+        aiText:
+          aiBriefByCoin.get(a.coin) ??
+          (aiBriefByCoin.get("ALL")
+            ? `${label}: voir synthèse globale`
+            : null),
+      };
     });
 
     const integrations = getIntegrationStatus();
@@ -104,29 +187,68 @@ export async function getBtcAnalysis(options?: {
       timeframes: btcFrames,
       sol: {
         timeframes: solFrames,
-        buyZone: solPrimary?.buyZone ?? null,
+        buyZone:
+          solFrames.find((f) => f.interval === "4h")?.buyZone ??
+          solFrames[0]?.buyZone ??
+          null,
       },
       watchBuyZones,
       watchQuotes: snap.quotes,
+      assetAnalyses,
+      watchAi: {
+        enabled: watchAi.enabled,
+        cached: watchAi.cached,
+        skipped: watchAi.skipped,
+        provider: watchAi.provider,
+        error: watchAi.error,
+      },
+      traderTrends: {
+        nansenEnabled: nansen.enabled,
+        nansenError: nansen.error,
+        smartFlows: nansen.smartFlows.slice(0, 10).map((f) => ({
+          symbol: f.symbol,
+          chain: f.chain,
+          netFlow24hUsd: f.netFlow24hUsd,
+          traderCount: f.traderCount,
+        })),
+        recentPerpTrades: nansen.recentPerpTrades.slice(0, 16).map((t) => ({
+          label: t.label,
+          symbol: t.symbol,
+          side: t.side,
+          action: t.action,
+          valueUsd: t.valueUsd,
+          at: t.at,
+        })),
+        leaderboard: nansen.leaderboard.slice(0, 10).map((r) => ({
+          label: r.label,
+          address: r.address,
+          totalPnl: r.totalPnl,
+          roi: r.roi,
+          topCoin: r.topCoin,
+          topSide: r.topSide,
+          topValueUsd: r.topValueUsd,
+        })),
+        hlWhales: [],
+      },
       priceWatch: {
         nextDigestAt: snap.nextDigestAt,
         lastDigestAt: snap.lastDigestAt,
       },
       ai: {
-        enabled: ai.enabled,
-        providers: ai.providers,
-        consensus: ai.consensus,
-        openai: ai.openai,
-        anthropic: ai.anthropic,
-        cached: ai.cached,
-        skipped: ai.skipped,
+        enabled: dualFixed.enabled,
+        providers: dualFixed.providers,
+        consensus: dualFixed.consensus,
+        openai: dualFixed.openai,
+        anthropic: dualFixed.anthropic,
+        cached: dualFixed.cached,
+        skipped: dualFixed.skipped,
       },
       telegram: { linked },
       external,
       integrations,
       fetchedAt: Date.now(),
       disclaimer:
-        "Analyses techniques locales (multi-TF) + IA optionnelle mise en cache. Pas un conseil financier.",
+        "Analyses techniques multi-indicateurs + IA batch (cache). Nansen smart money si clé. Pas un conseil financier.",
     };
 
     if (notify) {
@@ -140,7 +262,7 @@ export async function getBtcAnalysis(options?: {
     analysisCache = {
       at: Date.now(),
       value: payload,
-      withAi: includeAi && (ai.enabled || Boolean(ai.cached)),
+      withAi: includeAi && (watchAi.enabled || dualFixed.enabled),
     };
     return payload;
   })().finally(() => {
@@ -150,7 +272,6 @@ export async function getBtcAnalysis(options?: {
   return inflight;
 }
 
-/** Déclenché par le poll dashboard : mids + spikes + digest 2h (0 token IA). */
 export async function tickPriceWatch() {
   return runPriceWatch();
 }

@@ -8,8 +8,11 @@ import {
   ema,
   lastNumber,
   macd,
+  roc,
   rsi,
   sma,
+  stochastic,
+  adx,
 } from "./indicators";
 import { WATCHLIST } from "./price-watch";
 import type {
@@ -71,7 +74,14 @@ export function buildIndicators(candles: Candle[]): IndicatorSnapshot {
   const sma50 = sma(closes, 50);
   const atr14 = atr(highs, lows, closes, 14);
   const bb = bollinger(closes, 20, 2);
+  const stoch = stochastic(highs, lows, closes, 14, 3);
+  const roc12 = roc(closes, 12);
+  const adx14 = adx(highs, lows, closes, 14);
   const price = closes.at(-1) ?? 0;
+  const volAvg = lastNumber(sma(vols, 20));
+  const lastVol = vols.at(-1) ?? 0;
+  const volumeRatio =
+    volAvg && volAvg > 0 ? lastVol / volAvg : null;
 
   let change24hPct: number | null = null;
   if (candles.length > 1) {
@@ -103,9 +113,14 @@ export function buildIndicators(candles: Candle[]): IndicatorSnapshot {
     bbUpper: lastNumber(bb.upper),
     bbMiddle: lastNumber(bb.middle),
     bbLower: lastNumber(bb.lower),
-    volumeAvg: lastNumber(sma(vols, 20)),
+    volumeAvg: volAvg,
     support,
     resistance,
+    stochK: lastNumber(stoch.k),
+    stochD: lastNumber(stoch.d),
+    roc12: lastNumber(roc12),
+    adx14: lastNumber(adx14),
+    volumeRatio,
   };
 }
 

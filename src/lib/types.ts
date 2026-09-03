@@ -411,6 +411,11 @@ export interface IndicatorSnapshot {
   volumeAvg: number | null;
   support: number | null;
   resistance: number | null;
+  stochK: number | null;
+  stochD: number | null;
+  roc12: number | null;
+  adx14: number | null;
+  volumeRatio: number | null;
 }
 
 export type BuyTimingAction =
@@ -486,6 +491,54 @@ export interface BtcAnalysisPayload {
   /** Zones d’achat watchlist (règles, 0 token IA) */
   watchBuyZones?: BuyZone[];
   watchQuotes?: WatchlistQuoteView[];
+  /** Analyses par crypto (watchlist) + IA batch */
+  assetAnalyses?: {
+    coin: string;
+    label: string;
+    timeframes: TimeframeFrame[];
+    buyZone: BuyZone;
+    aiText: string | null;
+  }[];
+  watchAi?: {
+    enabled: boolean;
+    cached?: boolean;
+    skipped?: boolean;
+    provider: string | null;
+    error: string | null;
+  };
+  traderTrends?: {
+    nansenEnabled: boolean;
+    nansenError: string | null;
+    smartFlows: {
+      symbol: string;
+      chain: string;
+      netFlow24hUsd: number;
+      traderCount: number;
+    }[];
+    recentPerpTrades: {
+      label: string;
+      symbol: string;
+      side: string;
+      action: string;
+      valueUsd: number;
+      at: string;
+    }[];
+    leaderboard: {
+      label: string;
+      address: string;
+      totalPnl: number;
+      roi: number;
+      topCoin: string | null;
+      topSide: string | null;
+      topValueUsd: number | null;
+    }[];
+    hlWhales: {
+      alias: string;
+      bias: string;
+      winRate: number | null;
+      topCoins: string[];
+    }[];
+  };
   priceWatch?: {
     nextDigestAt: number;
     lastDigestAt: number;

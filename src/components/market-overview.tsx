@@ -1,3 +1,4 @@
+import { CryptoLogo } from "@/components/crypto-logo";
 import {
   formatPct,
   formatRoi,
@@ -101,7 +102,12 @@ export function MarketOverviewPanel({ overview }: { overview: MarketOverview }) 
               <tbody>
                 {overview.crowded.map((coin) => (
                   <tr key={coin.coin} className="border-t border-border/50">
-                    <td className="py-1.5 font-medium">{coin.coin}</td>
+                    <td className="py-1.5 font-medium">
+                      <span className="inline-flex items-center gap-1.5">
+                        <CryptoLogo symbol={coin.coin} size={16} />
+                        {coin.coin}
+                      </span>
+                    </td>
                     <td className="numeric py-1.5">{coin.whaleCount}</td>
                     <td className="numeric py-1.5 text-long">
                       {formatUsd(coin.longUsd)}
