@@ -44,7 +44,7 @@ Filtres : recherche, tri (portefeuille, PnL 24h, PnL latent, positions, risque, 
 
 1. **Baleines perps** — top 10, expositions, risque, SL/TP  
 2. **Spot & alertes** — soldes spot, entrée moyenne, achats, alerte **short + spot**  
-3. **Analyse BTC** — RSI, MACD, EMA, Bollinger, sparkline live + avis règles + IA si clé
+3. **Analyse marché** — BTC multi-TF (1h / 4h / 1d), SOL court+moyen, zones d’achat watchlist (RENDER, ONDO, UNI, BTC, SOL, ETH, HYPE, TAO), bilans Telegram 2h + spikes +1.5 %. IA optionnelle (cache 45 min) pour limiter les tokens.
 
 Voir `CLES-API.md` et `.env.example` pour les clés optionnelles.
 

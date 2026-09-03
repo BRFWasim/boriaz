@@ -214,7 +214,7 @@ export function WhalesDashboard() {
               ) : null}
             </TabButton>
             <TabButton active={tab === "btc"} onClick={() => setTab("btc")}>
-              Analyse BTC
+              Analyse marché
             </TabButton>
           </div>
 

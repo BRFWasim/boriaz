@@ -371,6 +371,57 @@ export interface IndicatorSnapshot {
   resistance: number | null;
 }
 
+export type BuyTimingAction =
+  | "acheter_zone"
+  | "surveiller_achat"
+  | "patienter"
+  | "eviter";
+
+export interface BuyTiming {
+  action: BuyTimingAction;
+  confidence: number;
+  reason: string;
+  levels: string;
+}
+
+export interface BuyZone {
+  coin: string;
+  low: number;
+  high: number;
+  mid: number;
+  distancePct: number;
+  quality: number;
+  action: BuyTimingAction;
+  reason: string;
+  label: string;
+  invalidation: number;
+  summary: string;
+}
+
+export interface TimeframeFrame {
+  coin: string;
+  interval: string;
+  horizon: string;
+  candles: Candle[];
+  indicators: IndicatorSnapshot;
+  bias: SignalBias;
+  score: number;
+  summary: string;
+  bullets: string[];
+  buyTiming: BuyTiming;
+  buyZone: BuyZone;
+}
+
+export interface WatchlistQuoteView {
+  coin: string;
+  label: string;
+  price: number;
+  change15mPct: number | null;
+  change1hPct: number | null;
+  change2hPct: number | null;
+  change24hPct: number | null;
+}
+
 export interface BtcAnalysisPayload {
   symbol: string;
   interval: string;
@@ -381,11 +432,23 @@ export interface BtcAnalysisPayload {
   horizon: string;
   summary: string;
   bullets: string[];
-  buyTiming: {
-    action: "acheter_zone" | "surveiller_achat" | "patienter" | "eviter";
-    confidence: number;
-    reason: string;
-    levels: string;
+  buyTiming: BuyTiming;
+  buyZone?: BuyZone;
+  /** Multi-TF BTC : court / moyen / long */
+  timeframes?: TimeframeFrame[];
+  /** Analyse SOL court + moyen */
+  sol?: {
+    timeframes: TimeframeFrame[];
+    buyZone: BuyZone | null;
+  };
+  /** Zones d’achat watchlist (règles, 0 token IA) */
+  watchBuyZones?: BuyZone[];
+  watchQuotes?: WatchlistQuoteView[];
+  priceWatch?: {
+    nextDigestAt: number;
+    lastDigestAt: number;
+    digestSent?: boolean;
+    spikesSent?: string[];
   };
   ai: {
     enabled: boolean;
@@ -393,6 +456,8 @@ export interface BtcAnalysisPayload {
     consensus: string | null;
     openai: { text: string | null; error: string | null };
     anthropic: { text: string | null; error: string | null };
+    cached?: boolean;
+    skipped?: boolean;
   };
   telegram: {
     linked: boolean;

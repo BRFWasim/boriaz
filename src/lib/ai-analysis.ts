@@ -84,7 +84,7 @@ export function ruleBasedBtcView(ind: IndicatorSnapshot): {
   }
   if (ind.support !== null && ind.resistance !== null) {
     bullets.push(
-      `Supports / résistances locaux (fenêtre) : ${ind.support.toFixed(0)} / ${ind.resistance.toFixed(0)}.`,
+      `Supports / résistances locaux : ${smartPx(ind.support)} / ${smartPx(ind.resistance)}.`,
     );
   }
 
@@ -92,12 +92,19 @@ export function ruleBasedBtcView(ind: IndicatorSnapshot): {
     score >= 3 ? "haussier" : score <= -3 ? "baissier" : "neutre";
   const summary =
     bias === "haussier"
-      ? "Lecture technique moyen terme plutôt haussière (règles RSI/MACD/EMA)."
+      ? "Lecture technique plutôt haussière (règles RSI/MACD/EMA)."
       : bias === "baissier"
-        ? "Lecture technique moyen terme plutôt baissière (règles RSI/MACD/EMA)."
-        : "Lecture technique moyen terme neutre / indécise.";
+        ? "Lecture technique plutôt baissière (règles RSI/MACD/EMA)."
+        : "Lecture technique neutre / indécise.";
 
   return { bias, score, summary, bullets };
+}
+
+function smartPx(px: number): string {
+  if (px >= 1000) return px.toFixed(0);
+  if (px >= 10) return px.toFixed(2);
+  if (px >= 1) return px.toFixed(3);
+  return px.toFixed(5);
 }
 
 export interface DualAiResult {
@@ -106,40 +113,58 @@ export interface DualAiResult {
   anthropic: { text: string | null; error: string | null };
   consensus: string | null;
   providers: string[];
+  cached?: boolean;
+  skipped?: boolean;
 }
 
-function buildPrompt(input: {
+/** Cache mémoire ~45 min — évite de re-payer des tokens à chaque refresh UI. */
+const AI_CACHE_TTL_MS = 45 * 60_000;
+let aiCache: { key: string; at: number; value: DualAiResult } | null = null;
+
+function compactInd(ind: IndicatorSnapshot): Record<string, number | null> {
+  return {
+    px: round(ind.price, 2),
+    ch24: round(ind.change24hPct, 2),
+    rsi: round(ind.rsi14, 1),
+    macd: round(ind.macd, 2),
+    sig: round(ind.macdSignal, 2),
+    hist: round(ind.macdHist, 2),
+    e20: round(ind.ema20, 2),
+    e50: round(ind.ema50, 2),
+    e200: round(ind.ema200, 2),
+    atr: round(ind.atr14, 2),
+    bbL: round(ind.bbLower, 2),
+    bbU: round(ind.bbUpper, 2),
+    sup: round(ind.support, 2),
+    res: round(ind.resistance, 2),
+  };
+}
+
+function round(v: number | null, d: number): number | null {
+  if (v === null || !Number.isFinite(v)) return null;
+  const f = 10 ** d;
+  return Math.round(v * f) / f;
+}
+
+function buildCompactPrompt(input: {
+  symbol: string;
   indicators: IndicatorSnapshot;
   bias: SignalBias;
   bullets: string[];
-  external?: Record<string, unknown>;
+  solHint?: string;
   role: "openai" | "anthropic";
 }): string {
   const angle =
     input.role === "openai"
-      ? "Insiste sur le plan d'action clair (zones d'achat/invalidations) et le timing moyen terme."
-      : "Insiste sur les risques, les faux signaux et les scénarios alternatifs.";
-  return `Tu es un analyste crypto prudent. Analyse BTC en français (moyen terme: jours → ~2 semaines).
-Ce n'est PAS un conseil financier. ${angle}
-
-Indicateurs:
-${JSON.stringify(input.indicators, null, 2)}
-
-Contexte externe:
-${JSON.stringify(input.external ?? {}, null, 2)}
-
-Biais règles locales: ${input.bias}
-Points techniques: ${input.bullets.join(" | ")}
-
-Structure obligatoire:
-1) Contexte prix / tendance
-2) Lecture RSI + MACD + EMAs + Bollinger
-3) Scénario haussier (niveaux)
-4) Scénario baissier (niveaux)
-5) Meilleure zone d'achat éventuelle OU pourquoi patienter
-6) Invalidation
-7) Rappel risque
-Max ~10 phrases, style net et concret.`;
+      ? "Plan d'action + zone d'achat/invalidation."
+      : "Risques, faux signaux, scénario alternatif.";
+  return `Analyste crypto prudent. FR. PAS un conseil financier. ${angle}
+Actif principal: ${input.symbol}. Horizon: jours→~2 semaines + note long terme.
+Ind: ${JSON.stringify(compactInd(input.indicators))}
+Biais règles: ${input.bias}
+Tech: ${input.bullets.slice(0, 6).join(" | ")}
+${input.solHint ? `SOL: ${input.solHint}` : ""}
+Réponds en ≤8 phrases courtes: tendance, RSI/MACD/EMA, zone achat, invalidation, risque.`;
 }
 
 async function askOpenAi(prompt: string): Promise<{ text: string | null; error: string | null }> {
@@ -154,12 +179,12 @@ async function askOpenAi(prompt: string): Promise<{ text: string | null; error: 
       },
       body: JSON.stringify({
         model: process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini",
-        temperature: 0.25,
+        temperature: 0.2,
+        max_tokens: 420,
         messages: [
           {
             role: "system",
-            content:
-              "Analyste crypto factuel. Pas de promesse de gain. Français clair.",
+            content: "Analyste crypto factuel. Pas de promesse de gain. FR court.",
           },
           { role: "user", content: prompt },
         ],
@@ -198,7 +223,7 @@ async function askAnthropic(prompt: string): Promise<{ text: string | null; erro
       body: JSON.stringify({
         model:
           process.env.ANTHROPIC_MODEL?.trim() || "claude-haiku-4-5-20251001",
-        max_tokens: 900,
+        max_tokens: 420,
         messages: [{ role: "user", content: prompt }],
       }),
     });
@@ -223,22 +248,64 @@ async function askAnthropic(prompt: string): Promise<{ text: string | null; erro
   }
 }
 
+function cacheKey(input: {
+  symbol: string;
+  indicators: IndicatorSnapshot;
+  bias: SignalBias;
+}): string {
+  const px = Math.round(input.indicators.price);
+  const rsi = Math.round(input.indicators.rsi14 ?? 0);
+  return `${input.symbol}:${px}:${rsi}:${input.bias}`;
+}
+
+/**
+ * Dual IA BTC (+ note SOL optionnelle).
+ * Cache 45 min. Passer includeAi=false pour 0 token (refresh silencieux / digests).
+ */
 export async function dualAiBtcCommentary(input: {
   indicators: IndicatorSnapshot;
   bias: SignalBias;
   bullets: string[];
   external?: Record<string, unknown>;
+  solHint?: string;
+  includeAi?: boolean;
+  symbol?: string;
 }): Promise<DualAiResult> {
+  if (input.includeAi === false) {
+    return {
+      enabled: false,
+      openai: { text: null, error: null },
+      anthropic: { text: null, error: null },
+      consensus: null,
+      providers: [],
+      skipped: true,
+    };
+  }
+
+  const symbol = input.symbol ?? "BTC";
+  const key = cacheKey({ symbol, indicators: input.indicators, bias: input.bias });
+  if (aiCache && aiCache.key === key && Date.now() - aiCache.at < AI_CACHE_TTL_MS) {
+    return { ...aiCache.value, cached: true };
+  }
+
   const [openai, anthropic] = await Promise.all([
     askOpenAi(
-      buildPrompt({
-        ...input,
+      buildCompactPrompt({
+        symbol,
+        indicators: input.indicators,
+        bias: input.bias,
+        bullets: input.bullets,
+        solHint: input.solHint,
         role: "openai",
       }),
     ),
     askAnthropic(
-      buildPrompt({
-        ...input,
+      buildCompactPrompt({
+        symbol,
+        indicators: input.indicators,
+        bias: input.bias,
+        bullets: input.bullets,
+        solHint: input.solHint,
         role: "anthropic",
       }),
     ),
@@ -250,20 +317,20 @@ export async function dualAiBtcCommentary(input: {
 
   let consensus: string | null = null;
   if (openai.text && anthropic.text) {
-    consensus = [
-      "Synthèse croisée ChatGPT + Claude",
-      "Les deux modèles ont produit une lecture. Compare zones d’achat, invalidations et risques avant toute décision.",
-      "Ce n’est pas un conseil financier.",
-    ].join("\n");
+    consensus =
+      "Synthèse croisée ChatGPT + Claude (cache 45 min). Compare zones / invalidations. Pas un conseil financier.";
   } else if (openai.text || anthropic.text) {
-    consensus = "Une seule IA a répondu ; la seconde est indisponible ou en erreur.";
+    consensus = "Une seule IA a répondu ; la seconde est indisponible.";
   }
 
-  return {
+  const value: DualAiResult = {
     enabled: providers.length > 0,
     openai,
     anthropic,
     consensus,
     providers,
+    cached: false,
   };
+  aiCache = { key, at: Date.now(), value };
+  return value;
 }

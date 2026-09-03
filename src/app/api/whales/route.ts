@@ -1,4 +1,5 @@
 import { dispatchWhaleAlerts } from "@/lib/alerts";
+import { tickPriceWatch } from "@/lib/btc-analysis";
 import { getWhaleDashboard } from "@/lib/dashboard";
 
 export const dynamic = "force-dynamic";
@@ -9,6 +10,12 @@ export async function GET() {
     const payload = await getWhaleDashboard();
     try {
       await dispatchWhaleAlerts(payload);
+    } catch {
+      // ne bloque pas le dashboard
+    }
+    try {
+      // Mids + bilan 2h + spikes +1.5% (0 token IA)
+      await tickPriceWatch();
     } catch {
       // ne bloque pas le dashboard
     }
