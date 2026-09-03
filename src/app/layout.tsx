@@ -14,14 +14,14 @@ const mono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Baleines Hyperliquid — perpétuels",
+  title: "BoriazBot — signaux & baleines Hyperliquid",
   description:
-    "Suivi des 10 plus gros traders perpétuels du leaderboard Hyperliquid : positions, levier, SL/TP, PnL et historique de clôture.",
-  applicationName: "Baleines Hyperliquid",
+    "BoriazBot : signaux LONG/SHORT avec entrée/TP/SL, baleines Hyperliquid, zones d’achat, macro US, paper trade et alertes Telegram.",
+  applicationName: "BoriazBot",
   manifest: "/manifest.webmanifest",
   appleWebApp: {
     capable: true,
-    title: "Baleines HL",
+    title: "BoriazBot",
     statusBarStyle: "black-translucent",
   },
   icons: {

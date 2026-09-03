@@ -1,7 +1,7 @@
 {
-  "name": "Baleines Hyperliquid",
-  "short_name": "Baleines HL",
-  "description": "Suivi des 10 plus gros traders perpétuels Hyperliquid.",
+  "name": "BoriazBot",
+  "short_name": "BoriazBot",
+  "description": "Signaux LONG/SHORT, baleines Hyperliquid, zones d’achat et alertes Telegram.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

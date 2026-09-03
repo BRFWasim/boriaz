@@ -36,8 +36,12 @@ yarn-error.log*
 .env*
 !.env.example
 !.env.example.*
-.telegram-chat-id
 .price-watch-state.json
+.user-prefs.json
+.signal-journal.json
+.paper-trades.json
+.macro-alerts-sent.json
+.telegram-chat-id
 
 # vercel
 .vercel

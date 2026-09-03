@@ -27,6 +27,7 @@ import {
   mapPool,
 } from "./hyperliquid";
 import { getIntegrationStatus } from "./integrations";
+import { fetchNansenSnapshot } from "./nansen";
 import { attachProtections, reconstructClosed } from "./positions";
 import { getWatchlistSnapshot, runPriceWatch } from "./price-watch";
 import {
@@ -47,11 +48,11 @@ import type {
   WindowStats,
 } from "./types";
 
-const WHALE_COUNT = 10;
+const WHALE_COUNT = 18;
 const DETAILS_TTL_MS = 20_000;
 const HISTORY_TTL_MS = 60_000;
 const SELECTION_TTL_MS = 10 * 60_000;
-const SCAN_LIMIT = 160;
+const SCAN_LIMIT = 280;
 const MIN_PERP_EQUITY = 50_000;
 const PROBE_CONCURRENCY = 6;
 const DETAIL_CONCURRENCY = 3;
@@ -106,15 +107,37 @@ async function refreshDashboard(): Promise<DashboardPayload> {
   const maps = buildMarketMaps(meta.universe, meta.ctxs);
   const spotMarks = buildSpotMarkMap(spotMeta.ctxs, maps.marks);
 
-  const whales = await mapPool(selected, DETAIL_CONCURRENCY, async (row) => {
-    try {
-      return await hydrateWhale(row, maps, spotMarks);
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Erreur de chargement";
-      return fallbackWhale(row, message);
+  const [whalesRaw, nansen] = await Promise.all([
+    mapPool(selected, DETAIL_CONCURRENCY, async (row) => {
+      try {
+        return await hydrateWhale(row, maps, spotMarks);
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Erreur de chargement";
+        return fallbackWhale(row, message);
+      }
+    }),
+    fetchNansenSnapshot().catch(() => null),
+  ]);
+
+  const nansenByAddr = new Map<string, string>();
+  if (nansen) {
+    for (const row of nansen.leaderboard) {
+      if (row.address && row.label) {
+        nansenByAddr.set(row.address.toLowerCase(), row.label);
+      }
     }
-  });
+    for (const t of nansen.recentPerpTrades) {
+      if (t.address && t.label && !nansenByAddr.has(t.address.toLowerCase())) {
+        nansenByAddr.set(t.address.toLowerCase(), t.label);
+      }
+    }
+  }
+
+  const whales = whalesRaw.map((w) => ({
+    ...w,
+    nansenLabel: nansenByAddr.get(w.address.toLowerCase()) ?? null,
+  }));
 
   const coins = uniqueCoins(whales);
   const overview = buildOverview(whales);
@@ -157,7 +180,7 @@ async function refreshDashboard(): Promise<DashboardPayload> {
       info: INFO_URL,
     },
     scanNote:
-      "Perps + spot Hyperliquid. Crowd long/short = wallets qualité (WR≥55 %, sample≥8, equity≥80k$) alignés. Alertes Telegram filtrées (prioritaires seulement). Hors HL : Arkham/Nansen optionnels pour labels, pas de scan multi-CEX gratuit.",
+      `Scan élargi ~${SCAN_LIMIT} wallets HL → top ${WHALE_COUNT} perps actifs. Crowd = WR≥55 %, sample≥8, equity≥80k$. Labels Nansen collés quand l’adresse matche. Pas un conseil financier.`,
     cached: false,
   };
   detailsCache = { at: Date.now(), value: payload };
@@ -214,7 +237,7 @@ async function selectWhales(): Promise<SelectedRow[]> {
   const top = selected.slice(0, WHALE_COUNT);
   if (!top.length) {
     throw new Error(
-      "Impossible d’identifier 10 baleines perps sur le leaderboard pour le moment.",
+      `Impossible d’identifier ${WHALE_COUNT} baleines perps sur le leaderboard pour le moment.`,
     );
   }
   selectionCache = { at: Date.now(), value: top };
@@ -369,6 +392,7 @@ async function hydrateWhale(
     spotBuys,
     alerts,
     spotValueUsd,
+    nansenLabel: null,
   };
 }
 
@@ -428,6 +452,7 @@ function fallbackWhale(row: SelectedRow, error: string): Whale {
     spotBuys: [],
     alerts: [],
     spotValueUsd: 0,
+    nansenLabel: null,
     error,
   };
 }

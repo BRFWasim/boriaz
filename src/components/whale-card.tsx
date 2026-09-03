@@ -28,6 +28,7 @@ import type {
   UiMode,
   Whale,
 } from "@/lib/types";
+import { wrReliability } from "@/lib/reliability";
 
 export function WhaleCard({
   whale,
@@ -57,6 +58,7 @@ export function WhaleCard({
   const visibleClosed = showAllClosed ? closed : closed.slice(0, 6);
   const dense = mode === "simple";
   const showClosed = mode === "advanced" || closedOpen;
+  const reliability = wrReliability(whale.tradeStats);
 
   async function copyAddress() {
     try {
@@ -78,6 +80,30 @@ export function WhaleCard({
                 #{whale.rank}
               </Badge>
               <h2 className="truncate text-lg font-semibold tracking-tight">{whale.alias}</h2>
+              {whale.nansenLabel ? (
+                <Badge
+                  variant="outline"
+                  className="border-amber-500/40 bg-amber-500/10 text-amber-100"
+                  title="Label Nansen"
+                >
+                  Nansen · {whale.nansenLabel}
+                </Badge>
+              ) : null}
+              <Badge
+                variant="outline"
+                title={reliability.detail}
+                className={
+                  reliability.tier === "A"
+                    ? "border-long/40 text-long"
+                    : reliability.tier === "B"
+                      ? "border-primary/40 text-primary"
+                      : reliability.tier === "C"
+                        ? "border-amber-500/40 text-amber-200"
+                        : "border-border text-muted-foreground"
+                }
+              >
+                {reliability.label}
+              </Badge>
               {whale.alerts.some((a) => a.kind === "short_with_spot") ? (
                 <Badge className="border-short/40 bg-short/15 text-short" variant="outline">
                   Short + spot
@@ -130,15 +156,11 @@ export function WhaleCard({
               title={whale.tradeStats.methodNote}
               hint={
                 dense
-                  ? undefined
+                  ? reliability.tier !== "n/d"
+                    ? reliability.label
+                    : undefined
                   : whale.tradeStats.sample
-                    ? `${whale.tradeStats.wins}W/${whale.tradeStats.losses}L · ${whale.tradeStats.sample} clôtures (|PnL|≥5$) · PF ${
-                        whale.tradeStats.profitFactor === null
-                          ? "n/d"
-                          : Number.isFinite(whale.tradeStats.profitFactor)
-                            ? whale.tradeStats.profitFactor.toFixed(2)
-                            : "∞"
-                      }`
+                    ? `${reliability.detail}`
                     : "Pas assez de clôtures dans l’historique fills public"
               }
             />

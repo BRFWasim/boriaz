@@ -14,6 +14,10 @@ export interface HomeCard {
   confidence: number;
   leverage: string;
   sizePct: string;
+  entry: number | null;
+  tp: number | null;
+  sl: number | null;
+  closeSuggestion: string | null;
   blurb: string;
 }
 
@@ -26,7 +30,7 @@ export interface HomePayload {
 
 export async function getHomeSnapshot(): Promise<HomePayload> {
   const [signals, quotes] = await Promise.all([
-    getTradeSignals({ notify: false }),
+    getTradeSignals({ notify: true }),
     getWatchlistSnapshot(),
   ]);
 
@@ -46,11 +50,14 @@ export async function getHomeSnapshot(): Promise<HomePayload> {
       confidence: sig?.confidence ?? 0,
       leverage: sig?.leverage ?? "—",
       sizePct: sig?.sizePct ?? "—",
+      entry: sig?.entry ?? null,
+      tp: sig?.tp ?? null,
+      sl: sig?.sl ?? null,
+      closeSuggestion: sig?.closeSuggestion ?? null,
       blurb: sig?.aiText || sig?.reason || "Analyse en cours…",
     };
   });
 
-  // Ordre watchlist fixe + prioriser signaux forts
   cards.sort((a, b) => b.confidence - a.confidence);
 
   return {

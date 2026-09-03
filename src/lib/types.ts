@@ -14,7 +14,13 @@ export type SortKey =
 
 export type UiMode = "simple" | "advanced";
 
-export type AppTab = "home" | "whales" | "spot" | "btc" | "macro";
+export type AppTab =
+  | "home"
+  | "whales"
+  | "spot"
+  | "btc"
+  | "macro"
+  | "lab";
 
 export type SignalBias = "haussier" | "baissier" | "neutre";
 
@@ -319,6 +325,8 @@ export interface Whale {
   spotBuys: SpotBuyEvent[];
   alerts: HedgeAlert[];
   spotValueUsd: number;
+  /** Label Nansen si l’adresse matche le leaderboard / perp-trades. */
+  nansenLabel: string | null;
   error?: string;
 }
 

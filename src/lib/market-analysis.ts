@@ -14,16 +14,23 @@ import {
   stochastic,
   adx,
 } from "./indicators";
+import { computeBuyZone } from "./levels";
 import { WATCHLIST } from "./price-watch";
 import type {
   BuyZone,
   Candle,
   IndicatorSnapshot,
-  SignalBias,
   TimeframeFrame,
 } from "./types";
 
 export type CandleInterval = "1h" | "4h" | "1d";
+
+function fmtPx(px: number): string {
+  if (px >= 1000) return px.toFixed(0);
+  if (px >= 10) return px.toFixed(2);
+  if (px >= 1) return px.toFixed(3);
+  return px.toFixed(5);
+}
 
 const INTERVAL_MS: Record<CandleInterval, number> = {
   "1h": 3600_000,
@@ -121,83 +128,6 @@ export function buildIndicators(candles: Candle[]): IndicatorSnapshot {
     roc12: lastNumber(roc12),
     adx14: lastNumber(adx14),
     volumeRatio,
-  };
-}
-
-function fmtPx(px: number): string {
-  if (px >= 1000) return px.toFixed(0);
-  if (px >= 10) return px.toFixed(2);
-  if (px >= 1) return px.toFixed(3);
-  return px.toFixed(5);
-}
-
-/**
- * Zone d’achat idéale 100 % règles (0 token IA).
- * Basée sur support / BB basse / EMA50 / ATR.
- */
-export function computeBuyZone(
-  coin: string,
-  ind: IndicatorSnapshot,
-  bias: SignalBias,
-  score: number,
-): BuyZone {
-  const price = ind.price;
-  const atr = ind.atr14 ?? price * 0.02;
-  const floorCandidates = [
-    ind.bbLower,
-    ind.support,
-    ind.ema50 !== null ? ind.ema50 - atr * 0.35 : null,
-    ind.ema20 !== null ? ind.ema20 - atr * 0.5 : null,
-  ].filter((v): v is number => v !== null && v > 0 && v < price * 1.02);
-
-  let low =
-    floorCandidates.length > 0
-      ? Math.max(...floorCandidates.filter((v) => v <= price * 1.005))
-      : price - atr * 1.2;
-  if (!Number.isFinite(low) || low <= 0) low = price * 0.97;
-
-  let high = Math.min(
-    price,
-    low + atr * 0.9,
-    ind.ema20 ?? low + atr * 0.7,
-    ind.bbMiddle ?? low + atr,
-  );
-  if (high <= low) high = low + atr * 0.6;
-
-  const mid = (low + high) / 2;
-  const distPct = price > 0 ? ((price - mid) / price) * 100 : 0;
-
-  const buyTiming = inferBuyTiming({
-    bias,
-    score,
-    rsi: ind.rsi14,
-    macdHist: ind.macdHist,
-    price,
-    support: ind.support,
-    bbLower: ind.bbLower,
-  });
-
-  let quality = buyTiming.confidence;
-  if (bias === "baissier" && score <= -4) quality = Math.min(quality, 35);
-  if (distPct > 4) quality = Math.max(20, quality - 15);
-
-  const invalidation =
-    ind.support !== null
-      ? ind.support - atr * 0.4
-      : low - atr * 0.5;
-
-  return {
-    coin,
-    low,
-    high,
-    mid,
-    distancePct: distPct,
-    quality,
-    action: buyTiming.action,
-    reason: buyTiming.reason,
-    label: `${fmtPx(low)} → ${fmtPx(high)}`,
-    invalidation,
-    summary: `Zone idéale ${fmtPx(low)}–${fmtPx(high)} (${buyTiming.action.replaceAll("_", " ")}, qualité ${quality}/100). Invalidation ~ ${fmtPx(invalidation)}.`,
   };
 }
 

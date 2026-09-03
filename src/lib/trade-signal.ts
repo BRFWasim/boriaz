@@ -1,9 +1,19 @@
 import { WATCHLIST, getWatchlistSnapshot, runPriceWatch } from "./price-watch";
 import { analyzeCoinFrames } from "./market-analysis";
+import { computeTradeLevels } from "./levels";
 import { fetchNansenSnapshot } from "./nansen";
 import { detectCrowdFlows } from "./crowd-flow";
 import { getWhaleDashboard } from "./dashboard";
 import { sendTelegramMessage } from "./telegram";
+import {
+  appendJournal,
+  inHushHours,
+  loadPrefs,
+  openPaperTrade,
+  loadPaperTrades,
+  savePaperTrades,
+  type PaperTrade,
+} from "./persist";
 import type { BuyTimingAction, SignalBias } from "./types";
 
 export interface DirectionSignal {
@@ -15,30 +25,37 @@ export interface DirectionSignal {
   spotPhase: "achat" | "vente" | "neutre";
   bias: SignalBias;
   price: number;
+  entry: number | null;
+  tp: number | null;
+  sl: number | null;
   reason: string;
   aiText: string | null;
   invalidation: string;
+  closeSuggestion: string | null;
 }
 
 export interface TradeSignalPayload {
   signals: DirectionSignal[];
   best: DirectionSignal | null;
+  paper: PaperTrade[];
   telegramSent: boolean;
   telegramError: string | null;
   fetchedAt: number;
   disclaimer: string;
 }
 
-const CACHE_TTL = 20 * 60_000;
-const AI_TTL = 45 * 60_000;
+const CACHE_TTL = 6 * 60_000; // refresh conseils souvent
+const TG_COOLDOWN = 25 * 60_000;
 let cache: { at: number; value: TradeSignalPayload } | null = null;
 let lastTgKey = "";
 let lastTgAt = 0;
 
-function leverageFor(confidence: number, adx: number | null): string {
-  if (confidence >= 75 && (adx ?? 0) >= 25) return "2–3× max";
-  if (confidence >= 60) return "1.5–2×";
-  return "1× (spot ou levier minimal)";
+function leverageFor(confidence: number, adx: number | null, maxLev: number): string {
+  let sug = 1;
+  if (confidence >= 75 && (adx ?? 0) >= 25) sug = Math.min(3, maxLev);
+  else if (confidence >= 60) sug = Math.min(2, maxLev);
+  else sug = Math.min(1, maxLev);
+  return `${sug}× (max prefs ${maxLev}×)`;
 }
 
 function sizeFor(confidence: number): string {
@@ -54,10 +71,10 @@ function spotPhaseFrom(action: BuyTimingAction, bias: SignalBias): "achat" | "ve
 }
 
 async function askSignalAi(compact: unknown[]): Promise<string | null> {
-  const prompt = `Tu es un analyste crypto prudent. FR. PAS un conseil financier garanti.
-À partir des données (indicateurs + crowd HL + Nansen), choisis AU PLUS 1 setup prioritaire LONG ou SHORT parmi la watchlist, ou WAIT.
-Réponds STRICTEMENT en JSON:
-{"action":"long"|"short"|"wait","coin":"BTC","confidence":0-100,"leverage":"1-2x","sizePct":"1% capital","reason":"...","invalidation":"...","detail":"3 phrases max"}
+  const prompt = `Analyste crypto prudent. FR. PAS un conseil financier.
+Choisis AU PLUS 1 setup LONG ou SHORT (ou WAIT) sur la watchlist.
+JSON strict:
+{"action":"long"|"short"|"wait","coin":"BTC","confidence":0-100,"leverage":"2x","sizePct":"1% capital","entry":123.4,"tp":130,"sl":118,"reason":"...","invalidation":"...","detail":"3 phrases"}
 Données: ${JSON.stringify(compact)}`;
 
   const anthropic = process.env.ANTHROPIC_API_KEY?.trim();
@@ -73,7 +90,7 @@ Données: ${JSON.stringify(compact)}`;
         body: JSON.stringify({
           model:
             process.env.ANTHROPIC_MODEL?.trim() || "claude-haiku-4-5-20251001",
-          max_tokens: 400,
+          max_tokens: 500,
           messages: [{ role: "user", content: prompt }],
         }),
       });
@@ -84,7 +101,7 @@ Données: ${JSON.stringify(compact)}`;
         return json.content?.find((c) => c.type === "text")?.text?.trim() || null;
       }
     } catch {
-      // fall through
+      // fallthrough
     }
   }
 
@@ -100,9 +117,9 @@ Données: ${JSON.stringify(compact)}`;
       body: JSON.stringify({
         model: process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini",
         temperature: 0.15,
-        max_tokens: 400,
+        max_tokens: 500,
         messages: [
-          { role: "system", content: "Réponds uniquement en JSON valide." },
+          { role: "system", content: "JSON uniquement." },
           { role: "user", content: prompt },
         ],
       }),
@@ -116,16 +133,7 @@ Données: ${JSON.stringify(compact)}`;
   }
 }
 
-function parseAiJson(text: string | null): {
-  action: "long" | "short" | "wait";
-  coin: string;
-  confidence: number;
-  leverage: string;
-  sizePct: string;
-  reason: string;
-  invalidation: string;
-  detail: string;
-} | null {
+function parseAiJson(text: string | null) {
   if (!text) return null;
   const match = text.match(/\{[\s\S]*\}/);
   if (!match) return null;
@@ -134,11 +142,14 @@ function parseAiJson(text: string | null): {
     const action = String(obj.action || "wait").toLowerCase();
     if (action !== "long" && action !== "short" && action !== "wait") return null;
     return {
-      action,
+      action: action as "long" | "short" | "wait",
       coin: String(obj.coin || "").toUpperCase(),
       confidence: Number(obj.confidence ?? 0),
       leverage: String(obj.leverage || "1x"),
       sizePct: String(obj.sizePct || "≤1%"),
+      entry: obj.entry != null ? Number(obj.entry) : null,
+      tp: obj.tp != null ? Number(obj.tp) : null,
+      sl: obj.sl != null ? Number(obj.sl) : null,
       reason: String(obj.reason || ""),
       invalidation: String(obj.invalidation || ""),
       detail: String(obj.detail || obj.reason || ""),
@@ -146,6 +157,55 @@ function parseAiJson(text: string | null): {
   } catch {
     return null;
   }
+}
+
+async function refreshPaperTrades(
+  prices: Record<string, number>,
+): Promise<{ paper: PaperTrade[]; closes: PaperTrade[] }> {
+  const trades = await loadPaperTrades();
+  const closes: PaperTrade[] = [];
+  const now = Date.now();
+  for (const t of trades) {
+    if (t.status !== "open") continue;
+    const px = prices[t.coin];
+    if (!px) continue;
+    const pnlPct =
+      t.side === "long"
+        ? ((px - t.entry) / t.entry) * 100 * t.leverage
+        : ((t.entry - px) / t.entry) * 100 * t.leverage;
+
+    let hit: PaperTrade["status"] | null = null;
+    if (t.side === "long") {
+      if (px >= t.tp) hit = "tp";
+      else if (px <= t.sl) hit = "sl";
+    } else {
+      if (px <= t.tp) hit = "tp";
+      else if (px >= t.sl) hit = "sl";
+    }
+    // Invalidation si PnL < -4% levier ou retournement fort
+    if (!hit && pnlPct <= -8) hit = "invalidated";
+
+    if (hit) {
+      t.status = hit;
+      t.closedAt = now;
+      t.exitPx = px;
+      t.pnlPct = pnlPct;
+      t.note =
+        hit === "tp"
+          ? "TP touché — clôture paper"
+          : hit === "sl"
+            ? "SL touché — clôture paper"
+            : "Invalidation — fermeture suggérée / paper clos";
+      closes.push({ ...t });
+    } else {
+      t.pnlPct = pnlPct;
+      if (pnlPct <= -4) {
+        t.note = `Fermeture suggérée (paper PnL ${pnlPct.toFixed(1)} %)`;
+      }
+    }
+  }
+  await savePaperTrades(trades);
+  return { paper: trades, closes };
 }
 
 export async function getTradeSignals(options?: {
@@ -156,11 +216,16 @@ export async function getTradeSignals(options?: {
     return cache.value;
   }
 
+  const prefs = await loadPrefs();
   try {
     await runPriceWatch();
   } catch {
     // ignore
   }
+
+  const watch = WATCHLIST.filter((w) =>
+    prefs.watchCoins.length ? prefs.watchCoins.includes(w.coin) : true,
+  );
 
   const [quotes, nansen, dashboard] = await Promise.all([
     getWatchlistSnapshot(),
@@ -169,9 +234,14 @@ export async function getTradeSignals(options?: {
   ]);
 
   const crowd = dashboard ? detectCrowdFlows(dashboard.whales) : [];
+  const priceMap: Record<string, number> = {};
+  for (const q of quotes.quotes) priceMap[q.coin] = q.price;
+
+  const { paper, closes } = await refreshPaperTrades(priceMap);
+
   const signals: DirectionSignal[] = [];
 
-  for (const { coin } of WATCHLIST) {
+  for (const { coin } of watch) {
     const frames = await analyzeCoinFrames(coin, [
       { interval: "4h", horizon: "moyen" },
     ]);
@@ -182,47 +252,62 @@ export async function getTradeSignals(options?: {
     let action: "long" | "short" | "wait" = "wait";
     let confidence = 40;
 
-    if (crowdHit?.side === "short" && main.score <= 0) {
+    if (crowdHit?.side === "short" && main.score <= 1) {
       action = "short";
-      confidence = Math.min(82, 50 + crowdHit.qualityWhaleCount * 6 + Math.abs(main.score) * 3);
-    } else if (crowdHit?.side === "long" && main.score >= 0) {
+      confidence = Math.min(85, 52 + crowdHit.qualityWhaleCount * 6 + Math.abs(Math.min(main.score, 0)) * 4);
+    } else if (crowdHit?.side === "long" && main.score >= -1) {
       action = "long";
-      confidence = Math.min(82, 50 + crowdHit.qualityWhaleCount * 6 + main.score * 3);
+      confidence = Math.min(85, 52 + crowdHit.qualityWhaleCount * 6 + Math.max(main.score, 0) * 4);
     } else if (main.buyTiming.action === "acheter_zone" && main.bias !== "baissier") {
       action = "long";
-      confidence = Math.min(70, main.buyTiming.confidence);
+      confidence = Math.min(72, main.buyTiming.confidence);
     } else if (main.bias === "baissier" && main.score <= -3) {
       action = "short";
-      confidence = Math.min(68, 45 + Math.abs(main.score) * 5);
+      confidence = Math.min(70, 48 + Math.abs(main.score) * 5);
     }
 
     const nansenShort = nansen.recentPerpTrades.filter(
-      (t) =>
-        t.symbol.toUpperCase() === coin &&
-        t.side.toLowerCase().includes("short"),
+      (t) => t.symbol.toUpperCase() === coin && t.side.toLowerCase().includes("short"),
     ).length;
     const nansenLong = nansen.recentPerpTrades.filter(
-      (t) =>
-        t.symbol.toUpperCase() === coin &&
-        t.side.toLowerCase().includes("long"),
+      (t) => t.symbol.toUpperCase() === coin && t.side.toLowerCase().includes("long"),
     ).length;
     if (nansenShort >= 3 && action === "short") confidence += 5;
     if (nansenLong >= 3 && action === "long") confidence += 5;
+
+    const price = quote?.price ?? main.indicators.price;
+    let entry: number | null = null;
+    let tp: number | null = null;
+    let sl: number | null = null;
+    if (action === "long" || action === "short") {
+      const lv = computeTradeLevels(action, price, main.indicators);
+      entry = lv.entry;
+      tp = lv.tp;
+      sl = lv.sl;
+    }
+
+    const openPaper = paper.find((p) => p.status === "open" && p.coin === coin);
+    const closeSuggestion =
+      openPaper?.note?.includes("Fermeture") || openPaper?.note?.includes("Invalidation")
+        ? openPaper.note
+        : null;
 
     signals.push({
       coin,
       action,
       confidence: Math.min(90, confidence),
-      leverage: leverageFor(confidence, main.indicators.adx14),
+      leverage: leverageFor(confidence, main.indicators.adx14, prefs.maxLeverage),
       sizePct: sizeFor(confidence),
       spotPhase: spotPhaseFrom(main.buyTiming.action, main.bias),
       bias: main.bias,
-      price: quote?.price ?? main.indicators.price,
-      reason: crowdHit
-        ? `${crowdHit.summary} · ${main.summary}`
-        : main.summary,
+      price,
+      entry,
+      tp,
+      sl,
+      reason: crowdHit ? `${crowdHit.summary} · ${main.summary}` : main.summary,
       aiText: null,
       invalidation: main.buyZone.summary,
+      closeSuggestion,
     });
   }
 
@@ -232,8 +317,10 @@ export async function getTradeSignals(options?: {
     confidence: s.confidence,
     bias: s.bias,
     price: s.price,
-    spotPhase: s.spotPhase,
-    reason: s.reason.slice(0, 160),
+    entry: s.entry,
+    tp: s.tp,
+    sl: s.sl,
+    reason: s.reason.slice(0, 140),
   }));
 
   const aiRaw = await askSignalAi([
@@ -267,36 +354,94 @@ export async function getTradeSignals(options?: {
       target.aiText = ai.detail || ai.reason;
       target.reason = ai.reason || target.reason;
       target.invalidation = ai.invalidation || target.invalidation;
+      if (ai.entry && ai.entry > 0) target.entry = ai.entry;
+      if (ai.tp && ai.tp > 0) target.tp = ai.tp;
+      if (ai.sl && ai.sl > 0) target.sl = ai.sl;
+      if (!target.entry || !target.tp || !target.sl) {
+        const side = target.action === "short" ? "short" : "long";
+        const lv = computeTradeLevels(side, target.price, {
+          price: target.price,
+          change24hPct: null,
+          rsi14: null,
+          macd: null,
+          macdSignal: null,
+          macdHist: null,
+          ema20: null,
+          ema50: null,
+          ema200: null,
+          sma20: null,
+          sma50: null,
+          atr14: target.price * 0.015,
+          bbUpper: null,
+          bbMiddle: null,
+          bbLower: null,
+          volumeAvg: null,
+          support: null,
+          resistance: null,
+          stochK: null,
+          stochD: null,
+          roc12: null,
+          adx14: null,
+          volumeRatio: null,
+        });
+        target.entry = target.entry ?? lv.entry;
+        target.tp = target.tp ?? lv.tp;
+        target.sl = target.sl ?? lv.sl;
+      }
       best = target;
     }
   } else if (ai?.action === "wait" && best) {
     best.action = "wait";
     best.aiText = ai.detail || "IA : patienter.";
     best.confidence = Math.min(best.confidence, ai.confidence || 40);
+    best.entry = null;
+    best.tp = null;
+    best.sl = null;
   }
 
-  for (const s of signals) {
-    if (!s.aiText && ai?.detail && ai.coin === s.coin) s.aiText = ai.detail;
-  }
-
+  // Paper close telegram
   let telegramSent = false;
   let telegramError: string | null = null;
-  const notify = options?.notify !== false;
+  const notify = options?.notify !== false && prefs.telegramEnabled;
+  const hush = inHushHours(prefs);
+
+  if (notify && !hush) {
+    for (const c of closes.slice(0, 2)) {
+      const res = await sendTelegramMessage(
+        [
+          `PAPER ${c.status.toUpperCase()} · ${c.side.toUpperCase()} ${c.coin}`,
+          `Entrée ${c.entry} → sortie ${c.exitPx}`,
+          `PnL approx ${c.pnlPct?.toFixed(2)} %`,
+          c.note,
+          "Pas un conseil financier.",
+        ].join("\n"),
+      );
+      if (res.ok) telegramSent = true;
+      else telegramError = res.error ?? telegramError;
+    }
+  }
+
   if (
     notify &&
+    !hush &&
     best &&
     best.action !== "wait" &&
-    best.confidence >= 65 &&
-    best.aiText
+    best.confidence >= 62 &&
+    best.entry &&
+    best.tp &&
+    best.sl
   ) {
-    const key = `${best.coin}:${best.action}:${Math.round(best.confidence / 5)}`;
-    if (key !== lastTgKey || Date.now() - lastTgAt > AI_TTL) {
+    const key = `${best.coin}:${best.action}:${Math.round(best.entry)}:${Math.round(best.confidence / 5)}`;
+    if (key !== lastTgKey || Date.now() - lastTgAt > TG_COOLDOWN) {
       const text = [
         `SIGNAL ${best.action.toUpperCase()} · ${best.coin}`,
         `Confiance ${best.confidence}/100`,
-        `Levier suggéré: ${best.leverage}`,
-        `Mise suggérée: ${best.sizePct}`,
-        `Prix ~ ${best.price}`,
+        `Entrée idéale ~ ${best.entry}`,
+        `TP ~ ${best.tp}`,
+        `SL ~ ${best.sl}`,
+        `Levier: ${best.leverage}`,
+        `Mise: ${best.sizePct}`,
+        `Prix spot ~ ${best.price}`,
         best.reason,
         best.aiText ? `IA: ${best.aiText}` : "",
         `Invalidation: ${best.invalidation}`,
@@ -306,11 +451,39 @@ export async function getTradeSignals(options?: {
         .filter(Boolean)
         .join("\n");
       const res = await sendTelegramMessage(text);
-      telegramSent = res.ok;
-      telegramError = res.error ?? null;
+      telegramSent = res.ok || telegramSent;
+      telegramError = res.error ?? telegramError;
       if (res.ok) {
         lastTgKey = key;
         lastTgAt = Date.now();
+        await appendJournal({
+          at: Date.now(),
+          coin: best.coin,
+          action: best.action,
+          confidence: best.confidence,
+          entry: best.entry,
+          tp: best.tp,
+          sl: best.sl,
+          leverage: best.leverage,
+          sizePct: best.sizePct,
+          reason: best.aiText || best.reason,
+          source: "trade-signal",
+        });
+        if (prefs.paperTradeEnabled) {
+          const levNum = Number(String(best.leverage).match(/[\d.]+/)?.[0] || 1);
+          const sizeNum = Number(String(best.sizePct).match(/[\d.]+/)?.[0] || 1);
+          await openPaperTrade({
+            openedAt: Date.now(),
+            coin: best.coin,
+            side: best.action,
+            entry: best.entry,
+            tp: best.tp,
+            sl: best.sl,
+            leverage: levNum,
+            sizePct: sizeNum,
+            note: "Ouvert auto depuis signal",
+          });
+        }
       }
     }
   }
@@ -318,11 +491,12 @@ export async function getTradeSignals(options?: {
   const value: TradeSignalPayload = {
     signals: signals.sort((a, b) => b.confidence - a.confidence),
     best,
+    paper: paper.slice(0, 20),
     telegramSent,
     telegramError,
     fetchedAt: Date.now(),
     disclaimer:
-      "Suggestions éducatives (règles + IA). Pas un conseil financier. Dimensionne toujours selon ton risque.",
+      "Suggestions éducatives (règles + IA + wallets). Pas un conseil financier.",
   };
   cache = { at: Date.now(), value };
   return value;

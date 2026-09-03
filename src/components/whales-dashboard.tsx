@@ -24,6 +24,7 @@ import { BtcAnalysisPanel } from "@/components/btc-analysis-panel";
 import { SpotAlertsPanel } from "@/components/spot-alerts-panel";
 import { HomePanel } from "@/components/home-panel";
 import { MacroPanel } from "@/components/macro-panel";
+import { LabPanel } from "@/components/lab-panel";
 import { WhaleCard } from "@/components/whale-card";
 import { formatAgo, formatExactTime } from "@/lib/format";
 import type { AppTab, DashboardPayload, SortKey, UiMode } from "@/lib/types";
@@ -143,11 +144,14 @@ export function WhalesDashboard() {
             <div className="min-w-0">
               <p className="flex items-center gap-2 text-xs tracking-[0.22em] text-primary uppercase">
                 <FishIcon className="size-4" />
-                Hyperliquid · Perpétuels
+                BoriazBot · Hyperliquid
               </p>
               <h1 className="mt-1 text-xl font-semibold tracking-tight sm:text-3xl">
-                Les 10 plus grosses baleines
+                BoriazBot
               </h1>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Signaux · baleines · zones · macro · Telegram @BoriazBot
+              </p>
             </div>
             <div className="flex flex-col items-stretch gap-2 sm:items-end">
               <div className="flex flex-wrap items-center gap-2">
@@ -179,9 +183,9 @@ export function WhalesDashboard() {
           </div>
 
           <p className="text-sm text-muted-foreground">
-            Si une baleine clôture une position pour en ouvrir une autre, la
-            nouvelle apparaît ici au cycle suivant (environ 20 secondes). Ce
-            n’est pas du tick-par-tick comme le carnet Hyperliquid.
+            Scan élargi des wallets HL (top ~18 actifs). Si une baleine clôture
+            pour en ouvrir une autre, la nouvelle apparaît au cycle suivant
+            (~20 s). Ce n’est pas du tick-par-tick comme le carnet Hyperliquid.
           </p>
 
           <div className="flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/8 px-3 py-2.5 text-sm text-amber-100/90">
@@ -223,6 +227,9 @@ export function WhalesDashboard() {
             </TabButton>
             <TabButton active={tab === "macro"} onClick={() => setTab("macro")}>
               Macro
+            </TabButton>
+            <TabButton active={tab === "lab"} onClick={() => setTab("lab")}>
+              Lab
             </TabButton>
           </div>
 
@@ -320,6 +327,8 @@ export function WhalesDashboard() {
         ) : null}
 
         {tab === "macro" ? <MacroPanel /> : null}
+
+        {tab === "lab" ? <LabPanel /> : null}
 
         {tab === "btc" ? <BtcAnalysisPanel /> : null}
 

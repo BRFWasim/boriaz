@@ -30,7 +30,7 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
       }
     }
     void load();
-    const id = window.setInterval(() => void load(), 60_000);
+    const id = window.setInterval(() => void load(), 90_000);
     return () => {
       alive = false;
       window.clearInterval(id);
@@ -40,7 +40,7 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
   if (loading && !data) {
     return (
       <p className="animate-pulse text-sm text-muted-foreground">
-        Chargement des signaux live…
+        Chargement des signaux BoriazBot…
       </p>
     );
   }
@@ -59,15 +59,18 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
   return (
     <div className="space-y-5">
       <section className="text-center sm:text-left">
-        <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
-          Vue rapide · watchlist
+        <p className="text-xs tracking-[0.22em] text-primary uppercase">
+          BoriazBot
+        </p>
+        <h1 className="mt-1 text-2xl font-semibold tracking-tight sm:text-3xl">
+          Signaux live · watchlist
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Prix · phase spot · biais long/short · levier & mise suggérés (éducatif)
+          Entrée idéale · TP · SL · levier & mise (IA + baleines + Nansen)
         </p>
       </section>
 
-      {data.best && data.best.action !== "wait" && data.best.confidence >= 60 ? (
+      {data.best && data.best.action !== "wait" && data.best.confidence >= 55 ? (
         <section
           className={`rounded-2xl border px-4 py-4 ${
             data.best.action === "short"
@@ -76,7 +79,7 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
           }`}
         >
           <p className="text-xs tracking-wide uppercase text-muted-foreground">
-            Setup prioritaire
+            Setup prioritaire · notif Telegram si confiance élevée
           </p>
           <div className="mt-2 flex flex-wrap items-center gap-3">
             <CryptoLogo symbol={data.best.coin} size={40} />
@@ -90,7 +93,32 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
               </p>
             </div>
           </div>
+          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <Level label="Prix" value={formatPx(data.best.price)} />
+            <Level
+              label="Entrée idéale"
+              value={data.best.entry != null ? formatPx(data.best.entry) : "—"}
+            />
+            <Level
+              label="TP"
+              value={data.best.tp != null ? formatPx(data.best.tp) : "—"}
+              className="text-long"
+            />
+            <Level
+              label="SL"
+              value={data.best.sl != null ? formatPx(data.best.sl) : "—"}
+              className="text-short"
+            />
+          </div>
           <p className="mt-2 text-sm">{data.best.aiText || data.best.reason}</p>
+          {data.best.closeSuggestion ? (
+            <p className="mt-2 text-sm text-amber-200">
+              Fermeture suggérée : {data.best.closeSuggestion}
+            </p>
+          ) : null}
+          <p className="mt-2 text-xs text-muted-foreground">
+            Invalidation : {data.best.invalidation}
+          </p>
         </section>
       ) : null}
 
@@ -141,6 +169,30 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
               </Badge>
             </div>
 
+            {(card.direction === "long" || card.direction === "short") &&
+            (card.entry || card.tp || card.sl) ? (
+              <div className="mt-3 grid grid-cols-3 gap-1.5 text-[11px]">
+                <div className="rounded-md bg-muted/30 px-1.5 py-1">
+                  <p className="text-muted-foreground">Entrée</p>
+                  <p className="numeric font-medium">
+                    {card.entry != null ? formatPx(card.entry) : "—"}
+                  </p>
+                </div>
+                <div className="rounded-md bg-muted/30 px-1.5 py-1">
+                  <p className="text-muted-foreground">TP</p>
+                  <p className="numeric font-medium text-long">
+                    {card.tp != null ? formatPx(card.tp) : "—"}
+                  </p>
+                </div>
+                <div className="rounded-md bg-muted/30 px-1.5 py-1">
+                  <p className="text-muted-foreground">SL</p>
+                  <p className="numeric font-medium text-short">
+                    {card.sl != null ? formatPx(card.sl) : "—"}
+                  </p>
+                </div>
+              </div>
+            ) : null}
+
             <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
               <div className="rounded-lg bg-muted/30 px-2 py-1.5">
                 <p className="text-muted-foreground">15m</p>
@@ -169,6 +221,10 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
                 </p>
               </div>
             </div>
+
+            {card.closeSuggestion ? (
+              <p className="mt-2 text-[11px] text-amber-200">{card.closeSuggestion}</p>
+            ) : null}
 
             <p className="mt-3 text-xs text-muted-foreground line-clamp-3">
               {card.blurb}
@@ -202,9 +258,37 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
         >
           Baleines
         </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => onOpenTab?.("lab")}
+        >
+          Lab · journal / paper
+        </Button>
       </div>
 
       <p className="text-xs text-muted-foreground">{data.disclaimer}</p>
+    </div>
+  );
+}
+
+function Level({
+  label,
+  value,
+  className,
+}: {
+  label: string;
+  value: string;
+  className?: string;
+}) {
+  return (
+    <div className="rounded-lg bg-background/40 px-2.5 py-2">
+      <p className="text-[10px] tracking-wide text-muted-foreground uppercase">
+        {label}
+      </p>
+      <p className={`numeric mt-0.5 text-sm font-semibold ${className ?? ""}`}>
+        {value}
+      </p>
     </div>
   );
 }
