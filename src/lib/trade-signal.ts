@@ -8,6 +8,7 @@ import { sendTelegramMessage } from "./telegram";
 import { correlateSetup } from "./signal-score";
 import { computeAlignment, type AlignmentScore } from "./alignment";
 import {
+  aggregatePaperAccount,
   appendBook,
   appendJournal,
   computePaperAccount,
@@ -434,7 +435,6 @@ export async function getTradeSignals(options?: {
   }
 
   const prefs = await loadPrefs();
-  const bankroll = prefs.paperBankrollEur || 1000;
 
   try {
     await runPriceWatch();
@@ -457,6 +457,42 @@ export async function getTradeSignals(options?: {
   for (const q of quotes.quotes) priceMap[q.coin] = q.price;
 
   const { paper, closes } = await refreshPaperTrades(priceMap);
+
+  // Notif Telegram TP/SL — INDÉPENDANTE du cron : une clôture est souvent
+  // détectée par un appel non-notifiant (accueil), donc on prévient ici dès
+  // qu'un trade est clôturé, une seule fois (flag closeNotified persistant).
+  if (prefs.telegramEnabled && closes.length) {
+    const toNotify = closes.filter((c) => !c.closeNotified);
+    if (toNotify.length) {
+      for (const c of toNotify.slice(0, 5)) {
+        const head =
+          c.status === "tp"
+            ? "🟢 TP touché"
+            : c.status === "sl"
+              ? "🔴 SL touché"
+              : c.status === "expired"
+                ? "⚪️ Limite expirée"
+                : "⚪️ Clôture";
+        const pnl = c.pnlEur ?? 0;
+        await sendTelegramMessage(
+          [
+            `${head} · ${c.side.toUpperCase()} ${c.coin}`,
+            `Portefeuille « ${c.portfolioName || "Défaut"} »`,
+            `Entrée ${c.entry} → sortie ${c.exitPx ?? c.markPx ?? "—"}`,
+            `PnL ${pnl >= 0 ? "+" : ""}${pnl.toFixed(2)} € (${(c.pnlPct ?? 0).toFixed(2)} %)`,
+            c.note,
+            "Simulation paper — pas un conseil financier.",
+          ]
+            .filter(Boolean)
+            .join("\n"),
+        );
+      }
+      const ids = new Set(toNotify.map((c) => c.id));
+      for (const t of paper) if (ids.has(t.id)) t.closeNotified = true;
+      await savePaperTrades(paper);
+    }
+  }
+
   const signals: DirectionSignal[] = [];
 
   for (const { coin } of watch) {
@@ -837,21 +873,6 @@ export async function getTradeSignals(options?: {
   const maxSafety = prefs.maxSafetyMode !== false;
 
   if (notify && !hush) {
-    for (const c of closes.slice(0, 2)) {
-      const res = await sendTelegramMessage(
-        [
-          `PAPER ${c.status.toUpperCase()} · ${c.side.toUpperCase()} ${c.coin}`,
-          `Entrée ${c.entry} → sortie ${c.exitPx ?? "—"}`,
-          `PnL ${c.pnlEur?.toFixed(2) ?? "0"} € (${c.pnlPct?.toFixed(2)} %)`,
-          `Solde paper de départ ${bankroll} €`,
-          c.note,
-          "Pas un conseil financier.",
-        ].join("\n"),
-      );
-      if (res.ok) telegramSent = true;
-      else telegramError = res.error ?? telegramError;
-    }
-
     // Alertes divergence (throttle via clé)
     for (const d of divergences.slice(0, 2)) {
       const dKey = `div:${d.slice(0, 80)}`;
@@ -1177,7 +1198,10 @@ export async function getTradeSignals(options?: {
   }
 
   const paperLatest = await loadPaperTrades();
-  const account = computePaperAccount(paperLatest, bankroll);
+  const account = aggregatePaperAccount(
+    paperLatest,
+    ensurePortfolios(prefs.portfolios),
+  );
 
   const value: TradeSignalPayload = {
     signals: signals.sort(
