@@ -41,6 +41,21 @@ export async function POST(request: Request) {
     if (typeof body.maxSafetyMode === "boolean") {
       patch.maxSafetyMode = body.maxSafetyMode;
     }
+    if (typeof body.customTradingMode === "boolean") {
+      patch.customTradingMode = body.customTradingMode;
+    }
+    if (typeof body.customMinRR === "number") {
+      patch.customMinRR = Math.max(0.5, Math.min(10, body.customMinRR));
+    }
+    if (typeof body.customTargetEur === "number") {
+      patch.customTargetEur = Math.max(10, body.customTargetEur);
+    }
+    if (typeof body.customMaxLossEur === "number") {
+      patch.customMaxLossEur = Math.max(10, body.customMaxLossEur);
+    }
+    if (typeof body.customTradesPerDay === "number") {
+      patch.customTradesPerDay = Math.max(0, Math.min(50, Math.floor(body.customTradesPerDay)));
+    }
     const prefs = await savePrefs(patch);
     return Response.json({ prefs });
   } catch (e) {

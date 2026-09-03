@@ -12,6 +12,12 @@ export interface UserPrefs {
    * ET crowd WR qualité (≥58 %).
    */
   maxSafetyMode: boolean;
+  /** Mode perso trading Lab */
+  customTradingMode: boolean;
+  customMinRR: number;
+  customTargetEur: number;
+  customMaxLossEur: number;
+  customTradesPerDay: number;
 }
 
 export const DEFAULT_PREFS: UserPrefs = {
@@ -36,6 +42,11 @@ export const DEFAULT_PREFS: UserPrefs = {
   paperTradeEnabled: true,
   paperBankrollEur: 1000,
   maxSafetyMode: true,
+  customTradingMode: false,
+  customMinRR: 2,
+  customTargetEur: 200,
+  customMaxLossEur: 100,
+  customTradesPerDay: 3,
 };
 
 export interface JournalEntry {

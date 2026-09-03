@@ -229,6 +229,8 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
                     <th className="py-2 pr-2">TP</th>
                     <th className="py-2 pr-2">SL</th>
                     <th className="py-2 pr-2">PnL</th>
+                    <th className="py-2 pr-2">Si TP</th>
+                    <th className="py-2 pr-2">Si SL</th>
                     <th className="py-2">Statut</th>
                   </tr>
                 </thead>
@@ -268,6 +270,24 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
                         {t.status === "pending"
                           ? "—"
                           : `${(t.pnlEur ?? 0) >= 0 ? "+" : ""}${(t.pnlEur ?? 0).toFixed(2)} €`}
+                      </td>
+                      <td className="numeric py-2.5 pr-2 text-long">
+                        {(() => {
+                          const move =
+                            t.side === "long"
+                              ? ((t.tp - t.entry) / t.entry) * 100
+                              : ((t.entry - t.tp) / t.entry) * 100;
+                          return `+${(t.marginEur * move * t.leverage / 100).toFixed(2)} €`;
+                        })()}
+                      </td>
+                      <td className="numeric py-2.5 pr-2 text-short">
+                        {(() => {
+                          const move =
+                            t.side === "long"
+                              ? ((t.sl - t.entry) / t.entry) * 100
+                              : ((t.entry - t.sl) / t.entry) * 100;
+                          return `${(t.marginEur * move * t.leverage / 100).toFixed(2)} €`;
+                        })()}
                       </td>
                       <td className="py-2.5 text-xs uppercase text-muted-foreground">
                         {t.status}
@@ -335,6 +355,35 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
               }
               className={signedClass(heroTrade.pnlEur ?? 0)}
             />
+          </div>
+          <div className="mt-2 flex flex-wrap gap-3 text-xs">
+            <span className="text-long">
+              Si TP → +{(() => {
+                const m = heroTrade.side === "long"
+                  ? ((heroTrade.tp - heroTrade.entry) / heroTrade.entry) * 100
+                  : ((heroTrade.entry - heroTrade.tp) / heroTrade.entry) * 100;
+                return (heroTrade.marginEur * m * heroTrade.leverage / 100).toFixed(2);
+              })()} €
+            </span>
+            <span className="text-short">
+              Si SL → {(() => {
+                const m = heroTrade.side === "long"
+                  ? ((heroTrade.sl - heroTrade.entry) / heroTrade.entry) * 100
+                  : ((heroTrade.entry - heroTrade.sl) / heroTrade.entry) * 100;
+                return (heroTrade.marginEur * m * heroTrade.leverage / 100).toFixed(2);
+              })()} €
+            </span>
+            <span className="text-muted-foreground">
+              R:R {(() => {
+                const reward = heroTrade.side === "long"
+                  ? heroTrade.tp - heroTrade.entry
+                  : heroTrade.entry - heroTrade.tp;
+                const risk = heroTrade.side === "long"
+                  ? heroTrade.entry - heroTrade.sl
+                  : heroTrade.sl - heroTrade.entry;
+                return risk > 0 ? (reward / risk).toFixed(1) : "∞";
+              })()}
+            </span>
           </div>
         </section>
       ) : data.best && data.best.action !== "wait" && data.best.confidence >= 55 ? (

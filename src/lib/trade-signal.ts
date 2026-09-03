@@ -684,6 +684,35 @@ export async function getTradeSignals(options?: {
       best.alignment.tf1h4hAligned &&
       best.alignment.crowdWrOk);
 
+  const customMode = prefs.customTradingMode === true;
+  const minRR = customMode ? (prefs.customMinRR ?? 2) : 0;
+  const maxTradesDay = customMode ? (prefs.customTradesPerDay ?? 0) : 0;
+  const maxLossEur = customMode ? (prefs.customMaxLossEur ?? Infinity) : Infinity;
+
+  const paperForCheck = await loadPaperTrades();
+  const accCheck = computePaperAccount(paperForCheck, bankroll);
+  const lossExceeded = Number.isFinite(maxLossEur) && (bankroll - accCheck.equityEur) >= maxLossEur;
+
+  const todayTrades = maxTradesDay > 0
+    ? paperForCheck.filter((t) => Date.now() - t.openedAt < 24 * 3600_000).length
+    : 0;
+  const tradeLimitHit = maxTradesDay > 0 && todayTrades >= maxTradesDay;
+
+  const rrOk =
+    !best?.entry || !best?.tp || !best?.sl || minRR <= 0
+      ? true
+      : (() => {
+          const reward =
+            best.action === "long"
+              ? best.tp - best.entry
+              : best.entry - best.tp;
+          const risk =
+            best.action === "long"
+              ? best.entry - best.sl
+              : best.sl - best.entry;
+          return risk > 0 ? reward / risk >= minRR : true;
+        })();
+
   const shouldSim =
     best &&
     best.action !== "wait" &&
@@ -693,6 +722,9 @@ export async function getTradeSignals(options?: {
     best.entry &&
     best.tp &&
     best.sl &&
+    rrOk &&
+    !lossExceeded &&
+    !tradeLimitHit &&
     (!maxSafety ||
       best.alignment.tf1h4hAligned ||
       best.tfVotes.some((v) => v.interval === "1d" && (v.bias === "haussier" || v.bias === "baissier")));

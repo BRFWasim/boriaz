@@ -302,6 +302,101 @@ export function LabPanel() {
               Sureté max — TG seulement si 1h+4h alignés et crowd WR ≥58 %
             </label>
           </div>
+
+          <div className="mt-4 rounded-xl border border-border/60 bg-muted/20 p-3">
+            <label className="flex items-center gap-2 text-sm font-medium">
+              <input
+                type="checkbox"
+                checked={prefs.customTradingMode ?? false}
+                onChange={(e) =>
+                  setPrefs({ ...prefs, customTradingMode: e.target.checked })
+                }
+              />
+              Mode personnalisé (sinon le mode par défaut reste actif)
+            </label>
+            {prefs.customTradingMode ? (
+              <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <div>
+                  <Label htmlFor="minRR">Risk/Reward minimum</Label>
+                  <Input
+                    id="minRR"
+                    type="number"
+                    step="0.5"
+                    min={0.5}
+                    max={10}
+                    value={prefs.customMinRR ?? 2}
+                    onChange={(e) =>
+                      setPrefs({ ...prefs, customMinRR: Number(e.target.value) })
+                    }
+                  />
+                  <p className="mt-1 text-[10px] text-muted-foreground">
+                    Trade ignoré si R:R &lt; cette valeur
+                  </p>
+                </div>
+                <div>
+                  <Label htmlFor="targetE">Objectif gain (€)</Label>
+                  <Input
+                    id="targetE"
+                    type="number"
+                    min={10}
+                    max={100000}
+                    value={prefs.customTargetEur ?? 200}
+                    onChange={(e) =>
+                      setPrefs({
+                        ...prefs,
+                        customTargetEur: Number(e.target.value),
+                      })
+                    }
+                  />
+                  <p className="mt-1 text-[10px] text-muted-foreground">
+                    Alerte quand equity atteint départ + ce montant
+                  </p>
+                </div>
+                <div>
+                  <Label htmlFor="maxLoss">Perte max (€)</Label>
+                  <Input
+                    id="maxLoss"
+                    type="number"
+                    min={10}
+                    max={100000}
+                    value={prefs.customMaxLossEur ?? 100}
+                    onChange={(e) =>
+                      setPrefs({
+                        ...prefs,
+                        customMaxLossEur: Number(e.target.value),
+                      })
+                    }
+                  />
+                  <p className="mt-1 text-[10px] text-muted-foreground">
+                    Stop le bot si perte dépasse ce montant
+                  </p>
+                </div>
+                <div>
+                  <Label htmlFor="tpd">Trades / jour max</Label>
+                  <Input
+                    id="tpd"
+                    type="number"
+                    min={0}
+                    max={50}
+                    value={prefs.customTradesPerDay ?? 3}
+                    onChange={(e) =>
+                      setPrefs({
+                        ...prefs,
+                        customTradesPerDay: Number(e.target.value),
+                      })
+                    }
+                  />
+                  <p className="mt-1 text-[10px] text-muted-foreground">
+                    0 = illimité
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <p className="mt-2 text-xs text-muted-foreground">
+                Mode par défaut : Alignement + sureté max + R:R libre + pas de limite de trades.
+              </p>
+            )}
+          </div>
           <Button className="mt-3" size="sm" onClick={() => void savePrefs()}>
             Enregistrer
           </Button>

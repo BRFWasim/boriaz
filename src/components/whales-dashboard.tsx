@@ -172,99 +172,35 @@ export function WhalesDashboard() {
 
   return (
     <div className="min-h-svh pb-[max(1.5rem,env(safe-area-inset-bottom))]">
-      <header className="sticky top-0 z-20 border-b border-white/8 bg-background/75 pt-[env(safe-area-inset-top)] backdrop-blur-xl">
-        <div className="mx-auto flex w-full max-w-7xl flex-col gap-4 px-4 py-4 sm:px-6 lg:px-8">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="flex items-center gap-2 text-[0.65rem] tracking-[0.35em] text-primary uppercase">
-                <FishIcon className="size-3.5" />
-                Hyperliquid · @BoriazBot
-              </p>
-              <h1 className="font-heading mt-1.5 text-3xl font-bold tracking-tight sm:text-4xl">
-                BoriazBot
-              </h1>
-              <p className="mt-1.5 max-w-md text-sm text-muted-foreground">
-                Alignement · signaux · baleines · macro · paper
-              </p>
+      <header className="sticky top-0 z-30 border-b border-white/8 bg-background/85 pt-[env(safe-area-inset-top)] backdrop-blur-xl">
+        <div className="mx-auto flex w-full max-w-7xl flex-col gap-1.5 px-3 py-2 sm:gap-3 sm:px-6 sm:py-3 lg:px-8">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex min-w-0 items-center gap-2">
+              <FishIcon className="size-4 shrink-0 text-primary" />
+              <h1 className="font-heading truncate text-lg font-bold tracking-tight sm:text-2xl">BoriazBot</h1>
             </div>
-            <div className="flex flex-col items-stretch gap-2 sm:items-end">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="bb-live-dot inline-flex items-center gap-2 rounded-md border border-long/30 bg-long/10 px-2.5 py-1 text-xs text-long">
-                  <span className="relative flex size-2">
-                    <span className="absolute inline-flex size-2 animate-ping rounded-full bg-long opacity-70" />
-                    <span className="relative inline-flex size-2 rounded-full bg-long" />
-                  </span>
-                  Live · {nextIn}s
+            <div className="flex items-center gap-1.5 sm:gap-2">
+              <span className="bb-live-dot inline-flex items-center gap-1.5 rounded-md border border-long/30 bg-long/10 px-1.5 py-0.5 text-[10px] text-long sm:px-2 sm:text-xs">
+                <span className="relative flex size-1.5">
+                  <span className="absolute inline-flex size-full animate-ping rounded-full bg-long opacity-70" />
+                  <span className="relative inline-flex size-full rounded-full bg-long" />
                 </span>
-                <ModeSwitch mode={mode} onChange={chooseMode} />
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => void load(true)}
-                  disabled={refreshing || loading}
-                >
-                  <RefreshCwIcon className={refreshing ? "animate-spin" : ""} />
-                  Actualiser
-                </Button>
-              </div>
-              {data ? (
-                <p className="text-xs text-muted-foreground">
-                  Maj {formatExactTime(data.fetchedAt)} · {formatAgo(data.fetchedAt, now)}
-                </p>
-              ) : null}
+                {nextIn}s
+              </span>
+              <ModeSwitch mode={mode} onChange={chooseMode} />
+              <Button type="button" size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={() => void load(true)} disabled={refreshing || loading}>
+                <RefreshCwIcon className={`size-3.5 ${refreshing ? "animate-spin" : ""}`} />
+              </Button>
             </div>
           </div>
 
-          <p className="text-sm text-muted-foreground">
-            Scan élargi des wallets HL (top ~18 actifs). Si une baleine clôture
-            pour en ouvrir une autre, la nouvelle apparaît au cycle suivant
-            (~20 s). Ce n’est pas du tick-par-tick comme le carnet Hyperliquid.
-          </p>
-
-          <div className="flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/8 px-3 py-2.5 text-sm text-amber-100/90">
-            <AlertTriangleIcon className="mt-0.5 size-4 shrink-0 text-amber-400" />
-            <p>
-              Pas un conseil financier. Les baleines peuvent changer de position
-              en quelques secondes. Un SL/TP n’est affiché que s’il est vraiment
-              posé.
-            </p>
-          </div>
-
-          <div className="flex items-start gap-3 rounded-xl border border-border bg-muted/40 px-3 py-2.5 text-sm">
-            <SmartphoneIcon className="mt-0.5 size-4 shrink-0 text-primary" />
-            <p>
-              <span className="font-medium">Sur téléphone et bureau :</span>{" "}
-              ouvrez cette page, puis installez-la pour l’utiliser comme une
-              app. iPhone : Partager → Sur l’écran d’accueil. Chrome / Android /
-              ordinateur : Installer dans la barre d’adresse.
-            </p>
-          </div>
-
-          <div className="relative z-30 flex flex-wrap gap-2">
-            <TabButton active={tab === "home"} onClick={() => goTab("home")}>
-              Accueil
-            </TabButton>
-            <TabButton active={tab === "whales"} onClick={() => goTab("whales")}>
-              Baleines perps
-            </TabButton>
-            <TabButton active={tab === "spot"} onClick={() => goTab("spot")}>
-              Spot & alertes
-              {data?.overview.shortWithSpotCount ? (
-                <span className="ml-1 rounded-full bg-short/20 px-1.5 text-[10px] text-short">
-                  {data.overview.shortWithSpotCount}
-                </span>
-              ) : null}
-            </TabButton>
-            <TabButton active={tab === "btc"} onClick={() => goTab("btc")}>
-              Analyse marché
-            </TabButton>
-            <TabButton active={tab === "macro"} onClick={() => goTab("macro")}>
-              Macro
-            </TabButton>
-            <TabButton active={tab === "lab"} onClick={() => goTab("lab")}>
-              Lab
-            </TabButton>
+          <div className="scrollbar-none -mx-1 flex gap-1 overflow-x-auto px-1">
+            <TabButton active={tab === "home"} onClick={() => goTab("home")}>Accueil</TabButton>
+            <TabButton active={tab === "whales"} onClick={() => goTab("whales")}>Baleines</TabButton>
+            <TabButton active={tab === "spot"} onClick={() => goTab("spot")}>Spot</TabButton>
+            <TabButton active={tab === "btc"} onClick={() => goTab("btc")}>Analyse</TabButton>
+            <TabButton active={tab === "macro"} onClick={() => goTab("macro")}>Macro</TabButton>
+            <TabButton active={tab === "lab"} onClick={() => goTab("lab")}>Lab</TabButton>
           </div>
 
           {tab === "whales" ? (

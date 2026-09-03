@@ -168,3 +168,11 @@ html {
 .bb-live-dot {
   animation: bb-live-pulse 2.2s ease-out infinite;
 }
+
+.scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
