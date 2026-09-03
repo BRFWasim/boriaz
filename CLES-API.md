@@ -20,10 +20,12 @@ Dans Cursor : bouton **Publish** (Vercel). Ou manuellement sur [vercel.com](http
 2. **COINGECKO_API_KEY** (optionnel)  
 3. **TELEGRAM_BOT_TOKEN** — `/start` à @BoriazBot puis lier dans l’app
 
-## Hors Hyperliquid (optionnel)
+## Hors Hyperliquid
 
-4. **ARKHAM_API_KEY** / **NANSEN_API_KEY** — labels / intel on-chain  
-   Sans ces clés : pas de vrai scan multi-CEX des wallets hors HL (APIs publiques limitées).
+4. **NANSEN_API_KEY** — smart money + leaderboard perps (déjà branché si présent dans `.env.local`)  
+5. **ARKHAM_API_KEY** — labels (optionnel)
+
+**Important :** ne colle jamais une clé API dans le chat en production longue — régénère-la sur Nansen si elle a fuité.
 
 ## Telegram — ce qui est notifié (filtre prioritaire)
 
