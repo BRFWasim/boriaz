@@ -32,6 +32,20 @@ import type { AppTab, DashboardPayload, SortKey, UiMode } from "@/lib/types";
 const POLL_MS = 20_000;
 const MODE_KEY = "hl-whales-ui-mode";
 
+const TAB_IDS: AppTab[] = ["home", "whales", "spot", "btc", "macro", "lab"];
+
+function parseTabHash(hash: string): AppTab | null {
+  const raw = hash.replace(/^#/, "").trim().toLowerCase();
+  if (!raw) return null;
+  // Alias FR / anciens liens
+  if (raw === "baleines" || raw === "baleines-perps" || raw === "perps") {
+    return "whales";
+  }
+  if (raw === "accueil") return "home";
+  if (raw === "analyse" || raw === "analyse-marche") return "btc";
+  return TAB_IDS.includes(raw as AppTab) ? (raw as AppTab) : null;
+}
+
 export function WhalesDashboard() {
   const [data, setData] = useState<DashboardPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -43,6 +57,26 @@ export function WhalesDashboard() {
   const [mode, setModeState] = useUiMode();
   const [tab, setTab] = useState<AppTab>("home");
   const [now, setNow] = useState(() => Date.now());
+
+  const goTab = useCallback((next: AppTab) => {
+    setTab(next);
+    if (typeof window !== "undefined") {
+      const want = `#${next}`;
+      if (window.location.hash !== want) {
+        window.history.replaceState(null, "", want);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    const sync = () => {
+      const parsed = parseTabHash(window.location.hash);
+      if (parsed) setTab(parsed);
+    };
+    sync();
+    window.addEventListener("hashchange", sync);
+    return () => window.removeEventListener("hashchange", sync);
+  }, []);
 
   const load = useCallback(async (silent = false) => {
     if (silent) setRefreshing(true);
@@ -207,14 +241,14 @@ export function WhalesDashboard() {
             </p>
           </div>
 
-          <div className="flex flex-wrap gap-2">
-            <TabButton active={tab === "home"} onClick={() => setTab("home")}>
+          <div className="relative z-30 flex flex-wrap gap-2">
+            <TabButton active={tab === "home"} onClick={() => goTab("home")}>
               Accueil
             </TabButton>
-            <TabButton active={tab === "whales"} onClick={() => setTab("whales")}>
+            <TabButton active={tab === "whales"} onClick={() => goTab("whales")}>
               Baleines perps
             </TabButton>
-            <TabButton active={tab === "spot"} onClick={() => setTab("spot")}>
+            <TabButton active={tab === "spot"} onClick={() => goTab("spot")}>
               Spot & alertes
               {data?.overview.shortWithSpotCount ? (
                 <span className="ml-1 rounded-full bg-short/20 px-1.5 text-[10px] text-short">
@@ -222,13 +256,13 @@ export function WhalesDashboard() {
                 </span>
               ) : null}
             </TabButton>
-            <TabButton active={tab === "btc"} onClick={() => setTab("btc")}>
+            <TabButton active={tab === "btc"} onClick={() => goTab("btc")}>
               Analyse marché
             </TabButton>
-            <TabButton active={tab === "macro"} onClick={() => setTab("macro")}>
+            <TabButton active={tab === "macro"} onClick={() => goTab("macro")}>
               Macro
             </TabButton>
-            <TabButton active={tab === "lab"} onClick={() => setTab("lab")}>
+            <TabButton active={tab === "lab"} onClick={() => goTab("lab")}>
               Lab
             </TabButton>
           </div>
@@ -323,7 +357,7 @@ export function WhalesDashboard() {
         ) : null}
 
         {tab === "home" ? (
-          <HomePanel onOpenTab={(t) => setTab(t as AppTab)} />
+          <HomePanel onOpenTab={(t) => goTab(t as AppTab)} />
         ) : null}
 
         {tab === "macro" ? <MacroPanel /> : null}
@@ -382,8 +416,13 @@ function TabButton({
   return (
     <button
       type="button"
-      onClick={onClick}
-      className={`inline-flex items-center rounded-lg border px-3 py-1.5 text-sm transition ${
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onClick();
+      }}
+      aria-pressed={active}
+      className={`relative z-30 inline-flex cursor-pointer items-center rounded-lg border px-3 py-1.5 text-sm transition ${
         active
           ? "border-primary/50 bg-primary/15 text-primary"
           : "border-border bg-muted/30 text-muted-foreground hover:bg-muted/50"
