@@ -144,10 +144,23 @@ export function computeTradeLevels(
     const distPct = price > 0 ? ((price - idealEntry) / price) * 100 : 0;
     const useMarket = preferMarket || distPct < 0.35;
     const entry = useMarket ? price : idealEntry;
-    const tp = entry + atr * 2.0;
-    const sl = Math.min(entry - atr * 1.0, (ind.support ?? entry) - atr * 0.25);
-    const risk = Math.abs(entry - sl) || atr;
-    const reward = Math.abs(tp - entry);
+    // Stop borné : on respecte le support proche mais on ne laisse JAMAIS le
+    // stop s'élargir au-delà de ~1.7 ATR (sinon le R:R s'effondre et aucun
+    // portefeuille ne peut prendre le trade).
+    const baseStop = atr * 1.1;
+    const maxStop = atr * 1.7;
+    let slDist = baseStop;
+    const sup = ind.support;
+    if (sup !== null && sup > 0 && sup < entry) {
+      const supDist = entry - sup + atr * 0.2;
+      slDist = Math.min(maxStop, Math.max(baseStop, Math.min(supDist, maxStop)));
+    }
+    slDist = Math.min(Math.max(slDist, atr * 0.8), maxStop);
+    const sl = entry - slDist;
+    // TP = au moins 2 ATR et au moins 1.9× le risque → R:R garanti ≥ 1.9.
+    const reward = Math.max(atr * 2.0, slDist * 1.9);
+    const tp = entry + reward;
+    const risk = slDist;
     return {
       entry,
       idealEntry,
@@ -172,10 +185,21 @@ export function computeTradeLevels(
   const distPct = price > 0 ? ((idealEntry - price) / price) * 100 : 0;
   const useMarket = preferMarket || distPct < 0.35;
   const entry = useMarket ? price : idealEntry;
-  const tp = entry - atr * 2.0;
-  const sl = Math.max(entry + atr * 1.0, (ind.resistance ?? entry) + atr * 0.25);
-  const risk = Math.abs(sl - entry) || atr;
-  const reward = Math.abs(entry - tp);
+  // Stop borné symétrique (short) : respecte la résistance proche sans laisser
+  // le risque dépasser ~1.7 ATR.
+  const baseStop = atr * 1.1;
+  const maxStop = atr * 1.7;
+  let slDist = baseStop;
+  const res = ind.resistance;
+  if (res !== null && res > 0 && res > entry) {
+    const resDist = res - entry + atr * 0.2;
+    slDist = Math.min(maxStop, Math.max(baseStop, Math.min(resDist, maxStop)));
+  }
+  slDist = Math.min(Math.max(slDist, atr * 0.8), maxStop);
+  const sl = entry + slDist;
+  const reward = Math.max(atr * 2.0, slDist * 1.9);
+  const tp = entry - reward;
+  const risk = slDist;
   return {
     entry,
     idealEntry,
