@@ -28,11 +28,11 @@ const INTERVAL_MS: Record<CandleInterval, number> = {
   "1d": 24 * 3600_000,
 };
 
-/** Combien de bougies charger par TF (économie API). */
+/** Combien de bougies charger par TF (≥220 pour EMA200). */
 const LOOKBACK: Record<CandleInterval, number> = {
-  "1h": 120,
-  "4h": 180,
-  "1d": 220,
+  "1h": 260,
+  "4h": 260,
+  "1d": 260,
 };
 
 export async function loadCandles(

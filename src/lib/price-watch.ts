@@ -110,6 +110,8 @@ function changeSince(
   now: number,
   windowMs: number,
 ): number | null {
+  const last = samples.at(-1);
+  if (!last || last.px <= 0) return null;
   const target = now - windowMs;
   let best: PriceSample | null = null;
   for (const s of samples) {
@@ -119,12 +121,112 @@ function changeSince(
   }
   if (!best) {
     const oldest = samples[0];
-    if (!oldest || now - oldest.t < windowMs * 0.5) return null;
+    // Accepte un historique partiel (≥35 % de la fenêtre).
+    if (!oldest || now - oldest.t < windowMs * 0.35) return null;
     best = oldest;
   }
-  const last = samples.at(-1);
-  if (!last || best.px <= 0) return null;
+  if (best.px <= 0) return null;
   return ((last.px - best.px) / best.px) * 100;
+}
+
+/** Fallback bougies 15m HL quand l’historique mids est encore trop court. */
+let candlePctCache: {
+  at: number;
+  byCoin: Record<
+    string,
+    {
+      change15mPct: number | null;
+      change1hPct: number | null;
+      change2hPct: number | null;
+      change24hPct: number | null;
+    }
+  >;
+} | null = null;
+const CANDLE_PCT_TTL_MS = 90_000;
+
+async function fetchCandlePctFallback(): Promise<
+  NonNullable<typeof candlePctCache>["byCoin"]
+> {
+  if (candlePctCache && Date.now() - candlePctCache.at < CANDLE_PCT_TTL_MS) {
+    return candlePctCache.byCoin;
+  }
+  const { fetchCandleSnapshot } = await import("./hyperliquid");
+  const now = Date.now();
+  const startTime = now - 26 * 60 * 60_000;
+  const byCoin: NonNullable<typeof candlePctCache>["byCoin"] = {};
+
+  await Promise.all(
+    WATCHLIST.map(async ({ coin }) => {
+      try {
+        const raw = await fetchCandleSnapshot({
+          coin,
+          interval: "15m",
+          startTime,
+          endTime: now,
+        });
+        const closes = raw.map((c) => ({ t: c.t, c: parseNum(c.c) }));
+        if (closes.length < 2) {
+          byCoin[coin] = {
+            change15mPct: null,
+            change1hPct: null,
+            change2hPct: null,
+            change24hPct: null,
+          };
+          return;
+        }
+        const last = closes.at(-1)!;
+        const pctAt = (ms: number): number | null => {
+          const target = last.t - ms;
+          let ref = closes[0]!;
+          for (const c of closes) {
+            if (c.t <= target) ref = c;
+          }
+          if (ref.c <= 0 || last.t - ref.t < ms * 0.5) return null;
+          return ((last.c - ref.c) / ref.c) * 100;
+        };
+        byCoin[coin] = {
+          change15mPct: pctAt(15 * 60_000),
+          change1hPct: pctAt(60 * 60_000),
+          change2hPct: pctAt(2 * 60 * 60_000),
+          change24hPct: pctAt(24 * 60 * 60_000),
+        };
+      } catch {
+        byCoin[coin] = {
+          change15mPct: null,
+          change1hPct: null,
+          change2hPct: null,
+          change24hPct: null,
+        };
+      }
+    }),
+  );
+
+  candlePctCache = { at: Date.now(), byCoin };
+  return byCoin;
+}
+
+async function enrichQuotes(
+  quotes: WatchlistQuote[],
+): Promise<WatchlistQuote[]> {
+  const need = quotes.some(
+    (q) =>
+      q.change15mPct === null ||
+      q.change1hPct === null ||
+      q.change2hPct === null,
+  );
+  if (!need) return quotes;
+  const fallback = await fetchCandlePctFallback();
+  return quotes.map((q) => {
+    const f = fallback[q.coin];
+    if (!f) return q;
+    return {
+      ...q,
+      change15mPct: q.change15mPct ?? f.change15mPct,
+      change1hPct: q.change1hPct ?? f.change1hPct,
+      change2hPct: q.change2hPct ?? f.change2hPct,
+      change24hPct: q.change24hPct ?? f.change24hPct,
+    };
+  });
 }
 
 function formatPxSmart(px: number): string {
@@ -180,7 +282,7 @@ export async function runPriceWatch(options?: {
     const state = await loadState();
 
     if (now - state.lastPollAt < MIN_POLL_GAP_MS && !options?.forceDigest) {
-      const quotes = buildQuotesFromState(state, now);
+      const quotes = await enrichQuotes(buildQuotesFromState(state, now));
       return {
         quotes,
         digestSent: false,
@@ -216,9 +318,10 @@ export async function runPriceWatch(options?: {
     }
     state.lastPollAt = now;
 
-    const quotes = buildQuotesFromState(state, now);
+    const quotes = await enrichQuotes(buildQuotesFromState(state, now));
 
     for (const q of quotes) {
+      // Spike « rapide » : priorise le move 15m (bougies ou mids).
       const move = q.change15mPct;
       if (move === null || move < SPIKE_PCT) continue;
       const last = state.lastSpikeAt[q.coin] ?? 0;
@@ -274,7 +377,7 @@ function buildQuotesFromState(
       coin,
       label,
       price,
-      change15mPct: changeSince(samples, now, SPIKE_WINDOW_MS),
+      change15mPct: changeSince(samples, now, 15 * 60_000),
       change1hPct: changeSince(samples, now, 60 * 60_000),
       change2hPct: changeSince(samples, now, 2 * 60 * 60_000),
       change24hPct: changeSince(samples, now, 24 * 60 * 60_000),
@@ -289,8 +392,9 @@ export async function getWatchlistSnapshot(): Promise<{
 }> {
   const state = await loadState();
   const now = Date.now();
+  const quotes = await enrichQuotes(buildQuotesFromState(state, now));
   return {
-    quotes: buildQuotesFromState(state, now),
+    quotes,
     nextDigestAt: state.lastDigestAt + DIGEST_EVERY_MS,
     lastDigestAt: state.lastDigestAt,
   };
