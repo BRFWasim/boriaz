@@ -930,15 +930,15 @@ export async function getTradeSignals(options?: {
     if (pf.requireAiGate && !signal.aiVerified) {
       return { ok: false, why: "Gate IA refusée / absente" };
     }
-    if (signal.confidence < 62 || signal.certainty === "basse") {
-      return { ok: false, why: "Confiance trop basse" };
-    }
-    const minAlign = pf.riskLevel <= 2 ? 58 : pf.riskLevel >= 4 ? 48 : 52;
+    const minAlign = pf.riskLevel <= 2 ? 58 : pf.riskLevel >= 5 ? 50 : 52;
     if (signal.alignment.score < minAlign) {
       return {
         ok: false,
         why: `Alignement ${signal.alignment.score} < ${minAlign} (risque ${pf.riskLevel})`,
       };
+    }
+    if (signal.confidence < (pf.riskLevel >= 4 ? 65 : 62) || signal.certainty === "basse") {
+      return { ok: false, why: "Confiance trop basse pour ce risque" };
     }
     if (!tfAligned(signal, pf)) {
       return {

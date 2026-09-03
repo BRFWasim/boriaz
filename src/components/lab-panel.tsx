@@ -163,13 +163,15 @@ export function LabPanel() {
           })
         : kind === "risky"
           ? makeCustomPortfolio({
-              name: "Risqué",
+              name: "Risqué (rentable)",
               timeframe: "1h",
-              riskLevel: 5,
-              maxLeverage: 7,
-              minRR: 1,
-              tradesPerDay: 10,
-              sizePct: 12,
+              riskLevel: 4,
+              maxLeverage: 5,
+              minRR: 1.8,
+              tradesPerDay: 6,
+              sizePct: 8,
+              maxLossEur: 120,
+              targetEur: 250,
               maxSafetyMode: false,
               requireAiGate: true,
             })
@@ -402,7 +404,7 @@ export function LabPanel() {
                 + Scalp 1h
               </Button>
               <Button size="sm" variant="outline" onClick={() => addPortfolio("risky")}>
-                + Risqué
+                + Risqué (rentable)
               </Button>
               <Button size="sm" variant="outline" onClick={() => addPortfolio("swing")}>
                 + Swing 1d

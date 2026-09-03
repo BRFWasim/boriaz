@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { ChevronDownIcon } from "lucide-react";
 import { CryptoLogo } from "@/components/crypto-logo";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { formatPct, formatPx, signedClass } from "@/lib/format";
-import type { HomePayload } from "@/lib/home";
+import type { HomePayload, PortfolioHomeView } from "@/lib/home";
 import type { PaperAccount, PaperTrade } from "@/lib/user-types";
 import { syncPaperFromBrowser, writeLocalPaper } from "@/lib/paper-local";
 
@@ -24,6 +25,9 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [liveAt, setLiveAt] = useState<number | null>(null);
+  const [openPf, setOpenPf] = useState<Record<string, boolean>>({
+    default: true,
+  });
 
   function mergePaper(next: PaperTrade[] | undefined) {
     if (!next?.length) return;
@@ -142,6 +146,31 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
   const heroTrade = openTrades[0] ?? null;
   const bestAlign = data.best?.alignment;
 
+  const portfolioViews: PortfolioHomeView[] = (data.portfolios?.length
+    ? data.portfolios
+    : []
+  ).map((pf) => {
+    const trades = paperLive.filter(
+      (t) => (t.portfolioId || "default") === pf.profile.id,
+    );
+    const open = trades.filter(
+      (t) => t.status === "open" || t.status === "pending",
+    );
+    return {
+      ...pf,
+      openTrades: open,
+      account: {
+        ...pf.account,
+        openCount: open.filter((t) => t.status === "open").length,
+        pendingCount: open.filter((t) => t.status === "pending").length,
+      },
+    };
+  });
+
+  function togglePf(id: string) {
+    setOpenPf((prev) => ({ ...prev, [id]: !prev[id] }));
+  }
+
   return (
     <div className="space-y-6">
       <section className="bb-reveal relative overflow-hidden rounded-[1.75rem] border border-white/10 px-5 py-8 sm:px-8 sm:py-10">
@@ -211,157 +240,6 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
               className={signedClass(acc.equityEur - acc.bankrollStartEur)}
             />
           </div>
-
-          <p className="mt-5 text-[0.65rem] tracking-[0.22em] text-muted-foreground uppercase">
-            Portefeuilles
-          </p>
-          {data.portfolios?.length ? (
-            <div className="mt-2 grid gap-2 sm:grid-cols-2">
-              {data.portfolios.map((pf) => (
-                <div
-                  key={pf.profile.id}
-                  className="rounded-xl border border-white/8 bg-background/30 px-3 py-2"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-sm font-medium">
-                      {pf.profile.name}
-                      {pf.profile.isDefault ? (
-                        <span className="ml-2 text-[10px] text-primary uppercase">
-                          défaut
-                        </span>
-                      ) : null}
-                    </p>
-                    <p className="text-[10px] text-muted-foreground">
-                      TF {pf.profile.timeframe} · risque {pf.profile.riskLevel}/5
-                    </p>
-                  </div>
-                  <div className="mt-1 flex flex-wrap gap-3 text-xs">
-                    <span>
-                      Equity{" "}
-                      <strong className={signedClass(pf.account.equityEur - pf.account.bankrollStartEur)}>
-                        {pf.account.equityEur.toFixed(2)} €
-                      </strong>
-                    </span>
-                    <span>
-                      Δ{" "}
-                      <strong className={signedClass(pf.account.equityEur - pf.account.bankrollStartEur)}>
-                        {(pf.account.equityEur - pf.account.bankrollStartEur >= 0 ? "+" : "")}
-                        {(pf.account.equityEur - pf.account.bankrollStartEur).toFixed(2)} €
-                      </strong>
-                    </span>
-                    <span className="text-muted-foreground">
-                      {pf.openTrades.length} ouvert
-                      {pf.openTrades.length > 1 ? "s" : ""}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : null}
-
-          <p className="mt-5 text-[0.65rem] tracking-[0.22em] text-muted-foreground uppercase">
-            Carnet — trades proposés / ouverts / clos
-          </p>
-          {paperLive.length > 0 ? (
-            <div className="mt-2 overflow-x-auto">
-              <table className="w-full min-w-[44rem] text-left text-sm">
-                <thead className="text-[10px] tracking-wide text-muted-foreground uppercase">
-                  <tr>
-                    <th className="py-2 pr-2">Coin</th>
-                    <th className="py-2 pr-2">Portefeuille</th>
-                    <th className="py-2 pr-2">Côté</th>
-                    <th className="py-2 pr-2">Lev.</th>
-                    <th className="py-2 pr-2">Marge</th>
-                    <th className="py-2 pr-2">Entrée</th>
-                    <th className="py-2 pr-2">Spot</th>
-                    <th className="py-2 pr-2">TP</th>
-                    <th className="py-2 pr-2">SL</th>
-                    <th className="py-2 pr-2">PnL</th>
-                    <th className="py-2 pr-2">Si TP</th>
-                    <th className="py-2 pr-2">Si SL</th>
-                    <th className="py-2">Statut</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {paperLive.map((t) => (
-                    <tr key={t.id} className="border-t border-white/8 align-top">
-                      <td className="py-2.5 pr-2">
-                        <span className="inline-flex items-center gap-2 font-medium">
-                          <CryptoLogo symbol={t.coin} size={22} />
-                          {t.coin}
-                        </span>
-                        {t.justification?.summary ? (
-                          <p className="mt-1 max-w-[14rem] text-[10px] leading-snug text-muted-foreground">
-                            {t.justification.summary}
-                          </p>
-                        ) : t.note ? (
-                          <p className="mt-1 max-w-[14rem] text-[10px] leading-snug text-muted-foreground">
-                            {t.note}
-                          </p>
-                        ) : null}
-                      </td>
-                      <td className="py-2.5 pr-2 text-xs text-muted-foreground">
-                        {t.portfolioName || "Défaut"}
-                      </td>
-                      <td
-                        className={`py-2.5 pr-2 font-semibold ${
-                          t.side === "long" ? "text-long" : "text-short"
-                        }`}
-                      >
-                        {t.side.toUpperCase()}
-                      </td>
-                      <td className="numeric py-2.5 pr-2">{t.leverage}×</td>
-                      <td className="numeric py-2.5 pr-2">
-                        {t.marginEur.toFixed(0)} €
-                      </td>
-                      <td className="numeric py-2.5 pr-2">{formatPx(t.entry)}</td>
-                      <td className="numeric py-2.5 pr-2">
-                        {t.markPx != null ? formatPx(t.markPx) : "—"}
-                      </td>
-                      <td className="numeric py-2.5 pr-2 text-long">
-                        {formatPx(t.tp)}
-                      </td>
-                      <td className="numeric py-2.5 pr-2 text-short">
-                        {formatPx(t.sl)}
-                      </td>
-                      <td
-                        className={`numeric py-2.5 pr-2 font-semibold ${signedClass(t.pnlEur ?? 0)}`}
-                      >
-                        {t.status === "pending"
-                          ? "—"
-                          : `${(t.pnlEur ?? 0) >= 0 ? "+" : ""}${(t.pnlEur ?? 0).toFixed(2)} €`}
-                      </td>
-                      <td className="numeric py-2.5 pr-2 text-long">
-                        {(() => {
-                          const move =
-                            t.side === "long"
-                              ? ((t.tp - t.entry) / t.entry) * 100
-                              : ((t.entry - t.tp) / t.entry) * 100;
-                          return `+${(t.marginEur * move * t.leverage / 100).toFixed(2)} €`;
-                        })()}
-                      </td>
-                      <td className="numeric py-2.5 pr-2 text-short">
-                        {(() => {
-                          const move =
-                            t.side === "long"
-                              ? ((t.sl - t.entry) / t.entry) * 100
-                              : ((t.entry - t.sl) / t.entry) * 100;
-                          return `${(t.marginEur * move * t.leverage / 100).toFixed(2)} €`;
-                        })()}
-                      </td>
-                      <td className="py-2.5 text-xs uppercase text-muted-foreground">
-                        {t.status}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <p className="mt-3 text-xs text-muted-foreground">
-              Aucun trade encore — le prochain signal figera une ligne ici.
-            </p>
-          )}
         </section>
       ) : null}
 
@@ -684,6 +562,124 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
         ))}
       </div>
 
+      <section className="bb-reveal space-y-3">
+        <div>
+          <h2 className="font-heading text-lg font-semibold">Portefeuilles</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Défaut toujours actif. Déplie pour voir equity, paramètres et trades
+            de chaque profil (réglages dans le Lab).
+          </p>
+        </div>
+        {portfolioViews.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            Aucun portefeuille — ouvre le Lab pour en créer.
+          </p>
+        ) : (
+          portfolioViews.map((pf) => {
+            const expanded = openPf[pf.profile.id] ?? false;
+            const delta = pf.account.equityEur - pf.account.bankrollStartEur;
+            const trades = paperLive.filter(
+              (t) => (t.portfolioId || "default") === pf.profile.id,
+            );
+            return (
+              <div
+                key={pf.profile.id}
+                className="rounded-2xl border border-white/10 bg-card/40"
+              >
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
+                  onClick={() => togglePf(pf.profile.id)}
+                  aria-expanded={expanded}
+                >
+                  <div className="min-w-0">
+                    <p className="font-medium">
+                      {pf.profile.name}
+                      {pf.profile.isDefault ? (
+                        <span className="ml-2 text-[10px] tracking-wide text-primary uppercase">
+                          défaut
+                        </span>
+                      ) : null}
+                    </p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      TF {pf.profile.timeframe} · risque {pf.profile.riskLevel}/5
+                      · lev max {pf.profile.maxLeverage}× · R:R ≥ {pf.profile.minRR}
+                      · {trades.filter((t) => t.status === "open" || t.status === "pending").length}{" "}
+                      ouvert
+                      {trades.filter((t) => t.status === "open" || t.status === "pending").length > 1
+                        ? "s"
+                        : ""}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-3">
+                    <div className="text-right">
+                      <p
+                        className={`numeric text-sm font-semibold ${signedClass(delta)}`}
+                      >
+                        {pf.account.equityEur.toFixed(2)} €
+                      </p>
+                      <p className={`numeric text-[11px] ${signedClass(delta)}`}>
+                        {delta >= 0 ? "+" : ""}
+                        {delta.toFixed(2)} €
+                      </p>
+                    </div>
+                    <ChevronDownIcon
+                      className={`size-4 text-muted-foreground transition-transform ${
+                        expanded ? "rotate-180" : ""
+                      }`}
+                    />
+                  </div>
+                </button>
+
+                {expanded ? (
+                  <div className="space-y-3 border-t border-white/8 px-4 py-3">
+                    <div className="grid gap-2 sm:grid-cols-4 text-xs">
+                      <Stat
+                        label="Capital"
+                        value={`${pf.profile.bankrollEur} €`}
+                      />
+                      <Stat
+                        label="Marge / trade"
+                        value={`${pf.profile.sizePct} %`}
+                      />
+                      <Stat
+                        label="Trades / jour"
+                        value={`${pf.profile.tradesPerDay || "∞"}`}
+                      />
+                      <Stat
+                        label="Perte max"
+                        value={`${pf.profile.maxLossEur} €`}
+                      />
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">
+                      {pf.profile.requireAiGate ? "Gate IA ON" : "Gate IA OFF"}
+                      {" · "}
+                      {pf.profile.maxSafetyMode
+                        ? "Sureté max ON"
+                        : "Sureté max OFF"}
+                      {" · "}
+                      Objectif {pf.profile.targetEur} €
+                    </p>
+
+                    {trades.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">
+                        Aucun trade sur ce portefeuille pour l’instant.
+                      </p>
+                    ) : (
+                      <div className="space-y-2">
+                        {trades.map((t) => (
+                          <PortfolioTradeRow key={t.id} trade={t} />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ) : null}
+              </div>
+            );
+          })
+        )}
+      </section>
+
       <div className="flex flex-wrap gap-2">
         <Button variant="outline" size="sm" onClick={() => onOpenTab?.("lab")}>
           Lab · paper & backtest
@@ -701,6 +697,99 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
 
       <p className="text-xs text-muted-foreground">{data.storage.note}</p>
       <p className="text-xs text-muted-foreground">{data.disclaimer}</p>
+    </div>
+  );
+}
+
+function PortfolioTradeRow({ trade: t }: { trade: PaperTrade }) {
+  const [openWhy, setOpenWhy] = useState(false);
+  const tpEur = (() => {
+    const move =
+      t.side === "long"
+        ? ((t.tp - t.entry) / t.entry) * 100
+        : ((t.entry - t.tp) / t.entry) * 100;
+    return (t.marginEur * move * t.leverage) / 100;
+  })();
+  const slEur = (() => {
+    const move =
+      t.side === "long"
+        ? ((t.sl - t.entry) / t.entry) * 100
+        : ((t.entry - t.sl) / t.entry) * 100;
+    return (t.marginEur * move * t.leverage) / 100;
+  })();
+  const rr = (() => {
+    const reward =
+      t.side === "long" ? t.tp - t.entry : t.entry - t.tp;
+    const risk =
+      t.side === "long" ? t.entry - t.sl : t.sl - t.entry;
+    return risk > 0 ? reward / risk : 0;
+  })();
+
+  return (
+    <div className="rounded-xl border border-white/8 bg-background/35 px-3 py-2.5">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <CryptoLogo symbol={t.coin} size={28} />
+          <div>
+            <p className="text-sm font-semibold">
+              <span
+                className={t.side === "long" ? "text-long" : "text-short"}
+              >
+                {t.side.toUpperCase()}
+              </span>{" "}
+              {t.coin}
+              <span className="ml-2 text-[10px] font-normal uppercase text-muted-foreground">
+                {t.status}
+              </span>
+            </p>
+            <p className="numeric text-[11px] text-muted-foreground">
+              Entrée {formatPx(t.entry)} · spot{" "}
+              {t.markPx != null ? formatPx(t.markPx) : "—"} · TP{" "}
+              {formatPx(t.tp)} · SL {formatPx(t.sl)}
+            </p>
+          </div>
+        </div>
+        <div className="text-right text-xs">
+          <p className={`numeric font-semibold ${signedClass(t.pnlEur ?? 0)}`}>
+            {t.status === "pending"
+              ? "en attente"
+              : `${(t.pnlEur ?? 0) >= 0 ? "+" : ""}${(t.pnlEur ?? 0).toFixed(2)} €`}
+          </p>
+          <p className="text-muted-foreground">
+            {t.leverage}× · marge {t.marginEur.toFixed(0)} € · R:R{" "}
+            {rr.toFixed(1)}
+          </p>
+          <p>
+            <span className="text-long">Si TP +{tpEur.toFixed(2)} €</span>
+            {" · "}
+            <span className="text-short">Si SL {slEur.toFixed(2)} €</span>
+          </p>
+        </div>
+      </div>
+      {(t.justification?.summary || t.note) && (
+        <div className="mt-2">
+          <button
+            type="button"
+            className="flex items-center gap-1 text-[11px] text-primary"
+            onClick={() => setOpenWhy((v) => !v)}
+          >
+            Pourquoi ce trade
+            <ChevronDownIcon
+              className={`size-3.5 transition-transform ${openWhy ? "rotate-180" : ""}`}
+            />
+          </button>
+          {openWhy ? (
+            <div className="mt-1 space-y-1 rounded-lg bg-muted/20 px-2 py-1.5 text-[11px] text-muted-foreground">
+              <p className="text-foreground">
+                {t.justification?.summary || t.note}
+              </p>
+              {(t.justification?.bullets ?? []).map((b) => (
+                <p key={b}>· {b}</p>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      )}
     </div>
   );
 }
