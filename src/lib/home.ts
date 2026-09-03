@@ -75,8 +75,9 @@ export async function getHomeSnapshot(): Promise<HomePayload> {
           change2hPct: null,
           change24hPct: null,
         })).filter((q) => q.price > 0),
-        fetchedAt: Date.now(),
-      } as Awaited<ReturnType<typeof getWatchlistSnapshot>>;
+        nextDigestAt: Date.now() + 2 * 3600_000,
+        lastDigestAt: 0,
+      };
       if (warning?.includes("429")) {
         warning = "HL rate-limit bougies — prix mids live OK, % 15m/2h en attente.";
       }
