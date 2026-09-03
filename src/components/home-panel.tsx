@@ -213,6 +213,53 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
           </div>
 
           <p className="mt-5 text-[0.65rem] tracking-[0.22em] text-muted-foreground uppercase">
+            Portefeuilles
+          </p>
+          {data.portfolios?.length ? (
+            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              {data.portfolios.map((pf) => (
+                <div
+                  key={pf.profile.id}
+                  className="rounded-xl border border-white/8 bg-background/30 px-3 py-2"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-medium">
+                      {pf.profile.name}
+                      {pf.profile.isDefault ? (
+                        <span className="ml-2 text-[10px] text-primary uppercase">
+                          défaut
+                        </span>
+                      ) : null}
+                    </p>
+                    <p className="text-[10px] text-muted-foreground">
+                      TF {pf.profile.timeframe} · risque {pf.profile.riskLevel}/5
+                    </p>
+                  </div>
+                  <div className="mt-1 flex flex-wrap gap-3 text-xs">
+                    <span>
+                      Equity{" "}
+                      <strong className={signedClass(pf.account.equityEur - pf.account.bankrollStartEur)}>
+                        {pf.account.equityEur.toFixed(2)} €
+                      </strong>
+                    </span>
+                    <span>
+                      Δ{" "}
+                      <strong className={signedClass(pf.account.equityEur - pf.account.bankrollStartEur)}>
+                        {(pf.account.equityEur - pf.account.bankrollStartEur >= 0 ? "+" : "")}
+                        {(pf.account.equityEur - pf.account.bankrollStartEur).toFixed(2)} €
+                      </strong>
+                    </span>
+                    <span className="text-muted-foreground">
+                      {pf.openTrades.length} ouvert
+                      {pf.openTrades.length > 1 ? "s" : ""}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          <p className="mt-5 text-[0.65rem] tracking-[0.22em] text-muted-foreground uppercase">
             Carnet — trades proposés / ouverts / clos
           </p>
           {paperLive.length > 0 ? (
@@ -221,6 +268,7 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
                 <thead className="text-[10px] tracking-wide text-muted-foreground uppercase">
                   <tr>
                     <th className="py-2 pr-2">Coin</th>
+                    <th className="py-2 pr-2">Portefeuille</th>
                     <th className="py-2 pr-2">Côté</th>
                     <th className="py-2 pr-2">Lev.</th>
                     <th className="py-2 pr-2">Marge</th>
@@ -236,12 +284,24 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
                 </thead>
                 <tbody>
                   {paperLive.map((t) => (
-                    <tr key={t.id} className="border-t border-white/8">
+                    <tr key={t.id} className="border-t border-white/8 align-top">
                       <td className="py-2.5 pr-2">
                         <span className="inline-flex items-center gap-2 font-medium">
                           <CryptoLogo symbol={t.coin} size={22} />
                           {t.coin}
                         </span>
+                        {t.justification?.summary ? (
+                          <p className="mt-1 max-w-[14rem] text-[10px] leading-snug text-muted-foreground">
+                            {t.justification.summary}
+                          </p>
+                        ) : t.note ? (
+                          <p className="mt-1 max-w-[14rem] text-[10px] leading-snug text-muted-foreground">
+                            {t.note}
+                          </p>
+                        ) : null}
+                      </td>
+                      <td className="py-2.5 pr-2 text-xs text-muted-foreground">
+                        {t.portfolioName || "Défaut"}
                       </td>
                       <td
                         className={`py-2.5 pr-2 font-semibold ${
@@ -475,6 +535,16 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
               {data.best.aiVerified ? "Gate IA ✓" : "Gate IA ✗"} ·{" "}
               {data.best.aiVerifyNote}
             </p>
+          ) : null}
+          {data.paperOpen?.[0]?.justification?.bullets?.length ? (
+            <ul className="mt-3 space-y-1 rounded-lg bg-background/35 px-3 py-2 text-xs text-muted-foreground">
+              <li className="font-medium text-foreground">
+                Pourquoi ce trade a été lancé
+              </li>
+              {data.paperOpen[0].justification.bullets.slice(0, 6).map((b) => (
+                <li key={b}>· {b}</li>
+              ))}
+            </ul>
           ) : null}
           {data.best.tfSummary ? (
             <p className="mt-1 text-xs text-muted-foreground">

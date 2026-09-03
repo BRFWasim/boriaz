@@ -11,6 +11,7 @@ import {
   appendBook,
   appendJournal,
   computePaperAccount,
+  ensurePortfolios,
   inHushHours,
   loadPrefs,
   openPaperTrade,
@@ -20,6 +21,8 @@ import {
   storageInfo,
   type PaperAccount,
   type PaperTrade,
+  type PortfolioProfile,
+  type TradeJustification,
 } from "./persist";
 import type { BookTrade } from "./user-types";
 import type { EntryMode } from "./user-types";
@@ -840,104 +843,223 @@ export async function getTradeSignals(options?: {
       best.alignment.tf1h4hAligned &&
       best.alignment.crowdWrOk);
 
-  const customMode = prefs.customTradingMode === true;
-  const minRR = customMode ? (prefs.customMinRR ?? 2) : 0;
-  const maxTradesDay = customMode ? (prefs.customTradesPerDay ?? 0) : 0;
-  const maxLossEur = customMode ? (prefs.customMaxLossEur ?? Infinity) : Infinity;
-
+  const portfolios = ensurePortfolios(prefs.portfolios).filter(
+    (p) => p.enabled && p.paperTradeEnabled && prefs.paperTradeEnabled,
+  );
   const paperForCheck = await loadPaperTrades();
-  const accCheck = computePaperAccount(paperForCheck, bankroll);
-  const lossExceeded = Number.isFinite(maxLossEur) && (bankroll - accCheck.equityEur) >= maxLossEur;
 
-  const todayTrades = maxTradesDay > 0
-    ? paperForCheck.filter((t) => Date.now() - t.openedAt < 24 * 3600_000).length
-    : 0;
-  const tradeLimitHit = maxTradesDay > 0 && todayTrades >= maxTradesDay;
+  function rrFor(
+    action: "long" | "short",
+    entry: number,
+    tp: number,
+    sl: number,
+  ): number {
+    const reward = action === "long" ? tp - entry : entry - tp;
+    const risk = action === "long" ? entry - sl : sl - entry;
+    return risk > 0 ? reward / risk : 0;
+  }
 
-  const rrOk =
-    !best?.entry || !best?.tp || !best?.sl || minRR <= 0
-      ? true
-      : (() => {
-          const reward =
-            best.action === "long"
-              ? best.tp - best.entry
-              : best.entry - best.tp;
-          const risk =
-            best.action === "long"
-              ? best.entry - best.sl
-              : best.sl - best.entry;
-          return risk > 0 ? reward / risk >= minRR : true;
-        })();
+  function tfAligned(
+    signal: DirectionSignal,
+    pf: PortfolioProfile,
+  ): boolean {
+    const focus =
+      pf.timeframe === "15m"
+        ? "1h"
+        : pf.timeframe;
+    const vote = signal.tfVotes.find((v) => v.interval === focus);
+    if (!vote) return signal.alignedTf >= 1;
+    if (signal.action === "long") {
+      return vote.bias === "haussier" || vote.score >= 2;
+    }
+    return vote.bias === "baissier" || vote.score <= -2;
+  }
 
-  const shouldSim =
+  function buildJustification(
+    signal: DirectionSignal,
+    pf: PortfolioProfile,
+  ): TradeJustification {
+    const bullets = [
+      `Alignement ${signal.alignment.score}/100 (${signal.alignment.label}) — ${signal.alignment.breakdown}`,
+      signal.tfSummary ? `Multi-TF : ${signal.tfSummary}` : null,
+      signal.crowdWr != null
+        ? `Crowd wallets WR ~ ${signal.crowdWr.toFixed(0)} %`
+        : "Crowd wallets : pas de consensus qualité",
+      `Nansen long ${signal.nansenLong} / short ${signal.nansenShort}`,
+      signal.aiVerified
+        ? `Gate IA ✓ ${signal.aiVerifyNote || "confirmé"}`
+        : `Gate IA ✗ ${signal.aiVerifyNote || "non confirmé"}`,
+      `Portefeuille « ${pf.name} » · TF ${pf.timeframe} · risque ${pf.riskLevel}/5 · R:R min ${pf.minRR}`,
+      signal.entryHint || null,
+      `Invalidation : ${signal.invalidation}`,
+    ].filter(Boolean) as string[];
+
+    const summary = [
+      `On lance ${signal.action.toUpperCase()} ${signal.coin} sur « ${pf.name} »`,
+      `parce que Alignement ${signal.alignment.score}/100`,
+      signal.aiVerified ? "et gate IA validée" : "mais gate IA absente",
+      `· horizon ${pf.timeframe}`,
+      signal.crowdWr != null
+        ? `· crowd WR ${signal.crowdWr.toFixed(0)}%`
+        : "",
+      `.`,
+    ]
+      .filter(Boolean)
+      .join(" ");
+
+    return {
+      summary,
+      bullets,
+      alignmentScore: signal.alignment.score,
+      aiVerified: signal.aiVerified,
+      aiNote: signal.aiVerifyNote,
+      portfolioId: pf.id,
+      portfolioName: pf.name,
+      timeframe: pf.timeframe,
+      triggeredAt: Date.now(),
+    };
+  }
+
+  function portfolioAllows(
+    signal: DirectionSignal,
+    pf: PortfolioProfile,
+  ): { ok: boolean; why: string } {
+    if (signal.action === "wait" || !signal.entry || !signal.tp || !signal.sl) {
+      return { ok: false, why: "Pas de setup actionnable" };
+    }
+    if (pf.requireAiGate && !signal.aiVerified) {
+      return { ok: false, why: "Gate IA refusée / absente" };
+    }
+    if (signal.confidence < 62 || signal.certainty === "basse") {
+      return { ok: false, why: "Confiance trop basse" };
+    }
+    const minAlign = pf.riskLevel <= 2 ? 58 : pf.riskLevel >= 4 ? 48 : 52;
+    if (signal.alignment.score < minAlign) {
+      return {
+        ok: false,
+        why: `Alignement ${signal.alignment.score} < ${minAlign} (risque ${pf.riskLevel})`,
+      };
+    }
+    if (!tfAligned(signal, pf)) {
+      return {
+        ok: false,
+        why: `TF focus ${pf.timeframe} non aligné avec ${signal.action}`,
+      };
+    }
+    const rr = rrFor(signal.action, signal.entry, signal.tp, signal.sl);
+    if (rr < pf.minRR) {
+      return { ok: false, why: `R:R ${rr.toFixed(2)} < min ${pf.minRR}` };
+    }
+    if (pf.maxSafetyMode && !signal.alignment.tf1h4hAligned) {
+      const dOk = signal.tfVotes.some(
+        (v) =>
+          v.interval === "1d" &&
+          (v.bias === "haussier" || v.bias === "baissier"),
+      );
+      if (!dOk) return { ok: false, why: "Sureté max : 1h+4h / 1d manquant" };
+    }
+    const acc = computePaperAccount(
+      paperForCheck,
+      pf.bankrollEur,
+      pf.id,
+    );
+    if (Number.isFinite(pf.maxLossEur) && pf.maxLossEur > 0) {
+      const loss = pf.bankrollEur - acc.equityEur;
+      if (loss >= pf.maxLossEur) {
+        return { ok: false, why: `Perte max ${pf.maxLossEur} € atteinte` };
+      }
+    }
+    if (pf.tradesPerDay > 0) {
+      const today = paperForCheck.filter(
+        (t) =>
+          (t.portfolioId || "default") === pf.id &&
+          Date.now() - t.openedAt < 24 * 3600_000,
+      ).length;
+      if (today >= pf.tradesPerDay) {
+        return { ok: false, why: `Limite ${pf.tradesPerDay} trades/jour` };
+      }
+    }
+    return { ok: true, why: "OK" };
+  }
+
+  const shouldSimBase =
     best &&
     best.action !== "wait" &&
-    best.aiVerified === true &&
     best.confidence >= 62 &&
     best.certainty !== "basse" &&
-    best.alignment.score >= 52 &&
     best.entry &&
     best.tp &&
-    best.sl &&
-    rrOk &&
-    !lossExceeded &&
-    !tradeLimitHit &&
-    (!maxSafety ||
-      best.alignment.tf1h4hAligned ||
-      best.tfVotes.some((v) => v.interval === "1d" && (v.bias === "haussier" || v.bias === "baissier")));
+    best.sl;
 
-  if (shouldSim && prefs.paperTradeEnabled && options?.notify !== false) {
-    const levNum = Number(String(best!.leverage).match(/[\d.]+/)?.[0] || 1);
-    const sizeNum = Math.max(
-      10,
-      Number(String(best!.sizePct).match(/[\d.]+/)?.[0] || 10),
-    );
-    const side = best!.action === "short" ? "short" : "long";
-    const opened = await openPaperTrade({
-      openedAt: Date.now(),
-      coin: best!.coin,
-      side,
-      entry: best!.entry!,
-      tp: best!.tp!,
-      sl: best!.sl!,
-      leverage: levNum,
-      sizePct: sizeNum,
-      entryMode: best!.entryMode ?? "market_now",
-      note: `Simu auto 1000€ · Align ${best!.alignment.score} · IA✓`,
-      bankrollEur: bankroll,
-      markPx: best!.price,
-    });
-    if (opened && !opened.note.includes("Cash insuffisant")) {
-      await appendBook({
-        id: opened.id,
-        at: opened.openedAt,
-        coin: opened.coin,
-        side: opened.side,
-        entry: opened.entry,
-        tp: opened.tp,
-        sl: opened.sl,
-        leverage: opened.leverage,
-        marginEur: opened.marginEur,
-        notionalEur: opened.notionalEur,
-        sizePct: opened.sizePct,
-        alignment: best!.alignment.score,
-        reason: best!.reason,
+  let anyOpened = false;
+  if (shouldSimBase && prefs.paperTradeEnabled !== false && best) {
+    const side = best.action === "short" ? "short" : "long";
+    for (const pf of portfolios) {
+      const gate = portfolioAllows(best, pf);
+      if (!gate.ok) continue;
+      const justification = buildJustification(best, pf);
+      const levNum = Math.min(
+        pf.maxLeverage,
+        Number(String(best.leverage).match(/[\d.]+/)?.[0] || 1),
+      );
+      const sizeNum = Math.max(1, Math.min(15, pf.sizePct || 10));
+      const opened = await openPaperTrade({
+        openedAt: Date.now(),
+        coin: best.coin,
+        side,
+        entry: best.entry!,
+        tp: best.tp!,
+        sl: best.sl!,
+        leverage: levNum,
+        sizePct: sizeNum,
+        entryMode: best.entryMode ?? "market_now",
+        note: justification.summary,
+        bankrollEur: pf.bankrollEur,
+        markPx: best.price,
+        portfolioId: pf.id,
+        portfolioName: pf.name,
+        justification,
       });
+      if (opened && !opened.note.includes("Cash insuffisant")) {
+        anyOpened = true;
+        await appendBook({
+          id: opened.id,
+          at: opened.openedAt,
+          coin: opened.coin,
+          side: opened.side,
+          entry: opened.entry,
+          tp: opened.tp,
+          sl: opened.sl,
+          leverage: opened.leverage,
+          marginEur: opened.marginEur,
+          notionalEur: opened.notionalEur,
+          sizePct: opened.sizePct,
+          alignment: best.alignment.score,
+          reason: justification.summary,
+          portfolioId: pf.id,
+          portfolioName: pf.name,
+          justification,
+        });
+        await appendJournal({
+          at: Date.now(),
+          coin: best.coin,
+          action: best.action,
+          confidence: best.confidence,
+          entry: best.entry!,
+          tp: best.tp!,
+          sl: best.sl!,
+          leverage: `${levNum}×`,
+          sizePct: `${sizeNum}%`,
+          reason: justification.summary,
+          source: `paper-sim:${pf.id}`,
+          portfolioId: pf.id,
+          justification: justification.bullets.join(" · "),
+        });
+      }
     }
-    await appendJournal({
-      at: Date.now(),
-      coin: best!.coin,
-      action: best!.action,
-      confidence: best!.confidence,
-      entry: best!.entry!,
-      tp: best!.tp!,
-      sl: best!.sl!,
-      leverage: best!.leverage,
-      sizePct: `${sizeNum}%`,
-      reason: `Simu · Align ${best!.alignment.score} · ${best!.aiText || best!.reason}`,
-      source: "paper-sim",
-    });
   }
+
+  const shouldSim = anyOpened;
 
   if (
     notify &&
@@ -951,30 +1073,15 @@ export async function getTradeSignals(options?: {
     const key = `${best.coin}:${best.action}:${Math.round(best.entry!)}:${Math.round(best.alignment.score / 5)}:${best.entryMode}`;
     if (key !== lastTgKey || Date.now() - lastTgAt > TG_COOLDOWN) {
       const paperNow = await loadPaperTrades();
-      const accNow = computePaperAccount(paperNow, bankroll);
-      const delta = accNow.equityEur - accNow.bankrollStartEur;
+      const latest = paperNow.find((t) => t.coin === best.coin) ?? null;
+      const j = latest?.justification;
       const text = [
         `SIGNAL ${best.action.toUpperCase()} · ${best.coin}`,
-        `SIMU 1000 € · equity ${accNow.equityEur.toFixed(2)} € (${delta >= 0 ? "+" : ""}${delta.toFixed(2)} €)`,
-        `Alignement ${best.alignment.score}/100 (${best.alignment.label})`,
-        best.alignment.breakdown,
-        maxSafety ? `Sureté max · 1h+4h / 1d` : "",
-        `Mode: ${best.entryMode === "limit_wait" ? "LIMITE (attendre le prix)" : "MARCHÉ (entrer maintenant)"}`,
-        `Confiance ${best.confidence}/100 · certitude ${best.certainty}`,
-        best.tfSummary ? `TF: ${best.tfSummary}` : "",
-        best.crowdWr != null ? `Crowd WR ~ ${best.crowdWr.toFixed(0)}%` : "",
-        `Entrée ~ ${best.entry}`,
-        best.idealEntry ? `Idéal limite ~ ${best.idealEntry}` : "",
-        `TP ~ ${best.tp}`,
-        `SL ~ ${best.sl}`,
-        `Levier: ${best.leverage}`,
-        `Mise simu: ~10 % du compte 1000 €`,
-        `Prix spot ~ ${best.price}`,
-        best.entryHint || "",
-        best.reason,
-        best.aiText ? `IA: ${best.aiText}` : "",
-        best.aiVerifyNote ? `Gate IA: ${best.aiVerifyNote}` : "",
-        `Invalidation: ${best.invalidation}`,
+        j?.summary || `Pourquoi : Align ${best.alignment.score} · IA ${best.aiVerified ? "OK" : "KO"}`,
+        ...(j?.bullets ?? []).slice(0, 6),
+        "",
+        `Mode: ${best.entryMode === "limit_wait" ? "LIMITE" : "MARCHÉ"}`,
+        `Entrée ~ ${best.entry} · TP ~ ${best.tp} · SL ~ ${best.sl}`,
         "",
         "Simulation paper — pas un ordre réel. Pas un conseil financier.",
       ]

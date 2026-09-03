@@ -1,15 +1,21 @@
-import { getTradeSignals, type DirectionSignal } from "./trade-signal";
-import { getWatchlistSnapshot } from "./price-watch";
-import { cryptoMeta } from "./crypto-meta";
 import {
   computePaperAccount,
+  ensurePortfolios,
   loadBook,
   loadPaperTrades,
   loadPrefs,
   storageInfo,
 } from "./persist";
-import type { BookTrade, PaperAccount, PaperTrade } from "./user-types";
+import type {
+  BookTrade,
+  PaperAccount,
+  PaperTrade,
+  PortfolioProfile,
+} from "./user-types";
 import type { AlignmentScore } from "./alignment";
+import { getTradeSignals, type DirectionSignal } from "./trade-signal";
+import { getWatchlistSnapshot } from "./price-watch";
+import { cryptoMeta } from "./crypto-meta";
 
 export interface HomeCard {
   coin: string;
@@ -39,6 +45,12 @@ export interface HomeCard {
   blurb: string;
 }
 
+export interface PortfolioHomeView {
+  profile: PortfolioProfile;
+  account: PaperAccount;
+  openTrades: PaperTrade[];
+}
+
 export interface HomePayload {
   cards: HomeCard[];
   best: DirectionSignal | null;
@@ -47,6 +59,7 @@ export interface HomePayload {
   paperOpen: PaperTrade[];
   paperAll: PaperTrade[];
   book: BookTrade[];
+  portfolios: PortfolioHomeView[];
   storage: { backend: "upstash" | "tmp"; note: string };
   maxSafetyMode: boolean;
   fetchedAt: number;
@@ -106,10 +119,29 @@ export async function getHomeSnapshot(): Promise<HomePayload> {
   }
 
   const prefs = await loadPrefs().catch(() => null);
-  const bankroll = prefs?.paperBankrollEur || 1000;
+  const portfolios = ensurePortfolios(prefs?.portfolios);
+  const bankroll =
+    portfolios.find((p) => p.isDefault)?.bankrollEur ||
+    prefs?.paperBankrollEur ||
+    1000;
   const paper = signals?.paper ?? (await loadPaperTrades().catch(() => []));
   const account = signals?.account ?? computePaperAccount(paper, bankroll);
   const storage = signals?.storage ?? storageInfo();
+  const portfolioViews: PortfolioHomeView[] = portfolios
+    .filter((p) => p.enabled)
+    .map((p) => ({
+      profile: p,
+      account: {
+        ...computePaperAccount(paper, p.bankrollEur, p.id),
+        portfolioId: p.id,
+        portfolioName: p.name,
+      },
+      openTrades: paper.filter(
+        (t) =>
+          (t.portfolioId || "default") === p.id &&
+          (t.status === "open" || t.status === "pending"),
+      ),
+    }));
 
   const byCoin = new Map((signals?.signals ?? []).map((s) => [s.coin, s]));
   const openByCoin = new Map(
@@ -153,7 +185,7 @@ export async function getHomeSnapshot(): Promise<HomePayload> {
       crowdWr: sig?.crowdWr ?? null,
       alignment: sig?.alignment ?? null,
       blurb: frozen
-        ? `Trade figé ${frozen.side.toUpperCase()} · marge ${frozen.marginEur.toFixed(0)} € · lev ${frozen.leverage}×`
+        ? `Trade figé ${frozen.side.toUpperCase()} · ${frozen.portfolioName || "Défaut"} · ${frozen.justification?.summary || frozen.note}`
         : sig?.aiText || sig?.reason || "Analyse en cours…",
     };
   });
@@ -174,18 +206,19 @@ export async function getHomeSnapshot(): Promise<HomePayload> {
     ),
     paperAll: paper.slice(0, 40),
     book: signals?.book ?? (await loadBook().catch(() => [])),
+    portfolios: portfolioViews,
     storage,
     maxSafetyMode: signals?.maxSafetyMode ?? prefs?.maxSafetyMode !== false,
     fetchedAt: Date.now(),
     disclaimer:
       signals?.disclaimer ??
-      "Suggestions éducatives. Paper = simulation 1000 €. Pas un conseil financier.",
+      "Suggestions éducatives. Paper = simulation multi-portefeuilles. Pas un conseil financier.",
     howto: {
       entry:
-        "Alignement (TF × crowd × Nansen × IA) d’abord. Entrée / TP / SL figés pour le setup. Spot live à part. Marché = maintenant ; Limite = attendre le prix.",
+        "Alignement (TF × crowd × Nansen × IA) + gate IA. Chaque trade a une justification. Marché = maintenant ; Limite = attendre.",
       paper:
-        "Paper 1000 € virtuel. Avec Upstash KV, le journal et le paper survivent aux redémarrages Vercel.",
-      live: "Prix ~4 s. Signaux / Alignement ~1–3 min. Sureté max = TG seulement si 1h+4h alignés et crowd WR.",
+        "Portefeuille Défaut toujours actif + portefeuilles perso (Lab). Upstash garde le paper.",
+      live: "Prix ~4 s. Signaux ~1–3 min. Tracking wallets + gate IA avant chaque simu.",
     },
     warning,
   };

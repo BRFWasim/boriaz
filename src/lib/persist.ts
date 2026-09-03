@@ -1,17 +1,33 @@
 import { promises as fs } from "fs";
 import {
   DEFAULT_PREFS,
+  ensurePortfolios,
+  makeCustomPortfolio,
   type EntryMode,
   type JournalEntry,
   type PaperAccount,
   type PaperTrade,
+  type TradeJustification,
   type UserPrefs,
 } from "./user-types";
 import { dataPath, ensureDataDir } from "./data-dir";
 import { kvBackend, kvGet, kvSet } from "./kv";
 
-export type { EntryMode, JournalEntry, PaperAccount, PaperTrade, UserPrefs };
-export { DEFAULT_PREFS };
+export type {
+  EntryMode,
+  JournalEntry,
+  PaperAccount,
+  PaperTrade,
+  TradeJustification,
+  UserPrefs,
+};
+export {
+  DEFAULT_PREFS,
+  DEFAULT_PORTFOLIO,
+  ensurePortfolios,
+  makeCustomPortfolio,
+} from "./user-types";
+export type { PortfolioProfile, TimeframeFocus } from "./user-types";
 
 /** Fallback mémoire si /tmp et Upstash échouent. */
 const mem = new Map<string, string>();
@@ -95,16 +111,52 @@ export async function loadPrefs(): Promise<UserPrefs> {
   try {
     const k = storeKeys();
     const raw = (await readText(k.prefs)) ?? (await readText(k.legacyPrefs));
-    if (!raw) return { ...DEFAULT_PREFS };
-    return { ...DEFAULT_PREFS, ...(JSON.parse(raw) as UserPrefs) };
+    if (!raw) return { ...DEFAULT_PREFS, portfolios: ensurePortfolios(null) };
+    const parsed = JSON.parse(raw) as UserPrefs;
+    const merged = { ...DEFAULT_PREFS, ...parsed };
+    // Migre l’ancien mode perso vers un portefeuille si besoin
+    let portfolios = ensurePortfolios(parsed.portfolios);
+    if (
+      parsed.customTradingMode &&
+      !portfolios.some((p) => p.id !== "default")
+    ) {
+      portfolios = ensurePortfolios([
+        ...portfolios,
+        makeCustomPortfolio({
+          id: "legacy-custom",
+          name: "Perso (migré)",
+          minRR: parsed.customMinRR ?? 2,
+          targetEur: parsed.customTargetEur ?? 200,
+          maxLossEur: parsed.customMaxLossEur ?? 100,
+          tradesPerDay: parsed.customTradesPerDay ?? 3,
+          bankrollEur: parsed.paperBankrollEur || 1000,
+          maxLeverage: parsed.maxLeverage || 3,
+          timeframe: "1h",
+          riskLevel: 3,
+        }),
+      ]);
+    }
+    merged.portfolios = portfolios;
+    merged.paperBankrollEur =
+      portfolios.find((p) => p.isDefault)?.bankrollEur ||
+      merged.paperBankrollEur ||
+      1000;
+    return merged;
   } catch {
-    return { ...DEFAULT_PREFS };
+    return { ...DEFAULT_PREFS, portfolios: ensurePortfolios(null) };
   }
 }
 
 export async function savePrefs(prefs: Partial<UserPrefs>): Promise<UserPrefs> {
   const cur = await loadPrefs();
-  const next = { ...cur, ...prefs };
+  const next: UserPrefs = { ...cur, ...prefs };
+  if (prefs.portfolios) {
+    next.portfolios = ensurePortfolios(prefs.portfolios);
+  } else {
+    next.portfolios = ensurePortfolios(cur.portfolios);
+  }
+  const def = next.portfolios.find((p) => p.isDefault);
+  if (def) next.paperBankrollEur = def.bankrollEur;
   await writeText(storeKeys().prefs, JSON.stringify(next, null, 2));
   return next;
 }
@@ -177,6 +229,9 @@ function normalizeTrade(raw: Partial<PaperTrade> & PaperTrade): PaperTrade {
     pnlPct: raw.pnlPct ?? null,
     pnlEur: raw.pnlEur ?? null,
     note: raw.note || "",
+    portfolioId: raw.portfolioId || "default",
+    portfolioName: raw.portfolioName || "Défaut (sûr)",
+    justification: raw.justification ?? null,
   };
 }
 
@@ -224,7 +279,11 @@ export async function mergePaperTrades(
 export function computePaperAccount(
   trades: PaperTrade[],
   bankrollStartEur = 1000,
+  portfolioId?: string,
 ): PaperAccount {
+  const scoped = portfolioId
+    ? trades.filter((t) => (t.portfolioId || "default") === portfolioId)
+    : trades;
   let realized = 0;
   let unrealized = 0;
   let marginUsed = 0;
@@ -234,7 +293,7 @@ export function computePaperAccount(
   let winCount = 0;
   let lossCount = 0;
 
-  for (const t of trades) {
+  for (const t of scoped) {
     if (t.status === "pending") {
       pendingCount += 1;
       marginUsed += t.marginEur;
@@ -268,6 +327,7 @@ export function computePaperAccount(
     closedCount,
     winCount,
     lossCount,
+    portfolioId,
   };
 }
 
@@ -284,9 +344,18 @@ export async function openPaperTrade(input: {
   note: string;
   bankrollEur?: number;
   markPx?: number;
+  portfolioId?: string;
+  portfolioName?: string;
+  justification?: TradeJustification | null;
 }): Promise<PaperTrade> {
   const trades = await loadPaperTrades();
-  const live = trades.filter((t) => t.status === "open" || t.status === "pending");
+  const pfId = input.portfolioId || "default";
+  const pfName = input.portfolioName || "Défaut (sûr)";
+  const live = trades.filter(
+    (t) =>
+      (t.status === "open" || t.status === "pending") &&
+      (t.portfolioId || "default") === pfId,
+  );
   const same = live.find((t) => t.coin === input.coin && t.side === input.side);
   if (same) return same;
   const opposite = live.find((t) => t.coin === input.coin && t.side !== input.side);
@@ -295,7 +364,7 @@ export async function openPaperTrade(input: {
   const bankroll = input.bankrollEur ?? 1000;
   const sizePct = Math.max(0.5, Math.min(15, input.sizePct || 10));
   const marginEur = (bankroll * sizePct) / 100;
-  const acc = computePaperAccount(trades, bankroll);
+  const acc = computePaperAccount(trades, bankroll, pfId);
   if (acc.cashEur < marginEur) {
     return (
       live[0] ?? {
@@ -319,12 +388,15 @@ export async function openPaperTrade(input: {
         pnlPct: 0,
         pnlEur: 0,
         note: "Cash insuffisant — trade non ouvert",
+        portfolioId: pfId,
+        portfolioName: pfName,
+        justification: input.justification ?? null,
       }
     );
   }
   const marketNow = input.entryMode === "market_now";
   const trade: PaperTrade = {
-    id: `pt-${input.openedAt}-${input.coin}-${input.side}`,
+    id: `pt-${input.openedAt}-${pfId}-${input.coin}-${input.side}`,
     openedAt: input.openedAt,
     filledAt: marketNow ? input.openedAt : null,
     coin: input.coin,
@@ -344,6 +416,9 @@ export async function openPaperTrade(input: {
     pnlPct: 0,
     pnlEur: 0,
     note: input.note,
+    portfolioId: pfId,
+    portfolioName: pfName,
+    justification: input.justification ?? null,
   };
   trades.unshift(trade);
   await savePaperTrades(trades);
@@ -387,9 +462,12 @@ export async function followBook(bankrollEur = 1000): Promise<PaperTrade[]> {
       leverage: b.leverage,
       sizePct: b.sizePct,
       entryMode: "market_now",
-      note: `Suivi carnet · ${b.reason}`.slice(0, 160),
-      bankrollEur,
+      note: `Suivi carnet · ${b.reason}`.slice(0, 220),
+      bankrollEur: bankrollEur || b.marginEur * 10 || 1000,
       markPx: b.entry,
+      portfolioId: b.portfolioId || "default",
+      portfolioName: b.portfolioName || "Défaut (sûr)",
+      justification: b.justification ?? null,
     });
   }
   return loadPaperTrades();
@@ -401,10 +479,19 @@ export async function appendBook(
   const list = await loadBook();
   if (list.some((b) => b.id === entry.id)) return list;
   const sameOpen = list.find(
-    (b) => b.coin === entry.coin && b.side === entry.side && Date.now() - b.at < 6 * 3600_000,
+    (b) =>
+      b.coin === entry.coin &&
+      b.side === entry.side &&
+      (b.portfolioId || "default") === (entry.portfolioId || "default") &&
+      Date.now() - b.at < 6 * 3600_000,
   );
   if (sameOpen) return list;
-  list.unshift(entry);
+  list.unshift({
+    ...entry,
+    portfolioId: entry.portfolioId || "default",
+    portfolioName: entry.portfolioName || "Défaut (sûr)",
+    justification: entry.justification ?? null,
+  });
   await writeText(storeKeys().book, JSON.stringify(list.slice(0, 80)));
   return list.slice(0, 80);
 }

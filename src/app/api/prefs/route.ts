@@ -1,7 +1,45 @@
-import { DEFAULT_PREFS, loadPrefs, savePrefs } from "@/lib/persist";
+import {
+  DEFAULT_PORTFOLIO,
+  DEFAULT_PREFS,
+  ensurePortfolios,
+  loadPrefs,
+  makeCustomPortfolio,
+  savePrefs,
+  type PortfolioProfile,
+} from "@/lib/persist";
 import { bindUserRequest } from "@/lib/bind-request";
 
 export const dynamic = "force-dynamic";
+
+function sanitizePortfolio(raw: Record<string, unknown>): PortfolioProfile | null {
+  const id = String(raw.id || "").trim();
+  if (!id) return null;
+  const base =
+    id === "default"
+      ? { ...DEFAULT_PORTFOLIO }
+      : makeCustomPortfolio({ id });
+  const tf = String(raw.timeframe || base.timeframe);
+  const timeframe =
+    tf === "15m" || tf === "1h" || tf === "4h" || tf === "1d" ? tf : base.timeframe;
+  return {
+    ...base,
+    name: String(raw.name || base.name).slice(0, 48),
+    isDefault: id === "default",
+    enabled: id === "default" ? true : Boolean(raw.enabled ?? true),
+    paperTradeEnabled: Boolean(raw.paperTradeEnabled ?? true),
+    bankrollEur: Math.min(100000, Math.max(100, Number(raw.bankrollEur) || 1000)),
+    maxLeverage: Math.min(10, Math.max(1, Number(raw.maxLeverage) || 3)),
+    sizePct: Math.min(15, Math.max(1, Number(raw.sizePct) || 10)),
+    minRR: Math.min(10, Math.max(0.5, Number(raw.minRR) || 1.5)),
+    targetEur: Math.max(10, Number(raw.targetEur) || 200),
+    maxLossEur: Math.max(10, Number(raw.maxLossEur) || 150),
+    tradesPerDay: Math.min(50, Math.max(0, Math.floor(Number(raw.tradesPerDay) || 5))),
+    timeframe,
+    riskLevel: Math.min(5, Math.max(1, Math.floor(Number(raw.riskLevel) || 2))),
+    requireAiGate: Boolean(raw.requireAiGate ?? true),
+    maxSafetyMode: Boolean(raw.maxSafetyMode ?? id === "default"),
+  };
+}
 
 export async function GET() {
   await bindUserRequest();
@@ -56,8 +94,17 @@ export async function POST(request: Request) {
     if (typeof body.customTradesPerDay === "number") {
       patch.customTradesPerDay = Math.max(0, Math.min(50, Math.floor(body.customTradesPerDay)));
     }
-    const prefs = await savePrefs(patch);
-    return Response.json({ prefs });
+    if (Array.isArray(body.portfolios)) {
+      const cleaned = (body.portfolios as Record<string, unknown>[])
+        .map((p) => sanitizePortfolio(p))
+        .filter((p): p is PortfolioProfile => Boolean(p))
+        .slice(0, 8);
+      patch.portfolios = ensurePortfolios(cleaned);
+      const def = (patch.portfolios as PortfolioProfile[]).find((p) => p.isDefault);
+      if (def) patch.paperBankrollEur = def.bankrollEur;
+    }
+    const prefs = await savePrefs(patch as Partial<typeof DEFAULT_PREFS>);
+    return Response.json({ prefs, ok: true });
   } catch (e) {
     return Response.json(
       { error: e instanceof Error ? e.message : "Prefs invalides" },

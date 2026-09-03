@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,12 +10,19 @@ import type {
   JournalEntry,
   PaperAccount,
   PaperTrade,
+  PortfolioProfile,
   UserPrefs,
 } from "@/lib/user-types";
 import type { BacktestPayload } from "@/lib/backtest";
 import type { CorrelationPayload } from "@/lib/correlation";
-import { DEFAULT_PREFS } from "@/lib/user-types";
+import {
+  DEFAULT_PREFS,
+  ensurePortfolios,
+  makeCustomPortfolio,
+} from "@/lib/user-types";
 import { syncPaperFromBrowser, writeLocalPaper } from "@/lib/paper-local";
+
+const PREFS_LS_KEY = "boriazbot-prefs-v1";
 
 export function LabPanel() {
   const [prefs, setPrefs] = useState<UserPrefs | null>(null);
@@ -34,8 +41,20 @@ export function LabPanel() {
   } | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const dirtyRef = useRef(false);
 
-  async function refresh() {
+  function patchPrefs(next: UserPrefs) {
+    dirtyRef.current = true;
+    setPrefs(next);
+    try {
+      localStorage.setItem(PREFS_LS_KEY, JSON.stringify(next));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function refresh(opts?: { forcePrefs?: boolean }) {
     try {
       const [p, j, pa, c] = await Promise.all([
         fetch("/api/prefs").then((r) => r.json()),
@@ -43,7 +62,15 @@ export function LabPanel() {
         fetch("/api/paper").then((r) => r.json()),
         fetch("/api/correlation").then((r) => r.json()),
       ]);
-      setPrefs(p.prefs ?? DEFAULT_PREFS);
+      if (!dirtyRef.current || opts?.forcePrefs) {
+        const serverPrefs = {
+          ...DEFAULT_PREFS,
+          ...(p.prefs ?? {}),
+          portfolios: ensurePortfolios(p.prefs?.portfolios),
+        } as UserPrefs;
+        setPrefs(serverPrefs);
+        dirtyRef.current = false;
+      }
       setJournal(j.entries ?? []);
       setPaper(pa.trades ?? []);
       setAccount(pa.account ?? null);
@@ -59,6 +86,20 @@ export function LabPanel() {
   }
 
   useEffect(() => {
+    try {
+      const raw = localStorage.getItem(PREFS_LS_KEY);
+      if (raw) {
+        const local = JSON.parse(raw) as UserPrefs;
+        dirtyRef.current = true;
+        setPrefs({
+          ...DEFAULT_PREFS,
+          ...local,
+          portfolios: ensurePortfolios(local.portfolios),
+        });
+      }
+    } catch {
+      /* ignore */
+    }
     void syncPaperFromBrowser().then(() => void refresh());
     const id = window.setInterval(() => void refresh(), 12_000);
     return () => window.clearInterval(id);
@@ -66,18 +107,96 @@ export function LabPanel() {
 
   async function savePrefs() {
     if (!prefs) return;
+    setSaving(true);
+    setMsg("Enregistrement…");
+    const payload = {
+      ...prefs,
+      portfolios: ensurePortfolios(prefs.portfolios),
+    };
     const res = await fetch("/api/prefs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(prefs),
+      body: JSON.stringify(payload),
     });
     const json = await res.json();
     if (res.ok) {
-      setPrefs(json.prefs);
-      setMsg("Préférences enregistrées");
+      dirtyRef.current = false;
+      const next = {
+        ...DEFAULT_PREFS,
+        ...json.prefs,
+        portfolios: ensurePortfolios(json.prefs?.portfolios),
+      } as UserPrefs;
+      setPrefs(next);
+      try {
+        localStorage.setItem(PREFS_LS_KEY, JSON.stringify(next));
+      } catch {
+        /* ignore */
+      }
+      setMsg("Préférences & portefeuilles enregistrés ✓");
     } else {
       setMsg(json.error || "Échec sauvegarde");
     }
+    setSaving(false);
+  }
+
+  function updatePortfolio(id: string, patch: Partial<PortfolioProfile>) {
+    if (!prefs) return;
+    const portfolios = ensurePortfolios(prefs.portfolios).map((p) =>
+      p.id === id ? { ...p, ...patch, id: p.id, isDefault: p.isDefault } : p,
+    );
+    patchPrefs({ ...prefs, portfolios });
+  }
+
+  function addPortfolio(kind: "scalp" | "risky" | "swing") {
+    if (!prefs) return;
+    const preset =
+      kind === "scalp"
+        ? makeCustomPortfolio({
+            name: "Scalp 1h",
+            timeframe: "1h",
+            riskLevel: 4,
+            maxLeverage: 5,
+            minRR: 1.2,
+            tradesPerDay: 12,
+            sizePct: 8,
+            maxSafetyMode: false,
+          })
+        : kind === "risky"
+          ? makeCustomPortfolio({
+              name: "Risqué",
+              timeframe: "1h",
+              riskLevel: 5,
+              maxLeverage: 7,
+              minRR: 1,
+              tradesPerDay: 10,
+              sizePct: 12,
+              maxSafetyMode: false,
+              requireAiGate: true,
+            })
+          : makeCustomPortfolio({
+              name: "Swing 1d",
+              timeframe: "1d",
+              riskLevel: 2,
+              maxLeverage: 2,
+              minRR: 2,
+              tradesPerDay: 3,
+              sizePct: 10,
+              maxSafetyMode: true,
+            });
+    patchPrefs({
+      ...prefs,
+      portfolios: ensurePortfolios([...prefs.portfolios, preset]),
+    });
+  }
+
+  function removePortfolio(id: string) {
+    if (!prefs || id === "default") return;
+    patchPrefs({
+      ...prefs,
+      portfolios: ensurePortfolios(
+        prefs.portfolios.filter((p) => p.id !== id),
+      ),
+    });
   }
 
   async function runBacktest(days: number) {
@@ -190,42 +309,13 @@ export function LabPanel() {
 
       {prefs ? (
         <section className="rounded-2xl border border-border/80 bg-card/60 p-4">
-          <h3 className="font-medium">Préférences</h3>
+          <h3 className="font-medium">Préférences globales</h3>
           <p className="mt-1 text-sm text-muted-foreground">
-            Levier max plafonne les suggestions. Cryptos suivies = watchlist
-            signaux. Hush hours = pas de Telegram la nuit (UTC). Paper auto =
-            chaque signal fort ouvre une simu.
+            Telegram, hush hours, watchlist. Les paramètres de trading sont
+            par portefeuille (ci-dessous). Clique <strong>Enregistrer</strong>
+            — le refresh auto n’écrase plus tes edits.
           </p>
           <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            <div>
-              <Label htmlFor="lev">Levier max</Label>
-              <Input
-                id="lev"
-                type="number"
-                min={1}
-                max={10}
-                value={prefs.maxLeverage}
-                onChange={(e) =>
-                  setPrefs({ ...prefs, maxLeverage: Number(e.target.value) })
-                }
-              />
-            </div>
-            <div>
-              <Label htmlFor="bank">Solde paper (€)</Label>
-              <Input
-                id="bank"
-                type="number"
-                min={100}
-                max={100000}
-                value={prefs.paperBankrollEur ?? 1000}
-                onChange={(e) =>
-                  setPrefs({
-                    ...prefs,
-                    paperBankrollEur: Number(e.target.value),
-                  })
-                }
-              />
-            </div>
             <div>
               <Label htmlFor="hushS">Hush hours début (UTC)</Label>
               <Input
@@ -235,7 +325,7 @@ export function LabPanel() {
                 max={23}
                 value={prefs.hushHoursStart}
                 onChange={(e) =>
-                  setPrefs({
+                  patchPrefs({
                     ...prefs,
                     hushHoursStart: Number(e.target.value),
                   })
@@ -251,7 +341,7 @@ export function LabPanel() {
                 max={23}
                 value={prefs.hushHoursEnd}
                 onChange={(e) =>
-                  setPrefs({ ...prefs, hushHoursEnd: Number(e.target.value) })
+                  patchPrefs({ ...prefs, hushHoursEnd: Number(e.target.value) })
                 }
               />
             </div>
@@ -261,7 +351,7 @@ export function LabPanel() {
                 id="coins"
                 value={prefs.watchCoins.join(", ")}
                 onChange={(e) =>
-                  setPrefs({
+                  patchPrefs({
                     ...prefs,
                     watchCoins: e.target.value
                       .split(",")
@@ -276,7 +366,7 @@ export function LabPanel() {
                 type="checkbox"
                 checked={prefs.telegramEnabled}
                 onChange={(e) =>
-                  setPrefs({ ...prefs, telegramEnabled: e.target.checked })
+                  patchPrefs({ ...prefs, telegramEnabled: e.target.checked })
                 }
               />
               Telegram activé
@@ -286,119 +376,256 @@ export function LabPanel() {
                 type="checkbox"
                 checked={prefs.paperTradeEnabled}
                 onChange={(e) =>
-                  setPrefs({ ...prefs, paperTradeEnabled: e.target.checked })
+                  patchPrefs({ ...prefs, paperTradeEnabled: e.target.checked })
                 }
               />
-              Paper trade auto
+              Paper trade auto (tous portefeuilles)
             </label>
-            <label className="flex items-center gap-2 text-sm sm:col-span-2">
-              <input
-                type="checkbox"
-                checked={prefs.maxSafetyMode !== false}
-                onChange={(e) =>
-                  setPrefs({ ...prefs, maxSafetyMode: e.target.checked })
-                }
-              />
-              Sureté max — TG seulement si 1h+4h alignés et crowd WR ≥58 %
-            </label>
+          </div>
+        </section>
+      ) : null}
+
+      {prefs ? (
+        <section className="rounded-2xl border border-primary/25 bg-primary/5 p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 className="font-medium">Portefeuilles paper</h3>
+              <p className="mt-1 text-sm text-muted-foreground">
+                <strong className="text-foreground">Défaut</strong> toujours
+                présent. Ajoute un perso (scalp 1h, risqué, swing…) — chaque
+                portefeuille a son capital, TF, R:R, risque. Visible à
+                l’Accueil.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" variant="outline" onClick={() => addPortfolio("scalp")}>
+                + Scalp 1h
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => addPortfolio("risky")}>
+                + Risqué
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => addPortfolio("swing")}>
+                + Swing 1d
+              </Button>
+            </div>
           </div>
 
-          <div className="mt-4 rounded-xl border border-border/60 bg-muted/20 p-3">
-            <label className="flex items-center gap-2 text-sm font-medium">
-              <input
-                type="checkbox"
-                checked={prefs.customTradingMode ?? false}
-                onChange={(e) =>
-                  setPrefs({ ...prefs, customTradingMode: e.target.checked })
-                }
-              />
-              Mode personnalisé (sinon le mode par défaut reste actif)
-            </label>
-            {prefs.customTradingMode ? (
-              <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                <div>
-                  <Label htmlFor="minRR">Risk/Reward minimum</Label>
-                  <Input
-                    id="minRR"
-                    type="number"
-                    step="0.5"
-                    min={0.5}
-                    max={10}
-                    value={prefs.customMinRR ?? 2}
-                    onChange={(e) =>
-                      setPrefs({ ...prefs, customMinRR: Number(e.target.value) })
-                    }
-                  />
-                  <p className="mt-1 text-[10px] text-muted-foreground">
-                    Trade ignoré si R:R &lt; cette valeur
-                  </p>
+          <div className="mt-4 space-y-4">
+            {ensurePortfolios(prefs.portfolios).map((pf) => (
+              <div
+                key={pf.id}
+                className="rounded-xl border border-border/70 bg-card/70 p-3"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Input
+                      className="h-8 max-w-[12rem]"
+                      value={pf.name}
+                      disabled={pf.isDefault}
+                      onChange={(e) =>
+                        updatePortfolio(pf.id, { name: e.target.value })
+                      }
+                    />
+                    {pf.isDefault ? (
+                      <Badge variant="outline">Obligatoire</Badge>
+                    ) : null}
+                    <label className="flex items-center gap-1.5 text-xs">
+                      <input
+                        type="checkbox"
+                        checked={pf.enabled}
+                        disabled={pf.isDefault}
+                        onChange={(e) =>
+                          updatePortfolio(pf.id, { enabled: e.target.checked })
+                        }
+                      />
+                      Actif
+                    </label>
+                    <label className="flex items-center gap-1.5 text-xs">
+                      <input
+                        type="checkbox"
+                        checked={pf.paperTradeEnabled}
+                        onChange={(e) =>
+                          updatePortfolio(pf.id, {
+                            paperTradeEnabled: e.target.checked,
+                          })
+                        }
+                      />
+                      Paper auto
+                    </label>
+                  </div>
+                  {!pf.isDefault ? (
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      onClick={() => removePortfolio(pf.id)}
+                    >
+                      Supprimer
+                    </Button>
+                  ) : null}
                 </div>
-                <div>
-                  <Label htmlFor="targetE">Objectif gain (€)</Label>
-                  <Input
-                    id="targetE"
-                    type="number"
-                    min={10}
-                    max={100000}
-                    value={prefs.customTargetEur ?? 200}
-                    onChange={(e) =>
-                      setPrefs({
-                        ...prefs,
-                        customTargetEur: Number(e.target.value),
-                      })
-                    }
-                  />
-                  <p className="mt-1 text-[10px] text-muted-foreground">
-                    Alerte quand equity atteint départ + ce montant
-                  </p>
-                </div>
-                <div>
-                  <Label htmlFor="maxLoss">Perte max (€)</Label>
-                  <Input
-                    id="maxLoss"
-                    type="number"
-                    min={10}
-                    max={100000}
-                    value={prefs.customMaxLossEur ?? 100}
-                    onChange={(e) =>
-                      setPrefs({
-                        ...prefs,
-                        customMaxLossEur: Number(e.target.value),
-                      })
-                    }
-                  />
-                  <p className="mt-1 text-[10px] text-muted-foreground">
-                    Stop le bot si perte dépasse ce montant
-                  </p>
-                </div>
-                <div>
-                  <Label htmlFor="tpd">Trades / jour max</Label>
-                  <Input
-                    id="tpd"
-                    type="number"
-                    min={0}
-                    max={50}
-                    value={prefs.customTradesPerDay ?? 3}
-                    onChange={(e) =>
-                      setPrefs({
-                        ...prefs,
-                        customTradesPerDay: Number(e.target.value),
-                      })
-                    }
-                  />
-                  <p className="mt-1 text-[10px] text-muted-foreground">
-                    0 = illimité
-                  </p>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                  <div>
+                    <Label>Capital (€)</Label>
+                    <Input
+                      type="number"
+                      min={100}
+                      value={pf.bankrollEur}
+                      onChange={(e) =>
+                        updatePortfolio(pf.id, {
+                          bankrollEur: Number(e.target.value),
+                        })
+                      }
+                    />
+                  </div>
+                  <div>
+                    <Label>Horizon TF</Label>
+                    <select
+                      className="flex h-8 w-full rounded-lg border border-border bg-background px-2 text-sm"
+                      value={pf.timeframe}
+                      onChange={(e) =>
+                        updatePortfolio(pf.id, {
+                          timeframe: e.target.value as PortfolioProfile["timeframe"],
+                        })
+                      }
+                    >
+                      <option value="15m">Très court (15m→1h)</option>
+                      <option value="1h">Court terme 1h</option>
+                      <option value="4h">Moyen 4h</option>
+                      <option value="1d">Swing 1d</option>
+                    </select>
+                  </div>
+                  <div>
+                    <Label>Risque 1–5</Label>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={5}
+                      value={pf.riskLevel}
+                      onChange={(e) =>
+                        updatePortfolio(pf.id, {
+                          riskLevel: Number(e.target.value),
+                        })
+                      }
+                    />
+                  </div>
+                  <div>
+                    <Label>Levier max</Label>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={10}
+                      value={pf.maxLeverage}
+                      onChange={(e) =>
+                        updatePortfolio(pf.id, {
+                          maxLeverage: Number(e.target.value),
+                        })
+                      }
+                    />
+                  </div>
+                  <div>
+                    <Label>Marge / trade (%)</Label>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={15}
+                      value={pf.sizePct}
+                      onChange={(e) =>
+                        updatePortfolio(pf.id, {
+                          sizePct: Number(e.target.value),
+                        })
+                      }
+                    />
+                  </div>
+                  <div>
+                    <Label>R:R min</Label>
+                    <Input
+                      type="number"
+                      step="0.1"
+                      min={0.5}
+                      value={pf.minRR}
+                      onChange={(e) =>
+                        updatePortfolio(pf.id, {
+                          minRR: Number(e.target.value),
+                        })
+                      }
+                    />
+                  </div>
+                  <div>
+                    <Label>Trades / jour</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={50}
+                      value={pf.tradesPerDay}
+                      onChange={(e) =>
+                        updatePortfolio(pf.id, {
+                          tradesPerDay: Number(e.target.value),
+                        })
+                      }
+                    />
+                  </div>
+                  <div>
+                    <Label>Perte max (€)</Label>
+                    <Input
+                      type="number"
+                      min={10}
+                      value={pf.maxLossEur}
+                      onChange={(e) =>
+                        updatePortfolio(pf.id, {
+                          maxLossEur: Number(e.target.value),
+                        })
+                      }
+                    />
+                  </div>
+                  <div>
+                    <Label>Objectif (€)</Label>
+                    <Input
+                      type="number"
+                      min={10}
+                      value={pf.targetEur}
+                      onChange={(e) =>
+                        updatePortfolio(pf.id, {
+                          targetEur: Number(e.target.value),
+                        })
+                      }
+                    />
+                  </div>
+                  <label className="flex items-center gap-2 text-xs sm:col-span-2">
+                    <input
+                      type="checkbox"
+                      checked={pf.requireAiGate}
+                      onChange={(e) =>
+                        updatePortfolio(pf.id, {
+                          requireAiGate: e.target.checked,
+                        })
+                      }
+                    />
+                    Gate IA obligatoire avant trade
+                  </label>
+                  <label className="flex items-center gap-2 text-xs sm:col-span-2">
+                    <input
+                      type="checkbox"
+                      checked={pf.maxSafetyMode}
+                      onChange={(e) =>
+                        updatePortfolio(pf.id, {
+                          maxSafetyMode: e.target.checked,
+                        })
+                      }
+                    />
+                    Sureté max (1h+4h / 1d)
+                  </label>
                 </div>
               </div>
-            ) : (
-              <p className="mt-2 text-xs text-muted-foreground">
-                Mode par défaut : Alignement + sureté max + R:R libre + pas de limite de trades.
-              </p>
-            )}
+            ))}
           </div>
-          <Button className="mt-3" size="sm" onClick={() => void savePrefs()}>
-            Enregistrer
+
+          <Button
+            className="mt-4"
+            size="sm"
+            disabled={saving}
+            onClick={() => void savePrefs()}
+          >
+            {saving ? "Enregistrement…" : "Enregistrer Lab"}
           </Button>
         </section>
       ) : null}
