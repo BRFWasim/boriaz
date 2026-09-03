@@ -7,8 +7,20 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { formatPct, formatPx, signedClass } from "@/lib/format";
 import type { HomePayload, PortfolioHomeView } from "@/lib/home";
-import type { PaperAccount, PaperTrade } from "@/lib/user-types";
+import type {
+  PaperAccount,
+  PaperTrade,
+  PortfolioProfile,
+  UserPrefs,
+} from "@/lib/user-types";
+import {
+  aggregatePaperAccount,
+  computePaperAccount,
+  ensurePortfolios,
+} from "@/lib/user-types";
 import { syncPaperFromBrowser, writeLocalPaper } from "@/lib/paper-local";
+
+const PREFS_LS_KEY = "boriazbot-prefs-v1";
 
 type SessionUser = {
   id: string;
@@ -25,6 +37,7 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [liveAt, setLiveAt] = useState<number | null>(null);
+  const [lsPortfolios, setLsPortfolios] = useState<PortfolioProfile[]>([]);
   const [openPf, setOpenPf] = useState<Record<string, boolean>>({
     default: true,
   });
@@ -43,6 +56,18 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
   useEffect(() => {
     let alive = true;
     async function loadFull() {
+      // Portefeuilles enregistrés côté navigateur (Lab) : garantit que scalp /
+      // risqué restent visibles même si une réponse serveur ne les renvoie pas
+      // (ex. scope utilisateur transitoire).
+      try {
+        const raw = localStorage.getItem(PREFS_LS_KEY);
+        if (raw && alive) {
+          const parsed = JSON.parse(raw) as UserPrefs;
+          setLsPortfolios(ensurePortfolios(parsed.portfolios));
+        }
+      } catch {
+        /* ignore */
+      }
       try {
         const res = await fetch("/api/home", { cache: "no-store" });
         const json = (await res.json()) as HomePayload & { error?: string };
@@ -139,33 +164,46 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
   }
   if (!data) return null;
 
-  const acc = account ?? data.account;
   const openTrades = paperLive.filter(
     (t) => t.status === "open" || t.status === "pending",
   );
   const heroTrade = openTrades[0] ?? null;
   const bestAlign = data.best?.alignment;
 
-  const portfolioViews: PortfolioHomeView[] = (data.portfolios?.length
-    ? data.portfolios
-    : []
-  ).map((pf) => {
-    const trades = paperLive.filter(
-      (t) => (t.portfolioId || "default") === pf.profile.id,
-    );
-    const open = trades.filter(
-      (t) => t.status === "open" || t.status === "pending",
+  // Union des profils serveur + navigateur → scalp/risqué toujours affichés,
+  // même si une réponse serveur transitoire ne renvoie que le défaut.
+  const profileMap = new Map<string, PortfolioProfile>();
+  for (const p of lsPortfolios) profileMap.set(p.id, p);
+  for (const pv of data.portfolios ?? [])
+    profileMap.set(pv.profile.id, pv.profile);
+  const mergedProfiles = ensurePortfolios([...profileMap.values()]).filter(
+    (p) => p.enabled,
+  );
+
+  // Chaque section ET le total sont calculés à partir des MÊMES trades live →
+  // plus de désync entre l'entête d'une section et ses lignes, ni de PnL total
+  // incohérent avec le détail.
+  const portfolioViews: PortfolioHomeView[] = mergedProfiles.map((profile) => {
+    const open = paperLive.filter(
+      (t) =>
+        (t.portfolioId || "default") === profile.id &&
+        (t.status === "open" || t.status === "pending"),
     );
     return {
-      ...pf,
+      profile,
       openTrades: open,
       account: {
-        ...pf.account,
-        openCount: open.filter((t) => t.status === "open").length,
-        pendingCount: open.filter((t) => t.status === "pending").length,
+        ...computePaperAccount(paperLive, profile.bankrollEur, profile.id),
+        portfolioId: profile.id,
+        portfolioName: profile.name,
       },
     };
   });
+
+  // Total = somme EXACTE des sections affichées (mêmes trades live).
+  const acc: PaperAccount = paperLive.length
+    ? aggregatePaperAccount(paperLive, mergedProfiles)
+    : (account ?? data.account);
 
   function togglePf(id: string) {
     setOpenPf((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -209,7 +247,8 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <p className="text-[0.65rem] tracking-[0.28em] text-primary uppercase">
-                Compte simu 1000 € · {user?.guest === false ? user.name : user?.name ?? "invité"}
+                Compte simu {acc.bankrollStartEur.toFixed(0)} € ·{" "}
+                {user?.guest === false ? user.name : user?.name ?? "invité"}
               </p>
               <p className="mt-1 max-w-xl text-sm text-muted-foreground">
                 Plusieurs trades en même temps sur le même capital. Un trade reste

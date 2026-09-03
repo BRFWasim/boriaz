@@ -176,6 +176,8 @@ export type EntryMode = "market_now" | "limit_wait";
 
 export interface PaperTrade {
   id: string;
+  /** true une fois la notif Telegram de clôture (TP/SL) envoyée. */
+  closeNotified?: boolean;
   openedAt: number;
   /** Moment où le prix a touché l’entrée (limit) ou = openedAt (market). */
   filledAt: number | null;
@@ -247,4 +249,124 @@ export interface PaperAccount {
   lossCount: number;
   portfolioId?: string;
   portfolioName?: string;
+}
+
+/**
+ * Compte paper d'UN book (start = bankroll de ce book). Si `portfolioId` est
+ * fourni, ne compte que les trades de ce portefeuille. Fonction pure (aucun
+ * accès disque) → réutilisable côté serveur ET client pour un rendu cohérent.
+ */
+export function computePaperAccount(
+  trades: PaperTrade[],
+  bankrollStartEur = 1000,
+  portfolioId?: string,
+): PaperAccount {
+  const scoped = portfolioId
+    ? trades.filter((t) => (t.portfolioId || "default") === portfolioId)
+    : trades;
+  let realized = 0;
+  let unrealized = 0;
+  let marginUsed = 0;
+  let openCount = 0;
+  let pendingCount = 0;
+  let closedCount = 0;
+  let winCount = 0;
+  let lossCount = 0;
+
+  for (const t of scoped) {
+    if (t.status === "pending") {
+      pendingCount += 1;
+      marginUsed += t.marginEur;
+      continue;
+    }
+    if (t.status === "open") {
+      openCount += 1;
+      marginUsed += t.marginEur;
+      unrealized += t.pnlEur ?? 0;
+      continue;
+    }
+    closedCount += 1;
+    const pnl = t.pnlEur ?? 0;
+    realized += pnl;
+    if (pnl > 0) winCount += 1;
+    else if (pnl < 0) lossCount += 1;
+  }
+
+  const cashEur = bankrollStartEur - marginUsed + realized;
+  const equityEur = cashEur + marginUsed + unrealized;
+
+  return {
+    bankrollStartEur,
+    equityEur,
+    cashEur,
+    marginUsedEur: marginUsed,
+    realizedPnlEur: realized,
+    unrealizedPnlEur: unrealized,
+    openCount,
+    pendingCount,
+    closedCount,
+    winCount,
+    lossCount,
+    portfolioId,
+  };
+}
+
+/**
+ * Compte GLOBAL cohérent = somme des comptes de chaque portefeuille (chacun
+ * avec SA propre base de capital). Évite le bug où l'on cumulait les marges de
+ * plusieurs books de 1000 € sur une seule base de 1000 € (cash négatif, PnL
+ * total faux). Le total = somme des sections, exactement.
+ */
+export function aggregatePaperAccount(
+  trades: PaperTrade[],
+  portfolios: PortfolioProfile[],
+): PaperAccount {
+  const list = ensurePortfolios(portfolios);
+  const acc: PaperAccount = {
+    bankrollStartEur: 0,
+    equityEur: 0,
+    cashEur: 0,
+    marginUsedEur: 0,
+    realizedPnlEur: 0,
+    unrealizedPnlEur: 0,
+    openCount: 0,
+    pendingCount: 0,
+    closedCount: 0,
+    winCount: 0,
+    lossCount: 0,
+  };
+  const knownIds = new Set(list.map((p) => p.id));
+  for (const p of list) {
+    const a = computePaperAccount(trades, p.bankrollEur, p.id);
+    acc.bankrollStartEur += a.bankrollStartEur;
+    acc.equityEur += a.equityEur;
+    acc.cashEur += a.cashEur;
+    acc.marginUsedEur += a.marginUsedEur;
+    acc.realizedPnlEur += a.realizedPnlEur;
+    acc.unrealizedPnlEur += a.unrealizedPnlEur;
+    acc.openCount += a.openCount;
+    acc.pendingCount += a.pendingCount;
+    acc.closedCount += a.closedCount;
+    acc.winCount += a.winCount;
+    acc.lossCount += a.lossCount;
+  }
+  // Trades orphelins (portefeuille supprimé) : rattachés au défaut pour ne pas
+  // perdre leur PnL réalisé/latent dans le total.
+  const orphans = trades.filter((t) => !knownIds.has(t.portfolioId || "default"));
+  if (orphans.length) {
+    const def = list.find((p) => p.isDefault);
+    const a = computePaperAccount(orphans, 0);
+    acc.equityEur += a.equityEur;
+    acc.cashEur += a.cashEur;
+    acc.marginUsedEur += a.marginUsedEur;
+    acc.realizedPnlEur += a.realizedPnlEur;
+    acc.unrealizedPnlEur += a.unrealizedPnlEur;
+    acc.openCount += a.openCount;
+    acc.pendingCount += a.pendingCount;
+    acc.closedCount += a.closedCount;
+    acc.winCount += a.winCount;
+    acc.lossCount += a.lossCount;
+    if (def) acc.portfolioName = def.name;
+  }
+  return acc;
 }

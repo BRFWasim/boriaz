@@ -1,4 +1,5 @@
 import {
+  aggregatePaperAccount,
   computePaperAccount,
   ensurePortfolios,
   loadBook,
@@ -120,12 +121,8 @@ export async function getHomeSnapshot(): Promise<HomePayload> {
 
   const prefs = await loadPrefs().catch(() => null);
   const portfolios = ensurePortfolios(prefs?.portfolios);
-  const bankroll =
-    portfolios.find((p) => p.isDefault)?.bankrollEur ||
-    prefs?.paperBankrollEur ||
-    1000;
   const paper = signals?.paper ?? (await loadPaperTrades().catch(() => []));
-  const account = signals?.account ?? computePaperAccount(paper, bankroll);
+  const account = signals?.account ?? aggregatePaperAccount(paper, portfolios);
   const storage = signals?.storage ?? storageInfo();
   const portfolioViews: PortfolioHomeView[] = portfolios
     .filter((p) => p.enabled)

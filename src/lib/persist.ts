@@ -3,6 +3,7 @@ import {
   DEFAULT_PREFS,
   ensurePortfolios,
   makeCustomPortfolio,
+  computePaperAccount,
   type EntryMode,
   type JournalEntry,
   type PaperAccount,
@@ -26,6 +27,8 @@ export {
   DEFAULT_PORTFOLIO,
   ensurePortfolios,
   makeCustomPortfolio,
+  computePaperAccount,
+  aggregatePaperAccount,
 } from "./user-types";
 export type { PortfolioProfile, TimeframeFocus } from "./user-types";
 
@@ -209,6 +212,7 @@ function normalizeTrade(raw: Partial<PaperTrade> & PaperTrade): PaperTrade {
   const marginEur = raw.marginEur ?? (bankroll * sizePct) / 100;
   return {
     id: raw.id,
+    closeNotified: raw.closeNotified ?? false,
     openedAt: raw.openedAt,
     filledAt: raw.filledAt ?? (raw.status === "pending" ? null : raw.openedAt),
     coin: raw.coin,
@@ -274,61 +278,6 @@ export async function mergePaperTrades(
   const merged = [...byId.values()].sort((a, b) => b.openedAt - a.openedAt);
   await savePaperTrades(merged);
   return merged;
-}
-
-export function computePaperAccount(
-  trades: PaperTrade[],
-  bankrollStartEur = 1000,
-  portfolioId?: string,
-): PaperAccount {
-  const scoped = portfolioId
-    ? trades.filter((t) => (t.portfolioId || "default") === portfolioId)
-    : trades;
-  let realized = 0;
-  let unrealized = 0;
-  let marginUsed = 0;
-  let openCount = 0;
-  let pendingCount = 0;
-  let closedCount = 0;
-  let winCount = 0;
-  let lossCount = 0;
-
-  for (const t of scoped) {
-    if (t.status === "pending") {
-      pendingCount += 1;
-      marginUsed += t.marginEur;
-      continue;
-    }
-    if (t.status === "open") {
-      openCount += 1;
-      marginUsed += t.marginEur;
-      unrealized += t.pnlEur ?? 0;
-      continue;
-    }
-    closedCount += 1;
-    const pnl = t.pnlEur ?? 0;
-    realized += pnl;
-    if (pnl > 0) winCount += 1;
-    else if (pnl < 0) lossCount += 1;
-  }
-
-  const cashEur = bankrollStartEur - marginUsed + realized;
-  const equityEur = cashEur + marginUsed + unrealized;
-
-  return {
-    bankrollStartEur,
-    equityEur,
-    cashEur,
-    marginUsedEur: marginUsed,
-    realizedPnlEur: realized,
-    unrealizedPnlEur: unrealized,
-    openCount,
-    pendingCount,
-    closedCount,
-    winCount,
-    lossCount,
-    portfolioId,
-  };
 }
 
 export async function openPaperTrade(input: {

@@ -1,6 +1,8 @@
 import { getWatchlistSnapshot } from "@/lib/price-watch";
 import {
+  aggregatePaperAccount,
   computePaperAccount,
+  ensurePortfolios,
   loadPaperTrades,
   loadPrefs,
 } from "@/lib/persist";
@@ -80,14 +82,20 @@ export async function GET() {
       t.pnlEur = t.marginEur * (t.pnlPct / 100);
     }
 
-    const account = computePaperAccount(
+    const account = aggregatePaperAccount(
       trades,
-      prefs?.paperBankrollEur || 1000,
+      ensurePortfolios(prefs?.portfolios),
     );
+    // Comptes par portefeuille (pour un affichage cohérent section ↔ total)
+    const portfolioAccounts = ensurePortfolios(prefs?.portfolios).map((p) => ({
+      ...computePaperAccount(trades, p.bankrollEur, p.id),
+      portfolioName: p.name,
+    }));
 
     return Response.json({
       quotes,
       account,
+      portfolioAccounts,
       paper: trades.slice(0, 40),
       fetchedAt: Date.now(),
     });
