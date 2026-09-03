@@ -223,6 +223,36 @@ async function verifyTradeWithAi(candidate: {
   confidence: number;
   note: string;
 }> {
+  // Repli déterministe si aucune clé IA n'est configurée : au lieu de bloquer
+  // tous les trades (ce qui gèle scalp/risqué/défaut), on valide sur des
+  // critères objectifs (Alignement + R:R). Le gate IA strict reste actif dès
+  // qu'une clé ANTHROPIC/OPENAI est présente.
+  const hasAiProvider = Boolean(
+    process.env.ANTHROPIC_API_KEY?.trim() || process.env.OPENAI_API_KEY?.trim(),
+  );
+  if (!hasAiProvider) {
+    const reward =
+      candidate.action === "long"
+        ? (candidate.tp ?? 0) - (candidate.entry ?? 0)
+        : (candidate.entry ?? 0) - (candidate.tp ?? 0);
+    const risk =
+      candidate.action === "long"
+        ? (candidate.entry ?? 0) - (candidate.sl ?? 0)
+        : (candidate.sl ?? 0) - (candidate.entry ?? 0);
+    const rr = risk > 0 ? reward / risk : 0;
+    const ok =
+      candidate.alignment >= 55 && candidate.confidence >= 60 && rr >= 1.2;
+    return {
+      approved: ok,
+      confidence: ok
+        ? Math.max(candidate.confidence, 62)
+        : Math.min(candidate.confidence, 55),
+      note: ok
+        ? `Gate déterministe ✓ (IA non configurée) — Align ${candidate.alignment} · R:R ${rr.toFixed(2)}`
+        : `Gate déterministe ✗ (IA non configurée) — Align ${candidate.alignment} · R:R ${rr.toFixed(2)}`,
+    };
+  }
+
   const prompt = `Tu es le GATE final avant un paper trade. FR. PAS un conseil financier.
 Règles STRICTES :
 - approve=true UNIQUEMENT si TF 1h+4h (ou 1d) + crowd WR + niveaux TP/SL sont cohérents.
@@ -982,40 +1012,89 @@ export async function getTradeSignals(options?: {
     return { ok: true, why: "OK" };
   }
 
-  const shouldSimBase =
-    best &&
-    best.action !== "wait" &&
-    best.confidence >= 62 &&
-    best.certainty !== "basse" &&
-    best.entry &&
-    best.tp &&
-    best.sl;
+  // Gate IA par candidat (mémoïsé) : `best` est déjà passé au gate plus haut.
+  const gatedCoins = new Set<string>();
+  if (best) gatedCoins.add(`${best.coin}:${best.action}`);
+
+  async function ensureAiGate(sig: DirectionSignal): Promise<void> {
+    const key = `${sig.coin}:${sig.action}`;
+    if (gatedCoins.has(key)) return;
+    gatedCoins.add(key);
+    if (sig.action === "wait" || !sig.entry || !sig.tp || !sig.sl) {
+      sig.aiVerified = false;
+      sig.aiVerifyNote = "Pas de niveaux complets — vérif IA non lancée.";
+      return;
+    }
+    const g = await verifyTradeWithAi({
+      coin: sig.coin,
+      action: sig.action,
+      confidence: sig.confidence,
+      alignment: sig.alignment.score,
+      tfSummary: sig.tfSummary,
+      crowdWr: sig.crowdWr,
+      entry: sig.entry,
+      tp: sig.tp,
+      sl: sig.sl,
+      reason: sig.reason.slice(0, 220),
+    });
+    sig.aiVerified = g.approved;
+    sig.aiVerifyNote = g.note;
+    if (g.approved) sig.confidence = Math.max(sig.confidence, g.confidence);
+  }
+
+  // Chaque portefeuille choisit SA meilleure crypto éligible (et non plus la
+  // seule `best` globale forcée partout) : c'est ce qui débloque scalp/risqué.
+  const candidates = [...signals]
+    .filter(
+      (s) =>
+        s.action !== "wait" &&
+        s.entry != null &&
+        s.tp != null &&
+        s.sl != null &&
+        s.confidence >= 60 &&
+        s.certainty !== "basse",
+    )
+    .sort(
+      (a, b) =>
+        b.alignment.score - a.alignment.score || b.confidence - a.confidence,
+    );
 
   let anyOpened = false;
-  if (shouldSimBase && prefs.paperTradeEnabled !== false && best) {
-    const side = best.action === "short" ? "short" : "long";
+  if (
+    prefs.paperTradeEnabled !== false &&
+    portfolios.length &&
+    candidates.length
+  ) {
     for (const pf of portfolios) {
-      const gate = portfolioAllows(best, pf);
-      if (!gate.ok) continue;
-      const justification = buildJustification(best, pf);
+      let chosen: DirectionSignal | null = null;
+      for (const cand of candidates) {
+        if (pf.requireAiGate) await ensureAiGate(cand);
+        if (portfolioAllows(cand, pf).ok) {
+          chosen = cand;
+          break;
+        }
+      }
+      if (!chosen) continue;
+      const side = chosen.action === "short" ? "short" : "long";
+      const justification = buildJustification(chosen, pf);
       const levNum = Math.min(
         pf.maxLeverage,
-        Number(String(best.leverage).match(/[\d.]+/)?.[0] || 1),
+        Number(String(chosen.leverage).match(/[\d.]+/)?.[0] || 1),
       );
       const sizeNum = Math.max(1, Math.min(15, pf.sizePct || 10));
       const opened = await openPaperTrade({
         openedAt: Date.now(),
-        coin: best.coin,
+        coin: chosen.coin,
         side,
-        entry: best.entry!,
-        tp: best.tp!,
-        sl: best.sl!,
+        entry: chosen.entry!,
+        tp: chosen.tp!,
+        sl: chosen.sl!,
         leverage: levNum,
         sizePct: sizeNum,
-        entryMode: best.entryMode ?? "market_now",
+        entryMode: chosen.entryMode ?? "market_now",
         note: justification.summary,
         bankrollEur: pf.bankrollEur,
-        markPx: best.price,
+        markPx: chosen.price,
         portfolioId: pf.id,
         portfolioName: pf.name,
         justification,
@@ -1034,7 +1113,7 @@ export async function getTradeSignals(options?: {
           marginEur: opened.marginEur,
           notionalEur: opened.notionalEur,
           sizePct: opened.sizePct,
-          alignment: best.alignment.score,
+          alignment: chosen.alignment.score,
           reason: justification.summary,
           portfolioId: pf.id,
           portfolioName: pf.name,
@@ -1042,12 +1121,12 @@ export async function getTradeSignals(options?: {
         });
         await appendJournal({
           at: Date.now(),
-          coin: best.coin,
-          action: best.action,
-          confidence: best.confidence,
-          entry: best.entry!,
-          tp: best.tp!,
-          sl: best.sl!,
+          coin: chosen.coin,
+          action: chosen.action,
+          confidence: chosen.confidence,
+          entry: chosen.entry!,
+          tp: chosen.tp!,
+          sl: chosen.sl!,
           leverage: `${levNum}×`,
           sizePct: `${sizeNum}%`,
           reason: justification.summary,
