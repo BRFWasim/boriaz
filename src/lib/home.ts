@@ -29,6 +29,9 @@ export interface HomeCard {
   riskReward: number | null;
   closeSuggestion: string | null;
   invalidation: string | null;
+  certainty: "haute" | "moyenne" | "basse" | null;
+  tfSummary: string | null;
+  crowdWr: number | null;
   blurb: string;
 }
 
@@ -125,6 +128,9 @@ export async function getHomeSnapshot(): Promise<HomePayload> {
       riskReward: sig?.riskReward ?? null,
       closeSuggestion: sig?.closeSuggestion ?? null,
       invalidation: sig?.invalidation ?? null,
+      certainty: sig?.certainty ?? null,
+      tfSummary: sig?.tfSummary ?? null,
+      crowdWr: sig?.crowdWr ?? null,
       blurb: sig?.aiText || sig?.reason || "Analyse en cours…",
     };
   });

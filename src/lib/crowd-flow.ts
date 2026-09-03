@@ -6,8 +6,8 @@ import type {
 } from "./types";
 
 /** Filtre qualité : winrate solide + échantillon + taille de compte. */
-const MIN_WIN_RATE = 0.55; // fraction 0–1
-const MIN_SAMPLE = 8;
+const MIN_WIN_RATE = 0.58; // fraction 0–1
+const MIN_SAMPLE = 10;
 const MIN_PORTFOLIO = 80_000;
 /** Méga-wallets sans fills WR : inclus s’ils sont très gros. */
 const MEGA_PORTFOLIO = 20_000_000;

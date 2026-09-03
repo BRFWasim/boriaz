@@ -182,6 +182,9 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
                 ? "Limite — attendre le prix"
                 : "Marché — entrer maintenant"}
             </Badge>
+            <Badge variant="outline">
+              Certitude {data.best.certainty}
+            </Badge>
           </div>
 
           <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
@@ -283,6 +286,20 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
                   {card.entryMode === "limit_wait" ? "Limite" : "Marché"}
                 </Badge>
               ) : null}
+              {card.certainty ? (
+                <Badge
+                  variant="outline"
+                  className={
+                    card.certainty === "haute"
+                      ? "border-long/40 text-long text-[10px]"
+                      : card.certainty === "moyenne"
+                        ? "border-amber-500/40 text-amber-100 text-[10px]"
+                        : "text-[10px]"
+                  }
+                >
+                  Cert. {card.certainty}
+                </Badge>
+              ) : null}
             </div>
 
             {(card.direction === "long" || card.direction === "short") &&
@@ -359,6 +376,12 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
               </p>
             ) : null}
 
+            {card.tfSummary ? (
+              <p className="mt-2 text-[10px] text-muted-foreground line-clamp-2">
+                TF {card.tfSummary}
+                {card.crowdWr != null ? ` · wallets WR ${card.crowdWr.toFixed(0)}%` : ""}
+              </p>
+            ) : null}
             <p className="mt-3 text-xs text-muted-foreground line-clamp-4">
               {card.blurb}
             </p>

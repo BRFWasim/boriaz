@@ -1,10 +1,11 @@
 import { WATCHLIST, getWatchlistSnapshot, runPriceWatch } from "./price-watch";
-import { analyzeCoinFrames } from "./market-analysis";
+import { analyzeCoinFrames, type CandleInterval } from "./market-analysis";
 import { computeTradeLevels } from "./levels";
 import { fetchNansenSnapshot } from "./nansen";
 import { detectCrowdFlows } from "./crowd-flow";
 import { getWhaleDashboard } from "./dashboard";
 import { sendTelegramMessage } from "./telegram";
+import { correlateSetup } from "./signal-score";
 import {
   appendJournal,
   computePaperAccount,
@@ -23,6 +24,7 @@ export interface DirectionSignal {
   coin: string;
   action: "long" | "short" | "wait";
   confidence: number;
+  certainty: "haute" | "moyenne" | "basse";
   leverage: string;
   sizePct: string;
   spotPhase: "achat" | "vente" | "neutre";
@@ -39,6 +41,10 @@ export interface DirectionSignal {
   aiText: string | null;
   invalidation: string;
   closeSuggestion: string | null;
+  /** Ex. "1h haussier · 4h neutre · 1d haussier" */
+  tfSummary: string;
+  alignedTf: number;
+  crowdWr: number | null;
 }
 
 export interface TradeSignalPayload {
@@ -82,11 +88,12 @@ function spotPhaseFrom(
 }
 
 async function askSignalAi(compact: unknown[]): Promise<string | null> {
-  const prompt = `Analyste crypto prudent. FR. PAS un conseil financier.
-Choisis AU PLUS 1 setup LONG ou SHORT (ou WAIT) sur la watchlist.
-Si action long/short, privilégie entrée AU PRIX ACTUEL si confiance ≥62, sinon limite pullback/bounce.
+  const prompt = `Analyste crypto PRUDENT et CORRÉLÉ. FR. PAS un conseil financier.
+Tu DOIS croiser : multi-TF (1h/4h/1d), crowd wallets à bon WR, Nansen.
+Règle stricte : si 1h est HAUSSIER fort sur UNI/SOL/BTC et 4h n’est pas baissier fort → favorise LONG (sauf crowd short qualité contraire).
+Ne propose un trade QUE si certainty haute ou confiance ≥70 avec alignement.
 JSON strict:
-{"action":"long"|"short"|"wait","coin":"BTC","confidence":0-100,"leverage":"2x","sizePct":"1% capital","entry":123.4,"tp":130,"sl":118,"entryMode":"market_now"|"limit_wait","reason":"...","invalidation":"...","detail":"3 phrases"}
+{"action":"long"|"short"|"wait","coin":"UNI","confidence":0-100,"certainty":"haute"|"moyenne"|"basse","leverage":"2x","sizePct":"1% capital","entry":123.4,"tp":130,"sl":118,"entryMode":"market_now"|"limit_wait","reason":"...","invalidation":"...","detail":"3 phrases corrélant TF+wallets"}
 Données: ${JSON.stringify(compact)}`;
 
   const anthropic = process.env.ANTHROPIC_API_KEY?.trim();
@@ -293,39 +300,21 @@ export async function getTradeSignals(options?: {
   const signals: DirectionSignal[] = [];
 
   for (const { coin } of watch) {
-    const frames = await analyzeCoinFrames(coin, [
-      { interval: "4h", horizon: "moyen" },
-    ]);
-    const main = frames[0];
-    if (!main) continue;
+    // Même grille TF que l’onglet Analyse : BTC/SOL/UNI = 1h+4h+1d
+    const frameSpecs: { interval: CandleInterval; horizon: string }[] =
+      coin === "BTC" || coin === "SOL" || coin === "UNI"
+        ? [
+            { interval: "1h", horizon: "court (1h)" },
+            { interval: "4h", horizon: "moyen (4h)" },
+            { interval: "1d", horizon: "long (1d)" },
+          ]
+        : [{ interval: "4h", horizon: "moyen (4h)" }];
+
+    const frames = await analyzeCoinFrames(coin, frameSpecs);
+    if (!frames.length) continue;
+
     const quote = quotes.quotes.find((q) => q.coin === coin);
     const crowdHit = crowd.find((c) => c.coin === coin);
-    let action: "long" | "short" | "wait" = "wait";
-    let confidence = 40;
-
-    if (crowdHit?.side === "short" && main.score <= 1) {
-      action = "short";
-      confidence = Math.min(
-        85,
-        52 + crowdHit.qualityWhaleCount * 6 + Math.abs(Math.min(main.score, 0)) * 4,
-      );
-    } else if (crowdHit?.side === "long" && main.score >= -1) {
-      action = "long";
-      confidence = Math.min(
-        85,
-        52 + crowdHit.qualityWhaleCount * 6 + Math.max(main.score, 0) * 4,
-      );
-    } else if (
-      main.buyTiming.action === "acheter_zone" &&
-      main.bias !== "baissier"
-    ) {
-      action = "long";
-      confidence = Math.min(72, main.buyTiming.confidence);
-    } else if (main.bias === "baissier" && main.score <= -3) {
-      action = "short";
-      confidence = Math.min(70, 48 + Math.abs(main.score) * 5);
-    }
-
     const nansenShort = nansen.recentPerpTrades.filter(
       (t) =>
         t.symbol.toUpperCase() === coin &&
@@ -333,12 +322,23 @@ export async function getTradeSignals(options?: {
     ).length;
     const nansenLong = nansen.recentPerpTrades.filter(
       (t) =>
-        t.symbol.toUpperCase() === coin && t.side.toLowerCase().includes("long"),
+        t.symbol.toUpperCase() === coin &&
+        t.side.toLowerCase().includes("long"),
     ).length;
-    if (nansenShort >= 3 && action === "short") confidence += 5;
-    if (nansenLong >= 3 && action === "long") confidence += 5;
 
+    const corr = correlateSetup({
+      coin,
+      frames,
+      crowd: crowdHit,
+      nansenLong,
+      nansenShort,
+    });
+
+    const action = corr.action;
+    const confidence = corr.confidence;
+    const main = corr.primary;
     const price = quote?.price ?? main.indicators.price;
+
     let entry: number | null = null;
     let idealEntry: number | null = null;
     let tp: number | null = null;
@@ -373,18 +373,30 @@ export async function getTradeSignals(options?: {
         ? openPaper.note
         : null;
 
+    const tfSummary = corr.tfVotes
+      .map((v) => `${v.interval} ${v.bias}(${v.score})`)
+      .join(" · ");
+
+    const crowdWr =
+      crowdHit && crowdHit.avgWinRate > 0
+        ? crowdHit.avgWinRate <= 1.5
+          ? crowdHit.avgWinRate * 100
+          : crowdHit.avgWinRate
+        : null;
+
     signals.push({
       coin,
       action,
-      confidence: Math.min(90, confidence),
+      confidence: Math.min(92, confidence),
+      certainty: corr.certainty,
       leverage: leverageFor(
         confidence,
         main.indicators.adx14,
         prefs.maxLeverage,
       ),
       sizePct: sizeFor(confidence),
-      spotPhase: spotPhaseFrom(main.buyTiming.action, main.bias),
-      bias: main.bias,
+      spotPhase: spotPhaseFrom(main.buyTiming.action, corr.bias),
+      bias: corr.bias,
       price,
       entry,
       idealEntry,
@@ -393,10 +405,13 @@ export async function getTradeSignals(options?: {
       entryMode,
       entryHint,
       riskReward,
-      reason: crowdHit ? `${crowdHit.summary} · ${main.summary}` : main.summary,
+      reason: corr.reason,
       aiText: null,
       invalidation: main.buyZone.summary,
       closeSuggestion,
+      tfSummary,
+      alignedTf: corr.alignedCount,
+      crowdWr,
     });
   }
 
@@ -404,14 +419,18 @@ export async function getTradeSignals(options?: {
     coin: s.coin,
     actionRule: s.action,
     confidence: s.confidence,
+    certainty: s.certainty,
     bias: s.bias,
+    tfSummary: s.tfSummary,
+    alignedTf: s.alignedTf,
+    crowdWr: s.crowdWr,
     price: s.price,
     entry: s.entry,
     idealEntry: s.idealEntry,
     entryMode: s.entryMode,
     tp: s.tp,
     sl: s.sl,
-    reason: s.reason.slice(0, 140),
+    reason: s.reason.slice(0, 180),
   }));
 
   const aiRaw = await askSignalAi([
@@ -446,6 +465,8 @@ export async function getTradeSignals(options?: {
       target.leverage = ai.leverage || target.leverage;
       target.sizePct = ai.sizePct || target.sizePct;
       target.aiText = ai.detail || ai.reason;
+      if (target.confidence >= 72 && target.alignedTf >= 2) target.certainty = "haute";
+      else if (target.confidence >= 60) target.certainty = "moyenne";
       target.reason = ai.reason || target.reason;
       target.invalidation = ai.invalidation || target.invalidation;
       if (ai.entryMode) target.entryMode = ai.entryMode;
@@ -545,7 +566,8 @@ export async function getTradeSignals(options?: {
     !hush &&
     best &&
     best.action !== "wait" &&
-    best.confidence >= 62 &&
+    best.confidence >= 70 &&
+    best.certainty !== "basse" &&
     best.entry &&
     best.tp &&
     best.sl
@@ -555,7 +577,9 @@ export async function getTradeSignals(options?: {
       const text = [
         `SIGNAL ${best.action.toUpperCase()} · ${best.coin}`,
         `Mode: ${best.entryMode === "limit_wait" ? "LIMITE (attendre le prix)" : "MARCHÉ (entrer maintenant)"}`,
-        `Confiance ${best.confidence}/100`,
+        `Confiance ${best.confidence}/100 · certitude ${best.certainty}`,
+        best.tfSummary ? `TF: ${best.tfSummary}` : "",
+        best.crowdWr != null ? `Crowd WR ~ ${best.crowdWr.toFixed(0)}%` : "",
         `Entrée ~ ${best.entry}`,
         best.idealEntry ? `Idéal limite ~ ${best.idealEntry}` : "",
         `TP ~ ${best.tp}`,
