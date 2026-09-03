@@ -58,6 +58,33 @@ export async function getHomeSnapshot(): Promise<HomePayload> {
     warning = e instanceof Error ? e.message : "Prix indisponibles";
   }
 
+  // Repli mids HL si snapshot bougies rate-limité (429) ou vide
+  if (!quotes?.quotes?.length) {
+    try {
+      const { postInfo } = await import("./hyperliquid");
+      const { parseNum } = await import("./format");
+      const { WATCHLIST } = await import("./price-watch");
+      const mids = (await postInfo({ type: "allMids" })) as Record<string, string>;
+      quotes = {
+        quotes: WATCHLIST.map((w) => ({
+          coin: w.coin,
+          label: w.label,
+          price: parseNum(mids[w.coin] ?? "0"),
+          change15mPct: null,
+          change1hPct: null,
+          change2hPct: null,
+          change24hPct: null,
+        })).filter((q) => q.price > 0),
+        fetchedAt: Date.now(),
+      } as Awaited<ReturnType<typeof getWatchlistSnapshot>>;
+      if (warning?.includes("429")) {
+        warning = "HL rate-limit bougies — prix mids live OK, % 15m/2h en attente.";
+      }
+    } catch (e) {
+      warning = e instanceof Error ? e.message : warning;
+    }
+  }
+
   try {
     // notify:false sur l’accueil pour éviter écritures/TG lourdes à chaque refresh
     signals = await getTradeSignals({ notify: false });
