@@ -16,7 +16,7 @@ import {
   formatQty,
   formatRoi,
   formatUsd,
-  formatWinRate,
+  formatWinRateSafe,
   riskClass,
   signedClass,
   truncateAddress,
@@ -122,19 +122,24 @@ export function WhaleCard({
             />
             <Stat
               label="Win rate"
-              value={formatWinRate(whale.tradeStats.winRate, whale.tradeStats.sample)}
+              value={formatWinRateSafe(
+                whale.tradeStats.winRate,
+                whale.tradeStats.winRatePct,
+                whale.tradeStats.sample,
+              )}
+              title={whale.tradeStats.methodNote}
               hint={
                 dense
                   ? undefined
                   : whale.tradeStats.sample
-                    ? `${whale.tradeStats.sample} clôtures · PF ${
+                    ? `${whale.tradeStats.wins}W/${whale.tradeStats.losses}L · ${whale.tradeStats.sample} clôtures (|PnL|≥5$) · PF ${
                         whale.tradeStats.profitFactor === null
                           ? "n/d"
                           : Number.isFinite(whale.tradeStats.profitFactor)
                             ? whale.tradeStats.profitFactor.toFixed(2)
                             : "∞"
                       }`
-                    : "Pas assez de clôtures"
+                    : "Pas assez de clôtures dans l’historique fills public"
               }
             />
             <Stat

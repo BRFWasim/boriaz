@@ -33,7 +33,8 @@ export async function POST(request: Request) {
           "Tu recevras :",
           "• bilan prix watchlist toutes les 2h",
           "• notif immédiate si +1.5% rapide (~20 min)",
-          "• alertes baleines short+spot",
+          "• signaux LONG/SHORT (IA + levier/mise) quand confiance élevée",
+          "• pas de notif short+spot (UI only)",
           "Pas un conseil financier.",
         ].join("\n"),
       );

@@ -22,6 +22,8 @@ import {
 import { MarketOverviewPanel } from "@/components/market-overview";
 import { BtcAnalysisPanel } from "@/components/btc-analysis-panel";
 import { SpotAlertsPanel } from "@/components/spot-alerts-panel";
+import { HomePanel } from "@/components/home-panel";
+import { MacroPanel } from "@/components/macro-panel";
 import { WhaleCard } from "@/components/whale-card";
 import { formatAgo, formatExactTime } from "@/lib/format";
 import type { AppTab, DashboardPayload, SortKey, UiMode } from "@/lib/types";
@@ -38,7 +40,7 @@ export function WhalesDashboard() {
   const [sort, setSort] = useState<SortKey>("portfolio");
   const [coin, setCoin] = useState("all");
   const [mode, setModeState] = useUiMode();
-  const [tab, setTab] = useState<AppTab>("whales");
+  const [tab, setTab] = useState<AppTab>("home");
   const [now, setNow] = useState(() => Date.now());
 
   const load = useCallback(async (silent = false) => {
@@ -202,6 +204,9 @@ export function WhalesDashboard() {
           </div>
 
           <div className="flex flex-wrap gap-2">
+            <TabButton active={tab === "home"} onClick={() => setTab("home")}>
+              Accueil
+            </TabButton>
             <TabButton active={tab === "whales"} onClick={() => setTab("whales")}>
               Baleines perps
             </TabButton>
@@ -215,6 +220,9 @@ export function WhalesDashboard() {
             </TabButton>
             <TabButton active={tab === "btc"} onClick={() => setTab("btc")}>
               Analyse marché
+            </TabButton>
+            <TabButton active={tab === "macro"} onClick={() => setTab("macro")}>
+              Macro
             </TabButton>
           </div>
 
@@ -289,9 +297,9 @@ export function WhalesDashboard() {
       </header>
 
       <main className="mx-auto w-full max-w-7xl space-y-4 px-4 py-5 sm:px-6 lg:px-8">
-        {loading && !data && tab !== "btc" ? <LoadingState /> : null}
+        {loading && !data && tab === "whales" ? <LoadingState /> : null}
 
-        {error && !data && tab !== "btc" ? (
+        {error && !data && tab === "whales" ? (
           <div className="rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-6">
             <p className="font-medium">Chargement impossible</p>
             <p className="mt-1 text-sm text-muted-foreground">{error}</p>
@@ -306,6 +314,12 @@ export function WhalesDashboard() {
             Rafraîchissement échoué : {error}. Les dernières données restent affichées.
           </p>
         ) : null}
+
+        {tab === "home" ? (
+          <HomePanel onOpenTab={(t) => setTab(t as AppTab)} />
+        ) : null}
+
+        {tab === "macro" ? <MacroPanel /> : null}
 
         {tab === "btc" ? <BtcAnalysisPanel /> : null}
 

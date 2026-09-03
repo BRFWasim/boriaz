@@ -144,8 +144,8 @@ function fmtUsd(n: number): string {
 }
 
 /**
- * Alertes Telegram / UI « prioritaires » uniquement.
- * Filtre défini ici (évite le bruit).
+ * Alertes UI prioritaires. Telegram directionnel = module trade-signal (pas ici).
+ * Short+spot : UI seulement, JAMAIS Telegram.
  */
 export function buildPriorityAlerts(input: {
   hedgeAlerts: HedgeAlert[];
@@ -155,27 +155,8 @@ export function buildPriorityAlerts(input: {
   const out: PriorityAlert[] = [];
 
   for (const flow of input.crowdFlows) {
+    // Crowd visible en UI ; Telegram LONG/SHORT géré par trade-signal + IA
     out.push(toPriorityFromCrowd(flow, false));
-  }
-
-  // Max 3 crowd Telegram (fresh d’abord, puis notionnel ≥ 2M$)
-  const crowdRanked = [...input.crowdFlows].sort((a, b) => {
-    const freshBoost = (f: CrowdFlowSignal) =>
-      f.kind === "fresh_flow" ? 1e15 : 0;
-    return freshBoost(b) + b.notionalUsd - (freshBoost(a) + a.notionalUsd);
-  });
-  const tgCrowdIds = new Set(
-    crowdRanked
-      .filter(
-        (f) =>
-          (f.kind === "fresh_flow" && f.freshCount >= MIN_FRESH) ||
-          f.notionalUsd >= 2_000_000,
-      )
-      .slice(0, 3)
-      .map((f) => `prio:${f.id}`),
-  );
-  for (const a of out) {
-    if (a.source === "crowd") a.notifyTelegram = tgCrowdIds.has(a.id);
   }
 
   for (const alert of input.hedgeAlerts) {
@@ -184,31 +165,21 @@ export function buildPriorityAlerts(input: {
     if (alert.kind === "short_with_spot") {
       const spotUsd = estimateSpotUsd(alert);
       const perpUsd = alert.perpNotionalUsd ?? 0;
-      if (spotUsd >= 15_000 && perpUsd >= 50_000) {
+      if (spotUsd >= 5_000) {
         out.push({
           id: `prio:${alert.id}`,
           source: "hedge",
-          severity: "critical",
+          severity: spotUsd >= 15_000 ? "critical" : "warn",
           title: alert.title,
           detail: alert.detail,
           coin: alert.baseAsset,
-          notifyTelegram: true,
+          notifyTelegram: false, // jamais — demandé par l’utilisateur
           tags: [
             "short+spot",
+            "UI only",
             `spot~${fmtUsd(spotUsd)}$`,
             `perp~${fmtUsd(perpUsd)}$`,
           ],
-        });
-      } else if (spotUsd >= 5_000) {
-        out.push({
-          id: `prio:${alert.id}`,
-          source: "hedge",
-          severity: "warn",
-          title: alert.title,
-          detail: alert.detail,
-          coin: alert.baseAsset,
-          notifyTelegram: false,
-          tags: ["short+spot", "UI only"],
         });
       }
       continue;
@@ -224,27 +195,10 @@ export function buildPriorityAlerts(input: {
           title: alert.title,
           detail: alert.detail,
           coin: alert.baseAsset,
-          notifyTelegram: spotUsd >= 50_000,
-          tags: ["accumulation", `spot~${fmtUsd(spotUsd)}$`],
+          notifyTelegram: false,
+          tags: ["accumulation", "UI only", `spot~${fmtUsd(spotUsd)}$`],
         });
       }
-    }
-  }
-
-  // Cap short+spot Telegram : top 2 par taille spot+perp
-  const hedgeTg = out
-    .filter((a) => a.source === "hedge" && a.notifyTelegram && a.tags.includes("short+spot"))
-    .sort((a, b) => tagSize(b) - tagSize(a));
-  const keepHedge = new Set(hedgeTg.slice(0, 2).map((a) => a.id));
-  for (const a of out) {
-    if (
-      a.source === "hedge" &&
-      a.tags.includes("short+spot") &&
-      a.notifyTelegram &&
-      !keepHedge.has(a.id)
-    ) {
-      a.notifyTelegram = false;
-      a.tags = [...a.tags.filter((t) => t !== "short+spot"), "short+spot", "UI only"];
     }
   }
 
@@ -287,17 +241,4 @@ function estimateSpotUsd(alert: HedgeAlert): number {
     return alert.spotAvgPx * alert.spotQty;
   }
   return 0;
-}
-
-function tagSize(alert: PriorityAlert): number {
-  let n = 0;
-  for (const t of alert.tags) {
-    const m = /~(.*)\$/.exec(t);
-    if (!m) continue;
-    const raw = m[1]!;
-    if (raw.endsWith("M")) n += parseFloat(raw) * 1_000_000;
-    else if (raw.endsWith("k")) n += parseFloat(raw) * 1_000;
-    else n += parseFloat(raw) || 0;
-  }
-  return n;
 }

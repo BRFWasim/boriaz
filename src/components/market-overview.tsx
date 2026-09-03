@@ -1,13 +1,13 @@
-import { CryptoLogo } from "@/components/crypto-logo";
 import {
   formatPct,
   formatRoi,
   formatUsd,
-  formatWinRate,
+  formatWinRateSafe,
   riskClass,
   signedClass,
 } from "@/lib/format";
 import type { MarketOverview } from "@/lib/types";
+import { CryptoLogo } from "@/components/crypto-logo";
 
 export function MarketOverviewPanel({ overview }: { overview: MarketOverview }) {
   return (
@@ -138,7 +138,7 @@ export function MarketOverviewPanel({ overview }: { overview: MarketOverview }) 
             <p>
               Win rate moyen :{" "}
               <span className="numeric font-medium">
-                {formatWinRate(overview.avgWinRate, overview.avgWinRate ? 1 : 0)}
+                {formatWinRateSafe(overview.avgWinRate, null, overview.avgWinRate ? 1 : 0)}
               </span>
             </p>
             <p>

@@ -55,9 +55,8 @@ export function SpotAlertsPanel({ data }: { data: DashboardPayload }) {
           </Badge>
         </div>
         <p className="mt-2 text-xs text-muted-foreground">
-          Filtre priorité : crowd (WR≥55 %, sample≥8, equity≥80k$ ou méga≥20M$,
-          ≥3 wallets alignés / ouvertures &lt;6h) · short+spot si spot≥8k$ ·
-          accumulation spot≥25k$. Telegram = uniquement « notif ».
+          Filtre priorité : crowd UI · short+spot UI only (plus de notif TG) ·
+          Telegram = signaux LONG/SHORT IA + bilan 2h + spikes.
         </p>
       </section>
 
@@ -344,7 +343,11 @@ function WhaleSpotCard({ whale }: { whale: Whale }) {
           #{whale.rank} {whale.alias}
           {whale.winRate !== null ? (
             <span className="ml-2 text-xs font-normal text-muted-foreground">
-              WR {whale.winRate.toFixed(0)} % ({whale.winSample})
+              WR{" "}
+              {(whale.tradeStats.winRatePct ??
+                (whale.winRate <= 1.5 ? whale.winRate * 100 : whale.winRate)
+              ).toFixed(1)}{" "}
+              % ({whale.tradeStats.sample || whale.winSample})
             </span>
           ) : null}
         </h3>

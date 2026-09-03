@@ -65,6 +65,14 @@ export function moveFromEntryPct(
 }
 
 export function computeTradeStats(fills: Fill[]): TradeStats {
+  /**
+   * Méthode (fiable et explicite) :
+   * - On ne compte que les fills de clôture perps (dir Close* / contenant ">"), hors spot Buy/Sell.
+   * - On ignore les PnL nuls et le bruit |closedPnl| < 5 $ (fills poussière).
+   * - winRate = nb wins / nb trades retenus, en fraction 0–1.
+   * - Limite : historique public Hyperliquid (fenêtre fills), PAS le all-time absolu du wallet.
+   */
+  const MIN_ABS_PNL = 5;
   const closes = fills.filter((fill) => {
     if (fill.coin.startsWith("@")) return false;
     const dir = fill.dir ?? "";
@@ -73,7 +81,10 @@ export function computeTradeStats(fills: Fill[]): TradeStats {
     return true;
   });
 
-  const withPnl = closes.filter((fill) => parseNum(fill.closedPnl) !== 0);
+  const withPnl = closes.filter((fill) => {
+    const pnl = parseNum(fill.closedPnl);
+    return Number.isFinite(pnl) && Math.abs(pnl) >= MIN_ABS_PNL;
+  });
   const wins = withPnl.filter((fill) => parseNum(fill.closedPnl) > 0);
   const losses = withPnl.filter((fill) => parseNum(fill.closedPnl) < 0);
   const sumWins = wins.reduce((acc, fill) => acc + parseNum(fill.closedPnl), 0);
@@ -94,10 +105,14 @@ export function computeTradeStats(fills: Fill[]): TradeStats {
   const avgWin = wins.length ? sumWins / wins.length : 0;
   const avgLoss = losses.length ? sumLosses / losses.length : 0;
   const expectancy = sample ? totalRealized / sample : null;
+  const winRate = sample ? wins.length / sample : null;
 
   return {
-    winRate: sample ? wins.length / sample : null,
+    winRate,
+    winRatePct: winRate === null ? null : winRate * 100,
     sample,
+    wins: wins.length,
+    losses: losses.length,
     avgWin,
     avgLoss,
     profitFactor:
@@ -105,6 +120,8 @@ export function computeTradeStats(fills: Fill[]): TradeStats {
     expectancy,
     totalRealizedSample: totalRealized,
     feesPaid,
+    methodNote:
+      "WR = wins / clôtures perps (|PnL|≥5$) sur l’historique fills public HL — pas le all-time absolu.",
   };
 }
 
@@ -339,13 +356,18 @@ export function emptyExposure(): ExposureStats {
 export function emptyTradeStats(): TradeStats {
   return {
     winRate: null,
+    winRatePct: null,
     sample: 0,
+    wins: 0,
+    losses: 0,
     avgWin: 0,
     avgLoss: 0,
     profitFactor: null,
     expectancy: null,
     totalRealizedSample: 0,
     feesPaid: 0,
+    methodNote:
+      "WR = wins / clôtures perps (|PnL|≥5$) sur l’historique fills public HL — pas le all-time absolu.",
   };
 }
 

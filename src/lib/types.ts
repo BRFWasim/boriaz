@@ -14,7 +14,7 @@ export type SortKey =
 
 export type UiMode = "simple" | "advanced";
 
-export type AppTab = "whales" | "spot" | "btc";
+export type AppTab = "home" | "whales" | "spot" | "btc" | "macro";
 
 export type SignalBias = "haussier" | "baissier" | "neutre";
 
@@ -184,13 +184,18 @@ export interface WindowStats {
 
 export interface TradeStats {
   winRate: number | null;
+  /** Même winrate en % 0–100 (affichage sûr). */
+  winRatePct: number | null;
   sample: number;
+  wins: number;
+  losses: number;
   avgWin: number;
   avgLoss: number;
   profitFactor: number | null;
   expectancy: number | null;
   totalRealizedSample: number;
   feesPaid: number;
+  methodNote: string;
 }
 
 export interface ExposureStats {

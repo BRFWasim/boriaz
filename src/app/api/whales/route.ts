@@ -1,9 +1,10 @@
 import { dispatchWhaleAlerts } from "@/lib/alerts";
 import { tickPriceWatch } from "@/lib/btc-analysis";
 import { getWhaleDashboard } from "@/lib/dashboard";
+import { getTradeSignals } from "@/lib/trade-signal";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 90;
 
 export async function GET() {
   try {
@@ -14,10 +15,15 @@ export async function GET() {
       // ne bloque pas le dashboard
     }
     try {
-      // Mids + bilan 2h + spikes +1.5% (0 token IA)
       await tickPriceWatch();
     } catch {
-      // ne bloque pas le dashboard
+      // ignore
+    }
+    try {
+      // Signaux LONG/SHORT IA → Telegram si confiance élevée (pas short+spot)
+      await getTradeSignals({ notify: true });
+    } catch {
+      // ignore
     }
     return Response.json(payload);
   } catch (error) {

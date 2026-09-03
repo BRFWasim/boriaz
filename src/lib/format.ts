@@ -59,7 +59,22 @@ export function formatFundingRate(value: number | null): string {
 
 export function formatWinRate(value: number | null, sample: number): string {
   if (value === null || sample === 0) return "n/d";
-  return `${new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 1 }).format(value * 100)} %`;
+  // Accepte fraction 0–1 OU déjà en % (défense)
+  const pct = value <= 1.5 ? value * 100 : value;
+  return `${new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 1 }).format(pct)} %`;
+}
+
+/** Affiche un winrate de façon certaine (fraction ou %). */
+export function formatWinRateSafe(
+  winRate: number | null,
+  winRatePct: number | null,
+  sample: number,
+): string {
+  if (sample <= 0) return "n/d";
+  if (winRatePct !== null && Number.isFinite(winRatePct)) {
+    return `${new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 1 }).format(winRatePct)} %`;
+  }
+  return formatWinRate(winRate, sample);
 }
 
 export function riskClass(label: string): string {
