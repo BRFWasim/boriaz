@@ -255,9 +255,38 @@ export interface HedgeAlert {
   whaleAlias: string;
   spotQty: number;
   spotAvgPx: number | null;
+  spotValueUsd: number;
   perpSide: Side | null;
   perpQty: number | null;
   perpEntryPx: number | null;
+  perpNotionalUsd: number | null;
+}
+
+export interface CrowdFlowSignal {
+  id: string;
+  coin: string;
+  side: Side;
+  kind: "fresh_flow" | "consensus";
+  severity: "critical" | "warn";
+  whaleCount: number;
+  qualityWhaleCount: number;
+  freshCount: number;
+  notionalUsd: number;
+  avgWinRate: number;
+  aliases: string[];
+  actionHint: string;
+  summary: string;
+}
+
+export interface PriorityAlert {
+  id: string;
+  source: "crowd" | "hedge" | "price";
+  severity: "info" | "warn" | "critical";
+  title: string;
+  detail: string;
+  coin: string;
+  notifyTelegram: boolean;
+  tags: string[];
 }
 
 export interface Whale {
@@ -312,6 +341,9 @@ export interface MarketOverview {
   riskiest: { alias: string; address: string; riskScore: number; riskLabel: string }[];
   shortWithSpotCount: number;
   totalSpotValueUsd: number;
+  crowdShortCount: number;
+  crowdLongCount: number;
+  priorityAlertCount: number;
 }
 
 export interface DashboardPayload {
@@ -319,6 +351,16 @@ export interface DashboardPayload {
   coins: string[];
   overview: MarketOverview;
   alerts: HedgeAlert[];
+  crowdFlows: CrowdFlowSignal[];
+  priorityAlerts: PriorityAlert[];
+  liveQuotes: {
+    coin: string;
+    label: string;
+    price: number;
+    change15mPct: number | null;
+    change1hPct: number | null;
+    change2hPct: number | null;
+  }[];
   integrations: IntegrationStatus;
   fetchedAt: number;
   nextRefreshSec: number;

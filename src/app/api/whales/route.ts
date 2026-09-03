@@ -31,6 +31,9 @@ export async function GET() {
         whales: [],
         coins: [],
         alerts: [],
+        crowdFlows: [],
+        priorityAlerts: [],
+        liveQuotes: [],
         overview: {
           whaleCount: 0,
           totalEquity: 0,
@@ -46,6 +49,9 @@ export async function GET() {
           riskiest: [],
           shortWithSpotCount: 0,
           totalSpotValueUsd: 0,
+          crowdShortCount: 0,
+          crowdLongCount: 0,
+          priorityAlertCount: 0,
         },
         integrations: {
           hyperliquid: false,

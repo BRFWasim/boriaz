@@ -11,6 +11,7 @@ import {
   moveFromEntryPct,
   scoreRisk,
 } from "./analysis";
+import { buildPriorityAlerts, detectCrowdFlows } from "./crowd-flow";
 import { parseNum } from "./format";
 import {
   fetchClearinghouse,
@@ -27,6 +28,7 @@ import {
 } from "./hyperliquid";
 import { getIntegrationStatus } from "./integrations";
 import { attachProtections, reconstructClosed } from "./positions";
+import { getWatchlistSnapshot, runPriceWatch } from "./price-watch";
 import {
   baseAssetFromCoin,
   buildSpotHoldings,
@@ -117,11 +119,36 @@ async function refreshDashboard(): Promise<DashboardPayload> {
   const coins = uniqueCoins(whales);
   const overview = buildOverview(whales);
   const alerts = whales.flatMap((whale) => whale.alerts);
+  const crowdFlows = detectCrowdFlows(whales);
+  const priorityAlerts = buildPriorityAlerts({ hedgeAlerts: alerts, crowdFlows });
+  overview.crowdShortCount = crowdFlows.filter((f) => f.side === "short").length;
+  overview.crowdLongCount = crowdFlows.filter((f) => f.side === "long").length;
+  overview.priorityAlertCount = priorityAlerts.length;
+
+  let liveQuotes: DashboardPayload["liveQuotes"] = [];
+  try {
+    await runPriceWatch();
+    const snap = await getWatchlistSnapshot();
+    liveQuotes = snap.quotes.map((q) => ({
+      coin: q.coin,
+      label: q.label,
+      price: q.price,
+      change15mPct: q.change15mPct,
+      change1hPct: q.change1hPct,
+      change2hPct: q.change2hPct,
+    }));
+  } catch {
+    liveQuotes = [];
+  }
+
   const payload: DashboardPayload = {
     whales,
     coins,
     overview,
     alerts,
+    crowdFlows,
+    priorityAlerts,
+    liveQuotes,
     integrations: getIntegrationStatus(),
     fetchedAt: Date.now(),
     nextRefreshSec: getRefreshSeconds(),
@@ -130,7 +157,7 @@ async function refreshDashboard(): Promise<DashboardPayload> {
       info: INFO_URL,
     },
     scanNote:
-      "Perps + spot Hyperliquid. Alertes si short perps avec spot du même actif. Achats spot : entrée moyenne (entryNtl) + fills Buy/Sell quand présents dans l’historique. Analyse BTC dans l’onglet dédié (RSI/MACD + IA si clé).",
+      "Perps + spot Hyperliquid. Crowd long/short = wallets qualité (WR≥55 %, sample≥8, equity≥80k$) alignés. Alertes Telegram filtrées (prioritaires seulement). Hors HL : Arkham/Nansen optionnels pour labels, pas de scan multi-CEX gratuit.",
     cached: false,
   };
   detailsCache = { at: Date.now(), value: payload };

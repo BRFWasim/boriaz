@@ -43,8 +43,18 @@ Filtres : recherche, tri (portefeuille, PnL 24h, PnL latent, positions, risque, 
 ## Onglets
 
 1. **Baleines perps** — top 10, expositions, risque, SL/TP  
-2. **Spot & alertes** — soldes spot, entrée moyenne, achats, alerte **short + spot**  
-3. **Analyse marché** — BTC multi-TF (1h / 4h / 1d), SOL court+moyen, zones d’achat watchlist (RENDER, ONDO, UNI, BTC, SOL, ETH, HYPE, TAO), bilans Telegram 2h + spikes +1.5 %. IA optionnelle (cache 45 min) pour limiter les tokens.
+2. **Spot & alertes** — prix live watchlist, crowd long/short, alertes prioritaires, spot agrégé + par baleine  
+3. **Analyse marché** — BTC multi-TF (1h / 4h / 1d), SOL court+moyen, zones d’achat watchlist (RENDER, ONDO, UNI, BTC, SOL, ETH, HYPE, TAO), bilans Telegram 2h + spikes +1.5 %. IA optionnelle (cache 45 min).
+
+## Publier sur Internet
+
+Oui, c’est un site Next.js déployable.
+
+1. **Depuis Cursor (le plus simple)** : utilise le bouton **Publish** dans la conversation agent — il propose Vercel et branche le déploiement.
+2. **Sinon Vercel manuel** : crée un compte sur [vercel.com](https://vercel.com) → Import Git Repo → Framework Next.js → Deploy. Ajoute les variables d’environnement (Telegram, OpenAI…) dans Project Settings → Environment Variables.
+3. Domaine : Vercel donne une URL `*.vercel.app` tout de suite ; tu peux coller un domaine custom ensuite.
+
+Pas besoin d’un VPS. Les alertes Telegram tournent quand l’app est visitée / les API sont appelées (pas un worker 24/7 séparé) — pour un bot vraiment permanent, un cron Vercel ou un petit always-on serait un plus plus tard.
 
 Voir `CLES-API.md` et `.env.example` pour les clés optionnelles.
 

@@ -306,6 +306,9 @@ export function buildOverview(whales: Whale[]): MarketOverview {
     riskiest,
     shortWithSpotCount,
     totalSpotValueUsd,
+    crowdShortCount: 0,
+    crowdLongCount: 0,
+    priorityAlertCount: 0,
   };
 }
 

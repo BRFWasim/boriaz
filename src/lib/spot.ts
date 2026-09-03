@@ -183,9 +183,11 @@ export function detectHedgeAlerts(
         whaleAlias: whale.alias,
         spotQty: holding.qty,
         spotAvgPx: holding.avgEntryPx,
+        spotValueUsd: holding.valueUsd,
         perpSide: "short",
         perpQty: position.qty,
         perpEntryPx: position.entryPx,
+        perpNotionalUsd: position.notionalUsd,
       });
     } else {
       alerts.push({
@@ -199,9 +201,11 @@ export function detectHedgeAlerts(
         whaleAlias: whale.alias,
         spotQty: holding.qty,
         spotAvgPx: holding.avgEntryPx,
+        spotValueUsd: holding.valueUsd,
         perpSide: "long",
         perpQty: position.qty,
         perpEntryPx: position.entryPx,
+        perpNotionalUsd: position.notionalUsd,
       });
     }
   }
@@ -221,9 +225,11 @@ export function detectHedgeAlerts(
       whaleAlias: whale.alias,
       spotQty: holding.qty,
       spotAvgPx: holding.avgEntryPx,
+      spotValueUsd: holding.valueUsd,
       perpSide: null,
       perpQty: null,
       perpEntryPx: null,
+      perpNotionalUsd: null,
     });
   }
 

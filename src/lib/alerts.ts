@@ -2,6 +2,7 @@ import type {
   BtcAnalysisPayload,
   DashboardPayload,
   HedgeAlert,
+  PriorityAlert,
   SignalBias,
 } from "./types";
 import { sendTelegramMessage } from "./telegram";
@@ -19,6 +20,7 @@ function remember(key: string): boolean {
   return true;
 }
 
+/** Uniquement les alertes marquées notifyTelegram (filtre crowd-flow). */
 export async function dispatchWhaleAlerts(
   payload: DashboardPayload,
 ): Promise<{ sent: number; skipped: number; errors: string[] }> {
@@ -26,27 +28,14 @@ export async function dispatchWhaleAlerts(
   let skipped = 0;
   const errors: string[] = [];
 
-  const critical = payload.alerts.filter((a) => a.kind === "short_with_spot");
-  for (const alert of critical.slice(0, 8)) {
-    const key = `whale:${alert.id}:${Math.floor(payload.fetchedAt / 3_600_000)}`;
+  const priority = (payload.priorityAlerts ?? []).filter((a) => a.notifyTelegram);
+  for (const alert of priority.slice(0, 6)) {
+    const key = `prio:${alert.id}:${Math.floor(payload.fetchedAt / 3_600_000)}`;
     if (!remember(key)) {
       skipped += 1;
       continue;
     }
-    const text = formatWhaleAlert(alert);
-    const result = await sendTelegramMessage(text);
-    if (result.ok) sentCount += 1;
-    else if (result.error) errors.push(result.error);
-  }
-
-  const accum = payload.alerts.filter((a) => a.kind === "spot_only_accumulation");
-  for (const alert of accum.slice(0, 3)) {
-    const key = `accum:${alert.id}:${Math.floor(payload.fetchedAt / 6_000_000)}`;
-    if (!remember(key)) {
-      skipped += 1;
-      continue;
-    }
-    const result = await sendTelegramMessage(formatWhaleAlert(alert));
+    const result = await sendTelegramMessage(formatPriorityAlert(alert));
     if (result.ok) sentCount += 1;
     else if (result.error) errors.push(result.error);
   }
@@ -63,16 +52,16 @@ export async function dispatchBtcAlerts(
   if (!buy) return { sent: 0, errors };
 
   const hourBucket = Math.floor(payload.fetchedAt / 3_600_000);
-  if (buy.action === "acheter_zone" || buy.action === "surveiller_achat") {
+  // Timing BTC : seulement zone d'achat claire (pas chaque refresh)
+  if (buy.action === "acheter_zone" && buy.confidence >= 60) {
     const key = `btc-buy:${buy.action}:${hourBucket}`;
     if (remember(key)) {
       const text = [
-        "BTC — timing",
-        `Action: ${labelAction(buy.action)}`,
+        "BTC — zone d’achat prioritaire",
         `Confiance: ${buy.confidence}/100`,
         buy.reason,
         buy.levels,
-        `Biais technique: ${payload.bias} (score ${payload.score})`,
+        `Biais: ${payload.bias} (score ${payload.score})`,
         `Prix: ${payload.indicators.price.toFixed(0)} · RSI ${payload.indicators.rsi14?.toFixed(1) ?? "n/d"}`,
         "",
         "Pas un conseil financier.",
@@ -83,12 +72,12 @@ export async function dispatchBtcAlerts(
     }
   }
 
-  if (payload.bias === "baissier" && payload.score <= -4) {
+  if (payload.bias === "baissier" && payload.score <= -5) {
     const key = `btc-risk:${hourBucket}`;
     if (remember(key)) {
       const result = await sendTelegramMessage(
         [
-          "BTC — alerte biais baissier",
+          "BTC — biais baissier fort",
           payload.summary,
           `Score ${payload.score} · RSI ${payload.indicators.rsi14?.toFixed(1) ?? "n/d"}`,
           "Pas un conseil financier.",
@@ -100,6 +89,18 @@ export async function dispatchBtcAlerts(
   }
 
   return { sent: sentCount, errors: [...new Set(errors)] };
+}
+
+function formatPriorityAlert(alert: PriorityAlert): string {
+  return [
+    alert.severity === "critical" ? "ALERTE PRIORITAIRE" : "SIGNAL PRIORITAIRE",
+    alert.title,
+    alert.detail,
+    alert.tags.length ? `Tags: ${alert.tags.join(" · ")}` : "",
+    "Source: Hyperliquid public · pas un conseil financier.",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function formatWhaleAlert(alert: HedgeAlert): string {
@@ -197,3 +198,7 @@ export function inferBuyTiming(input: {
       : "Surveiller RSI < 35 ou retour sur support.",
   };
 }
+
+// garde pour éventuel usage interne
+void formatWhaleAlert;
+void labelAction;
