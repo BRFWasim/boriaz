@@ -1,5 +1,5 @@
 import { promises as fs } from "fs";
-import path from "path";
+import { dataPath, ensureDataDir } from "./data-dir";
 import { parseNum } from "./format";
 import { postInfo } from "./hyperliquid";
 import { sendTelegramMessage } from "./telegram";
@@ -18,7 +18,7 @@ export const WATCHLIST = [
 
 export type WatchCoin = (typeof WATCHLIST)[number]["coin"];
 
-const STATE_FILE = path.join(process.cwd(), ".price-watch-state.json");
+function stateFile() { return dataPath(".price-watch-state.json"); }
 const SPIKE_PCT = 1.5;
 /** Fenêtre « rapidement » pour un +1.5 %. */
 const SPIKE_WINDOW_MS = 20 * 60_000;
@@ -72,7 +72,7 @@ function emptyState(): PriceWatchState {
 async function loadState(): Promise<PriceWatchState> {
   if (memory) return memory;
   try {
-    const raw = await fs.readFile(STATE_FILE, "utf8");
+    const raw = await fs.readFile(stateFile(), "utf8");
     const parsed = JSON.parse(raw) as PriceWatchState;
     memory = {
       samples: parsed.samples ?? {},
@@ -89,7 +89,8 @@ async function loadState(): Promise<PriceWatchState> {
 async function saveState(state: PriceWatchState): Promise<void> {
   memory = state;
   try {
-    await fs.writeFile(STATE_FILE, JSON.stringify(state), "utf8");
+    await ensureDataDir();
+    await fs.writeFile(stateFile(), JSON.stringify(state), "utf8");
   } catch {
     // ignore disk errors in cloud sandbox
   }

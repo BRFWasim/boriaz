@@ -1,7 +1,9 @@
 import { promises as fs } from "fs";
-import path from "path";
+import { dataPath, ensureDataDir } from "./data-dir";
 
-const CHAT_FILE = path.join(process.cwd(), ".telegram-chat-id");
+function chatFile() {
+  return dataPath(".telegram-chat-id");
+}
 
 export function getTelegramToken(): string | null {
   return process.env.TELEGRAM_BOT_TOKEN?.trim() || null;
@@ -11,7 +13,7 @@ export async function resolveChatId(): Promise<string | null> {
   const fromEnv = process.env.TELEGRAM_CHAT_ID?.trim();
   if (fromEnv && /^-?\d+$/.test(fromEnv)) return fromEnv;
   try {
-    const saved = (await fs.readFile(CHAT_FILE, "utf8")).trim();
+    const saved = (await fs.readFile(chatFile(), "utf8")).trim();
     if (/^-?\d+$/.test(saved)) return saved;
   } catch {
     // ignore
@@ -20,7 +22,8 @@ export async function resolveChatId(): Promise<string | null> {
 }
 
 export async function saveChatId(chatId: string): Promise<void> {
-  await fs.writeFile(CHAT_FILE, `${chatId}\n`, "utf8");
+  await ensureDataDir();
+  await fs.writeFile(chatFile(), `${chatId}\n`, "utf8");
 }
 
 export async function discoverChatIdFromUpdates(): Promise<{

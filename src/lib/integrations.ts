@@ -1,5 +1,5 @@
 import { promises as fs } from "fs";
-import path from "path";
+import { dataPath } from "./data-dir";
 import type { IntegrationStatus } from "./types";
 
 export function getIntegrationStatus(): IntegrationStatus {
@@ -43,7 +43,7 @@ export async function hasTelegramChatLinked(): Promise<boolean> {
   }
   try {
     const saved = (
-      await fs.readFile(path.join(process.cwd(), ".telegram-chat-id"), "utf8")
+      await fs.readFile(dataPath(".telegram-chat-id"), "utf8")
     ).trim();
     return /^-?\d+$/.test(saved);
   } catch {

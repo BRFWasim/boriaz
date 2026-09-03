@@ -1,5 +1,4 @@
 import { promises as fs } from "fs";
-import path from "path";
 import {
   DEFAULT_PREFS,
   type EntryMode,
@@ -8,18 +7,19 @@ import {
   type PaperTrade,
   type UserPrefs,
 } from "./user-types";
+import { dataPath, ensureDataDir } from "./data-dir";
 
 export type { EntryMode, JournalEntry, PaperAccount, PaperTrade, UserPrefs };
 export { DEFAULT_PREFS };
 
-const PREFS_FILE = path.join(process.cwd(), ".user-prefs.json");
-const JOURNAL_FILE = path.join(process.cwd(), ".signal-journal.json");
-const PAPER_FILE = path.join(process.cwd(), ".paper-trades.json");
-const MACRO_ALERTS_FILE = path.join(process.cwd(), ".macro-alerts-sent.json");
+function prefsFile() { return dataPath(".user-prefs.json"); }
+function journalFile() { return dataPath(".signal-journal.json"); }
+function paperFile() { return dataPath(".paper-trades.json"); }
+function macroAlertsFile() { return dataPath(".macro-alerts-sent.json"); }
 
 export async function loadPrefs(): Promise<UserPrefs> {
   try {
-    const raw = await fs.readFile(PREFS_FILE, "utf8");
+    const raw = await fs.readFile(prefsFile(), "utf8");
     return { ...DEFAULT_PREFS, ...(JSON.parse(raw) as UserPrefs) };
   } catch {
     return { ...DEFAULT_PREFS };
@@ -29,7 +29,8 @@ export async function loadPrefs(): Promise<UserPrefs> {
 export async function savePrefs(prefs: Partial<UserPrefs>): Promise<UserPrefs> {
   const cur = await loadPrefs();
   const next = { ...cur, ...prefs };
-  await fs.writeFile(PREFS_FILE, JSON.stringify(next, null, 2), "utf8");
+  await ensureDataDir();
+  await fs.writeFile(prefsFile(), JSON.stringify(next, null, 2), "utf8");
   return next;
 }
 
@@ -51,20 +52,21 @@ export async function appendJournal(
   };
   let list: JournalEntry[] = [];
   try {
-    list = JSON.parse(await fs.readFile(JOURNAL_FILE, "utf8")) as JournalEntry[];
+    list = JSON.parse(await fs.readFile(journalFile(), "utf8")) as JournalEntry[];
   } catch {
     list = [];
   }
   list.unshift(full);
   list = list.slice(0, 200);
-  await fs.writeFile(JOURNAL_FILE, JSON.stringify(list), "utf8");
+  await ensureDataDir();
+  await fs.writeFile(journalFile(), JSON.stringify(list), "utf8");
   return full;
 }
 
 export async function readJournal(limit = 50): Promise<JournalEntry[]> {
   try {
     const list = JSON.parse(
-      await fs.readFile(JOURNAL_FILE, "utf8"),
+      await fs.readFile(journalFile(), "utf8"),
     ) as JournalEntry[];
     return list.slice(0, limit);
   } catch {
@@ -103,7 +105,7 @@ function normalizeTrade(raw: Partial<PaperTrade> & PaperTrade): PaperTrade {
 
 export async function loadPaperTrades(): Promise<PaperTrade[]> {
   try {
-    const raw = JSON.parse(await fs.readFile(PAPER_FILE, "utf8")) as Partial<PaperTrade>[];
+    const raw = JSON.parse(await fs.readFile(paperFile(), "utf8")) as Partial<PaperTrade>[];
     return raw.map((t) => normalizeTrade(t as PaperTrade));
   } catch {
     return [];
@@ -111,7 +113,8 @@ export async function loadPaperTrades(): Promise<PaperTrade[]> {
 }
 
 export async function savePaperTrades(trades: PaperTrade[]): Promise<void> {
-  await fs.writeFile(PAPER_FILE, JSON.stringify(trades.slice(0, 120)), "utf8");
+  await ensureDataDir();
+  await fs.writeFile(paperFile(), JSON.stringify(trades.slice(0, 120)), "utf8");
 }
 
 export function computePaperAccount(
@@ -222,7 +225,7 @@ export async function openPaperTrade(input: {
 export async function loadMacroAlertKeys(): Promise<Set<string>> {
   try {
     const arr = JSON.parse(
-      await fs.readFile(MACRO_ALERTS_FILE, "utf8"),
+      await fs.readFile(macroAlertsFile(), "utf8"),
     ) as string[];
     return new Set(arr);
   } catch {
@@ -231,8 +234,9 @@ export async function loadMacroAlertKeys(): Promise<Set<string>> {
 }
 
 export async function saveMacroAlertKeys(keys: Set<string>): Promise<void> {
+  await ensureDataDir();
   await fs.writeFile(
-    MACRO_ALERTS_FILE,
+    macroAlertsFile(),
     JSON.stringify([...keys].slice(-200)),
     "utf8",
   );
