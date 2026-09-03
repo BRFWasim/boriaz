@@ -39,6 +39,13 @@ export function LabPanel() {
     upstashUrl: string;
     howto: { where: string; upstash: string };
   } | null>(null);
+  const [tg, setTg] = useState<{
+    linked: boolean;
+    chatIdPreview: string | null;
+    bot: string;
+    instruction: string;
+  } | null>(null);
+  const [tgBusy, setTgBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -78,6 +85,12 @@ export function LabPanel() {
       if (!c.error || c.latest) setCorr(c);
       const st = await fetch("/api/status").then((r) => r.json());
       setStatus(st);
+      try {
+        const tgStatus = await fetch("/api/telegram/setup").then((r) => r.json());
+        setTg(tgStatus);
+      } catch {
+        /* ignore */
+      }
     } catch (e) {
       setMsg(e instanceof Error ? e.message : "Erreur lab");
     } finally {
@@ -201,6 +214,54 @@ export function LabPanel() {
     });
   }
 
+  async function callTelegram(action: "link" | "test" | "digest") {
+    setTgBusy(action);
+    setMsg(
+      action === "link"
+        ? "Liaison Telegram…"
+        : action === "test"
+          ? "Envoi du test forcé…"
+          : "Envoi du bilan forcé…",
+    );
+    try {
+      const res = await fetch("/api/telegram/setup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+      const json = await res.json();
+      if (action === "link") {
+        setMsg(
+          json.chatId
+            ? `Telegram lié ✓ (${json.username ?? "chat"}). ${json.detail ?? ""}`
+            : `Pas encore lié : ${json.detail ?? "envoie /start à @BoriazBot"}`,
+        );
+      } else if (action === "test") {
+        setMsg(
+          json.ok
+            ? "Message test envoyé ✓ (vérifie Telegram)"
+            : `Échec envoi : ${json.error ?? "inconnu"}`,
+        );
+      } else {
+        setMsg(
+          json.ok
+            ? `Bilan forcé envoyé ✓ (${json.quotes ?? 0} cryptos, ${json.spikesSent ?? 0} spikes)`
+            : `Bilan non envoyé : ${json.errors?.join?.(" · ") ?? "voir clés Telegram"}`,
+        );
+      }
+      try {
+        const tgStatus = await fetch("/api/telegram/setup").then((r) => r.json());
+        setTg(tgStatus);
+      } catch {
+        /* ignore */
+      }
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Erreur Telegram");
+    } finally {
+      setTgBusy(null);
+    }
+  }
+
   async function runBacktest(days: number) {
     setMsg("Backtest en cours…");
     const res = await fetch(`/api/backtest?days=${days}`, { cache: "no-store" });
@@ -273,6 +334,53 @@ export function LabPanel() {
           </p>
         </section>
       ) : null}
+
+      <section className="rounded-2xl border border-primary/25 bg-primary/5 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="font-medium">Telegram — mise en place & envoi forcé</h3>
+          <Badge variant="outline" className={tg?.linked ? "text-long" : "text-short"}>
+            {tg?.linked ? `lié · ${tg.chatIdPreview ?? ""}` : "non lié"}
+          </Badge>
+        </div>
+        <p className="mt-2 text-sm text-muted-foreground">
+          1) Ouvre Telegram → cherche{" "}
+          <strong className="text-foreground">{tg?.bot ?? "@BoriazBot"}</strong>{" "}
+          → envoie <strong className="text-foreground">/start</strong>. 2) Clique{" "}
+          <strong className="text-foreground">Lier Telegram</strong> ci-dessous.
+          Le token du bot (<code>TELEGRAM_BOT_TOKEN</code>) doit être dans les
+          variables Vercel.
+        </p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Button
+            size="sm"
+            disabled={tgBusy !== null}
+            onClick={() => void callTelegram("link")}
+          >
+            {tgBusy === "link" ? "Liaison…" : "Lier Telegram"}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={tgBusy !== null}
+            onClick={() => void callTelegram("test")}
+          >
+            {tgBusy === "test" ? "Envoi…" : "Envoyer un test (forcé)"}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={tgBusy !== null}
+            onClick={() => void callTelegram("digest")}
+          >
+            {tgBusy === "digest" ? "Envoi…" : "Forcer le bilan (digest)"}
+          </Button>
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">
+          « Envoyer un test » force un message immédiat pour vérifier la liaison.
+          « Forcer le bilan » recalcule et pousse le digest prix tout de suite,
+          sans attendre le cron.
+        </p>
+      </section>
 
       <section className="rounded-2xl border border-border/80 bg-card/60 p-4">
         <h3 className="font-medium">Paper trade — c’est quoi ?</h3>
