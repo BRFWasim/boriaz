@@ -2,12 +2,14 @@ import { promises as fs } from "fs";
 import path from "path";
 import {
   DEFAULT_PREFS,
+  type EntryMode,
   type JournalEntry,
+  type PaperAccount,
   type PaperTrade,
   type UserPrefs,
 } from "./user-types";
 
-export type { JournalEntry, PaperTrade, UserPrefs };
+export type { EntryMode, JournalEntry, PaperAccount, PaperTrade, UserPrefs };
 export { DEFAULT_PREFS };
 
 const PREFS_FILE = path.join(process.cwd(), ".user-prefs.json");
@@ -70,42 +72,147 @@ export async function readJournal(limit = 50): Promise<JournalEntry[]> {
   }
 }
 
+function normalizeTrade(raw: Partial<PaperTrade> & PaperTrade): PaperTrade {
+  const sizePct = raw.sizePct || 1;
+  const leverage = raw.leverage || 1;
+  const bankroll = 1000;
+  const marginEur = raw.marginEur ?? (bankroll * sizePct) / 100;
+  return {
+    id: raw.id,
+    openedAt: raw.openedAt,
+    filledAt: raw.filledAt ?? (raw.status === "pending" ? null : raw.openedAt),
+    coin: raw.coin,
+    side: raw.side,
+    entry: raw.entry,
+    tp: raw.tp,
+    sl: raw.sl,
+    leverage,
+    sizePct,
+    marginEur,
+    notionalEur: raw.notionalEur ?? marginEur * leverage,
+    entryMode: raw.entryMode ?? "market_now",
+    status: raw.status === "open" || raw.status === "pending" ? raw.status : raw.status,
+    closedAt: raw.closedAt ?? null,
+    exitPx: raw.exitPx ?? null,
+    markPx: raw.markPx ?? null,
+    pnlPct: raw.pnlPct ?? null,
+    pnlEur: raw.pnlEur ?? null,
+    note: raw.note || "",
+  };
+}
+
 export async function loadPaperTrades(): Promise<PaperTrade[]> {
   try {
-    return JSON.parse(await fs.readFile(PAPER_FILE, "utf8")) as PaperTrade[];
+    const raw = JSON.parse(await fs.readFile(PAPER_FILE, "utf8")) as Partial<PaperTrade>[];
+    return raw.map((t) => normalizeTrade(t as PaperTrade));
   } catch {
     return [];
   }
 }
 
 export async function savePaperTrades(trades: PaperTrade[]): Promise<void> {
-  await fs.writeFile(PAPER_FILE, JSON.stringify(trades.slice(0, 100)), "utf8");
+  await fs.writeFile(PAPER_FILE, JSON.stringify(trades.slice(0, 120)), "utf8");
 }
 
-export async function openPaperTrade(
-  input: Omit<
-    PaperTrade,
-    "id" | "status" | "closedAt" | "exitPx" | "pnlPct"
-  >,
-): Promise<PaperTrade> {
+export function computePaperAccount(
+  trades: PaperTrade[],
+  bankrollStartEur = 1000,
+): PaperAccount {
+  let realized = 0;
+  let unrealized = 0;
+  let marginUsed = 0;
+  let openCount = 0;
+  let pendingCount = 0;
+  let closedCount = 0;
+  let winCount = 0;
+  let lossCount = 0;
+
+  for (const t of trades) {
+    if (t.status === "pending") {
+      pendingCount += 1;
+      continue;
+    }
+    if (t.status === "open") {
+      openCount += 1;
+      marginUsed += t.marginEur;
+      unrealized += t.pnlEur ?? 0;
+      continue;
+    }
+    closedCount += 1;
+    const pnl = t.pnlEur ?? 0;
+    realized += pnl;
+    if (pnl > 0) winCount += 1;
+    else if (pnl < 0) lossCount += 1;
+  }
+
+  // Cash = start - margins ouvertes + réalisé
+  const cashEur = bankrollStartEur - marginUsed + realized;
+  const equityEur = cashEur + marginUsed + unrealized;
+
+  return {
+    bankrollStartEur,
+    equityEur,
+    cashEur,
+    marginUsedEur: marginUsed,
+    realizedPnlEur: realized,
+    unrealizedPnlEur: unrealized,
+    openCount,
+    pendingCount,
+    closedCount,
+    winCount,
+    lossCount,
+  };
+}
+
+export async function openPaperTrade(input: {
+  openedAt: number;
+  coin: string;
+  side: "long" | "short";
+  entry: number;
+  tp: number;
+  sl: number;
+  leverage: number;
+  sizePct: number;
+  entryMode: EntryMode;
+  note: string;
+  bankrollEur?: number;
+  markPx?: number;
+}): Promise<PaperTrade> {
   const trades = await loadPaperTrades();
-  // Évite doublons open même coin/side récents
   const exists = trades.find(
     (t) =>
-      t.status === "open" &&
+      (t.status === "open" || t.status === "pending") &&
       t.coin === input.coin &&
       t.side === input.side &&
       Date.now() - t.openedAt < 2 * 3600_000,
   );
   if (exists) return exists;
 
+  const bankroll = input.bankrollEur ?? 1000;
+  const sizePct = Math.max(0.5, Math.min(5, input.sizePct || 1));
+  const marginEur = (bankroll * sizePct) / 100;
+  const marketNow = input.entryMode === "market_now";
   const trade: PaperTrade = {
-    ...input,
-    id: `pt-${input.openedAt}-${input.coin}`,
-    status: "open",
+    id: `pt-${input.openedAt}-${input.coin}-${input.side}`,
+    openedAt: input.openedAt,
+    filledAt: marketNow ? input.openedAt : null,
+    coin: input.coin,
+    side: input.side,
+    entry: input.entry,
+    tp: input.tp,
+    sl: input.sl,
+    leverage: input.leverage,
+    sizePct,
+    marginEur,
+    notionalEur: marginEur * input.leverage,
+    entryMode: input.entryMode,
+    status: marketNow ? "open" : "pending",
     closedAt: null,
     exitPx: null,
-    pnlPct: null,
+    markPx: input.markPx ?? input.entry,
+    pnlPct: 0,
+    pnlEur: 0,
+    note: input.note,
   };
   trades.unshift(trade);
   await savePaperTrades(trades);

@@ -5,6 +5,8 @@ export interface UserPrefs {
   hushHoursEnd: number;
   telegramEnabled: boolean;
   paperTradeEnabled: boolean;
+  /** Solde paper de départ en € */
+  paperBankrollEur: number;
 }
 
 export const DEFAULT_PREFS: UserPrefs = {
@@ -14,6 +16,7 @@ export const DEFAULT_PREFS: UserPrefs = {
   hushHoursEnd: 6,
   telegramEnabled: true,
   paperTradeEnabled: true,
+  paperBankrollEur: 1000,
 };
 
 export interface JournalEntry {
@@ -31,19 +34,48 @@ export interface JournalEntry {
   source: string;
 }
 
+export type EntryMode = "market_now" | "limit_wait";
+
 export interface PaperTrade {
   id: string;
   openedAt: number;
+  /** Moment où le prix a touché l’entrée (limit) ou = openedAt (market). */
+  filledAt: number | null;
   coin: string;
   side: "long" | "short";
   entry: number;
   tp: number;
   sl: number;
   leverage: number;
+  /** % du capital paper engagé en marge (ex: 2 = 2 %). */
   sizePct: number;
-  status: "open" | "tp" | "sl" | "closed_manual" | "invalidated";
+  /** Marge engagée en €. */
+  marginEur: number;
+  /** Notionnel = marge × levier. */
+  notionalEur: number;
+  entryMode: EntryMode;
+  status: "pending" | "open" | "tp" | "sl" | "closed_manual" | "invalidated" | "expired";
   closedAt: number | null;
   exitPx: number | null;
+  markPx: number | null;
+  /** PnL levieré en % sur la marge. */
   pnlPct: number | null;
+  /** PnL en euros (sur la marge × move × levier). */
+  pnlEur: number | null;
   note: string;
+}
+
+export interface PaperAccount {
+  bankrollStartEur: number;
+  /** Cash libre + marges ouvertes (valeur mark-to-market). */
+  equityEur: number;
+  cashEur: number;
+  marginUsedEur: number;
+  realizedPnlEur: number;
+  unrealizedPnlEur: number;
+  openCount: number;
+  pendingCount: number;
+  closedCount: number;
+  winCount: number;
+  lossCount: number;
 }

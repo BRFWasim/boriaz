@@ -6,7 +6,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { formatPct, formatPx, signedClass } from "@/lib/format";
-import type { JournalEntry, PaperTrade, UserPrefs } from "@/lib/user-types";
+import type {
+  JournalEntry,
+  PaperAccount,
+  PaperTrade,
+  UserPrefs,
+} from "@/lib/user-types";
 import type { BacktestPayload } from "@/lib/backtest";
 import type { CorrelationPayload } from "@/lib/correlation";
 import { DEFAULT_PREFS } from "@/lib/user-types";
@@ -15,13 +20,13 @@ export function LabPanel() {
   const [prefs, setPrefs] = useState<UserPrefs | null>(null);
   const [journal, setJournal] = useState<JournalEntry[]>([]);
   const [paper, setPaper] = useState<PaperTrade[]>([]);
+  const [account, setAccount] = useState<PaperAccount | null>(null);
   const [corr, setCorr] = useState<CorrelationPayload | null>(null);
   const [bt, setBt] = useState<BacktestPayload | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   async function refresh() {
-    setLoading(true);
     try {
       const [p, j, pa, c] = await Promise.all([
         fetch("/api/prefs").then((r) => r.json()),
@@ -32,6 +37,7 @@ export function LabPanel() {
       setPrefs(p.prefs ?? DEFAULT_PREFS);
       setJournal(j.entries ?? []);
       setPaper(pa.trades ?? []);
+      setAccount(pa.account ?? null);
       if (!c.error || c.latest) setCorr(c);
     } catch (e) {
       setMsg(e instanceof Error ? e.message : "Erreur lab");
@@ -42,6 +48,8 @@ export function LabPanel() {
 
   useEffect(() => {
     void refresh();
+    const id = window.setInterval(() => void refresh(), 12_000);
+    return () => window.clearInterval(id);
   }, []);
 
   async function savePrefs() {
@@ -85,15 +93,55 @@ export function LabPanel() {
       <section>
         <h2 className="text-xl font-semibold">Lab · BoriazBot</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Journal des signaux, paper trade, corrélation macro, backtest RSI,
-          préférences (levier, hush hours TG).
+          Zone d’atelier : mesurer la qualité des signaux sans risque réel,
+          comprendre le macro, et régler le bot.
         </p>
         {msg ? <p className="mt-2 text-sm text-primary">{msg}</p> : null}
+      </section>
+
+      <section className="rounded-2xl border border-border/80 bg-card/60 p-4">
+        <h3 className="font-medium">Paper trade — c’est quoi ?</h3>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Un <span className="text-foreground">compte virtuel de 1000 €</span> qui
+          suit automatiquement chaque signal Telegram/accueil comme si tu
+          l’avais pris. Ça sert à voir si les setups sont bons{" "}
+          <em>avant</em> de risquer de l’argent réel. Ce n’est pas un vrai
+          ordre sur Hyperliquid.
+        </p>
+        {account ? (
+          <div className="mt-3 grid gap-2 sm:grid-cols-4">
+            <Metric label="Départ" value={`${account.bankrollStartEur} €`} />
+            <Metric
+              label="Equity"
+              value={`${account.equityEur.toFixed(2)} €`}
+            />
+            <Metric
+              label="Réalisé"
+              value={`${account.realizedPnlEur.toFixed(2)} €`}
+            />
+            <Metric
+              label="Latent"
+              value={`${account.unrealizedPnlEur.toFixed(2)} €`}
+            />
+          </div>
+        ) : null}
+        <p className="mt-2 text-xs text-muted-foreground">
+          Equity = cash libre + marges ouvertes + PnL latent. Marge par trade ≈
+          % du capital × levier pour le notionnel. Ouverts {account?.openCount ?? 0}{" "}
+          · en attente limite {account?.pendingCount ?? 0} · clos{" "}
+          {account?.closedCount ?? 0} (W{account?.winCount ?? 0}/L
+          {account?.lossCount ?? 0}).
+        </p>
       </section>
 
       {prefs ? (
         <section className="rounded-2xl border border-border/80 bg-card/60 p-4">
           <h3 className="font-medium">Préférences</h3>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Levier max plafonne les suggestions. Cryptos suivies = watchlist
+            signaux. Hush hours = pas de Telegram la nuit (UTC). Paper auto =
+            chaque signal fort ouvre une simu.
+          </p>
           <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <div>
               <Label htmlFor="lev">Levier max</Label>
@@ -105,6 +153,22 @@ export function LabPanel() {
                 value={prefs.maxLeverage}
                 onChange={(e) =>
                   setPrefs({ ...prefs, maxLeverage: Number(e.target.value) })
+                }
+              />
+            </div>
+            <div>
+              <Label htmlFor="bank">Solde paper (€)</Label>
+              <Input
+                id="bank"
+                type="number"
+                min={100}
+                max={100000}
+                value={prefs.paperBankrollEur ?? 1000}
+                onChange={(e) =>
+                  setPrefs({
+                    ...prefs,
+                    paperBankrollEur: Number(e.target.value),
+                  })
                 }
               />
             </div>
@@ -182,7 +246,15 @@ export function LabPanel() {
 
       <section className="rounded-2xl border border-border/80 bg-card/60 p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="font-medium">Corrélation DXY / yields vs BTC</h3>
+          <div>
+            <h3 className="font-medium">Corrélation DXY / yields vs BTC</h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Mesure si BTC bouge avec le dollar (DXY) et le taux US 10 ans.
+              Corrélation négative BTC↔DXY = classique risk-off (dollar fort →
+              crypto sous pression). Sert à contextualiser les shorts/longs,
+              pas à timer un trade seul.
+            </p>
+          </div>
           <Button size="sm" variant="outline" onClick={() => void refresh()}>
             Rafraîchir
           </Button>
@@ -192,9 +264,7 @@ export function LabPanel() {
             <Metric
               label="BTC ↔ DXY"
               value={
-                corr.corrBtcDxy === null
-                  ? "n/d"
-                  : corr.corrBtcDxy.toFixed(2)
+                corr.corrBtcDxy === null ? "n/d" : corr.corrBtcDxy.toFixed(2)
               }
             />
             <Metric
@@ -211,19 +281,22 @@ export function LabPanel() {
             />
           </div>
         ) : (
-          <p className="mt-2 text-sm text-muted-foreground">Données indisponibles</p>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Données indisponibles
+          </p>
         )}
-        {corr?.note ? (
-          <p className="mt-2 text-xs text-muted-foreground">{corr.note}</p>
-        ) : null}
-        {corr?.error ? (
-          <p className="mt-1 text-xs text-amber-300">{corr.error}</p>
-        ) : null}
       </section>
 
       <section className="rounded-2xl border border-border/80 bg-card/60 p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="font-medium">Backtest RSI (4h)</h3>
+          <div>
+            <h3 className="font-medium">Backtest RSI (4h)</h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Test historique simple : long si RSI croise au-dessus de 32, short
+              sous 68. Sert à voir si la règle technique de base a un edge sur
+              30–90 j — ce n’est pas le même moteur que le crowd/IA live.
+            </p>
+          </div>
           <div className="flex gap-2">
             <Button size="sm" variant="outline" onClick={() => void runBacktest(30)}>
               30 j
@@ -242,7 +315,9 @@ export function LabPanel() {
               <Badge variant="outline">n={bt.sample}</Badge>
               <Badge variant="outline">
                 WR{" "}
-                {bt.winRate === null ? "n/d" : `${(bt.winRate * 100).toFixed(0)}%`}
+                {bt.winRate === null
+                  ? "n/d"
+                  : `${(bt.winRate * 100).toFixed(0)}%`}
               </Badge>
               <Badge variant="outline">
                 E{" "}
@@ -255,18 +330,23 @@ export function LabPanel() {
                 {bt.profitFactor === null ? "n/d" : bt.profitFactor.toFixed(2)}
               </Badge>
             </div>
-            <p className="text-xs text-muted-foreground">{bt.note}</p>
             <ul className="max-h-48 space-y-1 overflow-auto text-xs">
-              {bt.trades.slice(-12).reverse().map((t, i) => (
-                <li key={`${t.entryAt}-${i}`} className="flex justify-between gap-2">
-                  <span>
-                    {t.side.toUpperCase()} {t.coin} · {t.rule}
-                  </span>
-                  <span className={signedClass(t.pnlPct)}>
-                    {formatPct(t.pnlPct, 2)}
-                  </span>
-                </li>
-              ))}
+              {bt.trades
+                .slice(-12)
+                .reverse()
+                .map((t, i) => (
+                  <li
+                    key={`${t.entryAt}-${i}`}
+                    className="flex justify-between gap-2"
+                  >
+                    <span>
+                      {t.side.toUpperCase()} {t.coin} · {t.rule}
+                    </span>
+                    <span className={signedClass(t.pnlPct)}>
+                      {formatPct(t.pnlPct, 2)}
+                    </span>
+                  </li>
+                ))}
             </ul>
           </div>
         ) : (
@@ -277,12 +357,20 @@ export function LabPanel() {
       </section>
 
       <section className="rounded-2xl border border-border/80 bg-card/60 p-4">
-        <h3 className="font-medium">Paper trades</h3>
+        <h3 className="font-medium">Positions paper (live)</h3>
+        <p className="mt-1 text-sm text-muted-foreground">
+          <strong className="font-medium text-foreground">pending</strong> =
+          limite pas encore touchée. <strong className="font-medium text-foreground">open</strong> =
+          position simulée ouverte, PnL € mis à jour au prix live. TP/SL
+          ferment automatiquement.
+        </p>
         {paper.length === 0 ? (
-          <p className="mt-2 text-sm text-muted-foreground">Aucun paper pour l’instant.</p>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Aucun paper pour l’instant — un signal fort en créera un.
+          </p>
         ) : (
           <ul className="mt-3 space-y-2 text-sm">
-            {paper.slice(0, 15).map((t) => (
+            {paper.slice(0, 20).map((t) => (
               <li
                 key={t.id}
                 className="flex flex-wrap items-center justify-between gap-2 border-b border-border/40 pb-2"
@@ -300,16 +388,31 @@ export function LabPanel() {
                   </Badge>
                   <span className="ml-2 text-xs text-muted-foreground">
                     {t.status}
+                    {t.entryMode === "limit_wait" ? " · limite" : " · marché"}
                     {t.note ? ` · ${t.note}` : ""}
                   </span>
                 </div>
-                <div className="numeric text-xs">
-                  E {formatPx(t.entry)} · TP {formatPx(t.tp)} · SL {formatPx(t.sl)}
-                  {t.pnlPct !== null ? (
-                    <span className={`ml-2 ${signedClass(t.pnlPct)}`}>
-                      {formatPct(t.pnlPct, 2)}
-                    </span>
-                  ) : null}
+                <div className="numeric text-xs text-right">
+                  <div>
+                    E {formatPx(t.entry)} · TP {formatPx(t.tp)} · SL{" "}
+                    {formatPx(t.sl)}
+                  </div>
+                  <div>
+                    Marge {t.marginEur?.toFixed?.(2) ?? "—"} € ·{" "}
+                    {t.pnlEur != null ? (
+                      <span className={signedClass(t.pnlEur)}>
+                        {t.pnlEur >= 0 ? "+" : ""}
+                        {t.pnlEur.toFixed(2)} €
+                      </span>
+                    ) : (
+                      "—"
+                    )}
+                    {t.pnlPct != null ? (
+                      <span className={`ml-1 ${signedClass(t.pnlPct)}`}>
+                        ({formatPct(t.pnlPct, 2)})
+                      </span>
+                    ) : null}
+                  </div>
                 </div>
               </li>
             ))}
@@ -318,10 +421,14 @@ export function LabPanel() {
       </section>
 
       <section className="rounded-2xl border border-border/80 bg-card/60 p-4">
-        <h3 className="font-medium">Journal des signaux LONG/SHORT</h3>
+        <h3 className="font-medium">Journal des signaux</h3>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Historique des LONG/SHORT envoyés (Telegram). Utile pour revoir ce qui
+          a été proposé, à quelle entrée/TP/SL, et comparer au paper.
+        </p>
         {journal.length === 0 ? (
           <p className="mt-2 text-sm text-muted-foreground">
-            Vide — les signaux envoyés sur Telegram s’y ajoutent.
+            Vide — les signaux Telegram s’y ajoutent.
           </p>
         ) : (
           <ul className="mt-3 max-h-72 space-y-2 overflow-auto text-sm">
@@ -332,7 +439,8 @@ export function LabPanel() {
                     {e.action.toUpperCase()} {e.coin}
                   </Badge>
                   <span className="text-xs text-muted-foreground">
-                    {new Date(e.at).toLocaleString("fr-FR")} · conf {e.confidence}
+                    {new Date(e.at).toLocaleString("fr-FR")} · conf{" "}
+                    {e.confidence}
                   </span>
                 </div>
                 <p className="mt-1 numeric text-xs">
@@ -357,7 +465,7 @@ function Metric({ label, value }: { label: string; value: string }) {
       <p className="text-[10px] tracking-wide text-muted-foreground uppercase">
         {label}
       </p>
-      <p className="mt-0.5 text-sm font-medium break-all">{value}</p>
+      <p className="mt-0.5 break-all text-sm font-medium">{value}</p>
     </div>
   );
 }

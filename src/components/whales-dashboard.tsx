@@ -29,7 +29,7 @@ import { WhaleCard } from "@/components/whale-card";
 import { formatAgo, formatExactTime } from "@/lib/format";
 import type { AppTab, DashboardPayload, SortKey, UiMode } from "@/lib/types";
 
-const POLL_MS = 20_000;
+const POLL_MS = 10_000;
 const MODE_KEY = "hl-whales-ui-mode";
 
 const TAB_IDS: AppTab[] = ["home", "whales", "spot", "btc", "macro", "lab"];

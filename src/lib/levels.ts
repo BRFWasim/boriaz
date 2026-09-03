@@ -1,5 +1,6 @@
 import type { IndicatorSnapshot, SignalBias, BuyTimingAction, BuyZone } from "./types";
 import { inferBuyTiming } from "./alerts";
+import type { EntryMode } from "./user-types";
 
 function fmtPx(px: number): string {
   if (px >= 1000) return px.toFixed(0);
@@ -10,9 +11,6 @@ function fmtPx(px: number): string {
 
 /**
  * Zone d’achat cohérente avec tendance + prix actuel.
- * - Biais baissier fort → pas de zone d’achat agressive (éviter / attendre plus bas)
- * - Zone toujours ancrée sous le prix (pullback), plafonnée près du marché
- * - Si prix déjà trop loin du support → quality basse
  */
 export function computeBuyZone(
   coin: string,
@@ -23,7 +21,6 @@ export function computeBuyZone(
   const price = ind.price;
   const atr = ind.atr14 && ind.atr14 > 0 ? ind.atr14 : price * 0.015;
 
-  // Ancres sous le marché uniquement
   const anchors = [
     ind.bbLower,
     ind.support,
@@ -42,19 +39,16 @@ export function computeBuyZone(
       ? Math.min(...anchors)
       : price - atr * 1.2;
 
-  // Si EMA20 > prix en tendance haussière, pullback vers EMA20
   if (bias === "haussier" && ind.ema20 !== null && ind.ema20 < price) {
     low = Math.min(low, ind.ema20 - atr * 0.15);
     low = Math.max(low, price - atr * 2.5);
   }
 
-  // Tendance baissière : zone plus basse, qualité réduite
   if (bias === "baissier" || score <= -3) {
     low = Math.min(low, (ind.support ?? price) - atr * 0.6, price - atr * 1.5);
   }
 
   if (!Number.isFinite(low) || low <= 0) low = price * 0.97;
-  // Ne jamais proposer une zone au-dessus du prix
   if (low >= price) low = price - atr * 0.5;
 
   let high = Math.min(price * 0.998, low + atr * 0.85, ind.ema20 ?? low + atr * 0.7);
@@ -74,7 +68,6 @@ export function computeBuyZone(
     bbLower: ind.bbLower,
   });
 
-  // Aligner l’action sur la tendance
   if (bias === "baissier" && score <= -3) {
     buyTiming = {
       action: "eviter" as BuyTimingAction,
@@ -115,27 +108,84 @@ export function computeBuyZone(
   };
 }
 
-/** Niveaux entrée / TP / SL pour un setup long ou short. */
+export interface TradeLevels {
+  entry: number;
+  idealEntry: number;
+  tp: number;
+  sl: number;
+  entryMode: EntryMode;
+  entryHint: string;
+  riskReward: number;
+  distanceToIdealPct: number;
+}
+
+/**
+ * Entrée réaliste :
+ * - conf ≥ 62 → market_now au prix actuel
+ * - sinon limite (pullback long / bounce short)
+ */
 export function computeTradeLevels(
   side: "long" | "short",
   price: number,
   ind: IndicatorSnapshot,
-): { entry: number; tp: number; sl: number } {
+  confidence = 60,
+): TradeLevels {
   const atr = ind.atr14 && ind.atr14 > 0 ? ind.atr14 : price * 0.015;
+  const preferMarket = confidence >= 62;
+
   if (side === "long") {
-    const entry = Math.min(price, ind.ema20 ?? price, (ind.bbMiddle ?? price) * 0.998);
-    const e = entry > 0 ? Math.min(entry, price) : price;
+    const pullback = Math.min(
+      price,
+      ind.ema20 ?? price,
+      (ind.bbMiddle ?? price) * 0.998,
+      price - atr * 0.35,
+    );
+    const idealEntry = Math.min(pullback, price);
+    const distPct = price > 0 ? ((price - idealEntry) / price) * 100 : 0;
+    const useMarket = preferMarket || distPct < 0.35;
+    const entry = useMarket ? price : idealEntry;
+    const tp = entry + atr * 2.0;
+    const sl = Math.min(entry - atr * 1.0, (ind.support ?? entry) - atr * 0.25);
+    const risk = Math.abs(entry - sl) || atr;
+    const reward = Math.abs(tp - entry);
     return {
-      entry: e,
-      tp: e + atr * 2.2,
-      sl: Math.min(e - atr * 1.1, (ind.support ?? e) - atr * 0.3),
+      entry,
+      idealEntry,
+      tp,
+      sl,
+      entryMode: useMarket ? "market_now" : "limit_wait",
+      entryHint: useMarket
+        ? `Entrer MAINTENANT au marché (~${fmtPx(price)}). Limite idéale optionnelle ~${fmtPx(idealEntry)} si tu préfères un meilleur prix.`
+        : `Placer une LIMITE d’achat ~${fmtPx(idealEntry)} (sous le spot ${fmtPx(price)}). Ne force pas l’entrée tant que ce niveau n’est pas touché.`,
+      riskReward: reward / risk,
+      distanceToIdealPct: distPct,
     };
   }
-  const entry = Math.max(price, ind.ema20 ?? price, (ind.bbMiddle ?? price) * 1.002);
-  const e = Math.max(entry, price);
+
+  const bounce = Math.max(
+    price,
+    ind.ema20 ?? price,
+    (ind.bbMiddle ?? price) * 1.002,
+    price + atr * 0.35,
+  );
+  const idealEntry = Math.max(bounce, price);
+  const distPct = price > 0 ? ((idealEntry - price) / price) * 100 : 0;
+  const useMarket = preferMarket || distPct < 0.35;
+  const entry = useMarket ? price : idealEntry;
+  const tp = entry - atr * 2.0;
+  const sl = Math.max(entry + atr * 1.0, (ind.resistance ?? entry) + atr * 0.25);
+  const risk = Math.abs(sl - entry) || atr;
+  const reward = Math.abs(entry - tp);
   return {
-    entry: e,
-    tp: e - atr * 2.2,
-    sl: Math.max(e + atr * 1.1, (ind.resistance ?? e) + atr * 0.3),
+    entry,
+    idealEntry,
+    tp,
+    sl,
+    entryMode: useMarket ? "market_now" : "limit_wait",
+    entryHint: useMarket
+      ? `Entrer MAINTENANT au marché (~${fmtPx(price)}). Meilleure limite SHORT optionnelle plus haut ~${fmtPx(idealEntry)}.`
+      : `Placer une LIMITE de vente short ~${fmtPx(idealEntry)} (au-dessus du spot ${fmtPx(price)}). Attendre le bounce — pas d’entrée forcée.`,
+    riskReward: reward / risk,
+    distanceToIdealPct: distPct,
   };
 }

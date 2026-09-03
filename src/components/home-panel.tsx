@@ -6,22 +6,27 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { formatPct, formatPx, signedClass } from "@/lib/format";
 import type { HomePayload } from "@/lib/home";
+import type { PaperAccount } from "@/lib/user-types";
 
 export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) {
   const [data, setData] = useState<HomePayload | null>(null);
+  const [account, setAccount] = useState<PaperAccount | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [liveAt, setLiveAt] = useState<number | null>(null);
 
   useEffect(() => {
     let alive = true;
-    async function load() {
+    async function loadFull() {
       try {
         const res = await fetch("/api/home", { cache: "no-store" });
         const json = (await res.json()) as HomePayload & { error?: string };
         if (!res.ok) throw new Error(json.error || "Accueil impossible");
         if (alive) {
           setData(json);
+          setAccount(json.account);
           setError(null);
+          setLiveAt(json.fetchedAt);
         }
       } catch (e) {
         if (alive) setError(e instanceof Error ? e.message : "Erreur");
@@ -29,11 +34,48 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
         if (alive) setLoading(false);
       }
     }
-    void load();
-    const id = window.setInterval(() => void load(), 90_000);
+    async function loadLive() {
+      try {
+        const res = await fetch("/api/live", { cache: "no-store" });
+        const json = await res.json();
+        if (!res.ok || !alive) return;
+        setAccount(json.account);
+        setLiveAt(json.fetchedAt);
+        setData((prev) => {
+          if (!prev) return prev;
+          const by = new Map(
+            (json.quotes as { coin: string; price: number; change15mPct: number | null; change2hPct: number | null }[]).map(
+              (q) => [q.coin, q],
+            ),
+          );
+          return {
+            ...prev,
+            account: json.account,
+            cards: prev.cards.map((c) => {
+              const q = by.get(c.coin);
+              return q
+                ? {
+                    ...c,
+                    price: q.price,
+                    change15mPct: q.change15mPct,
+                    change2hPct: q.change2hPct,
+                  }
+                : c;
+            }),
+            fetchedAt: json.fetchedAt,
+          };
+        });
+      } catch {
+        // ignore live hiccups
+      }
+    }
+    void loadFull();
+    const fullId = window.setInterval(() => void loadFull(), 45_000);
+    const liveId = window.setInterval(() => void loadLive(), 8_000);
     return () => {
       alive = false;
-      window.clearInterval(id);
+      window.clearInterval(fullId);
+      window.clearInterval(liveId);
     };
   }, []);
 
@@ -56,6 +98,8 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
   }
   if (!data) return null;
 
+  const acc = account ?? data.account;
+
   return (
     <div className="space-y-5">
       <section className="text-center sm:text-left">
@@ -66,8 +110,36 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
           Signaux live · watchlist
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Entrée idéale · TP · SL · levier & mise (IA + baleines + Nansen)
+          Prix rafraîchis ~8 s · signaux ~45 s · paper 1000 €
+          {liveAt ? ` · maj ${new Date(liveAt).toLocaleTimeString("fr-FR")}` : ""}
         </p>
+      </section>
+
+      {acc ? (
+        <section className="grid gap-2 rounded-2xl border border-border/80 bg-card/70 p-4 sm:grid-cols-4">
+          <Stat label="Solde départ" value={`${acc.bankrollStartEur.toFixed(0)} €`} />
+          <Stat
+            label="Equity paper"
+            value={`${acc.equityEur.toFixed(2)} €`}
+            className={signedClass(acc.equityEur - acc.bankrollStartEur)}
+          />
+          <Stat
+            label="PnL réalisé"
+            value={`${acc.realizedPnlEur >= 0 ? "+" : ""}${acc.realizedPnlEur.toFixed(2)} €`}
+            className={signedClass(acc.realizedPnlEur)}
+          />
+          <Stat
+            label="PnL latent"
+            value={`${acc.unrealizedPnlEur >= 0 ? "+" : ""}${acc.unrealizedPnlEur.toFixed(2)} €`}
+            className={signedClass(acc.unrealizedPnlEur)}
+          />
+        </section>
+      ) : null}
+
+      <section className="rounded-xl border border-border/60 bg-muted/20 px-3 py-2.5 text-sm text-muted-foreground">
+        <p className="font-medium text-foreground">Comment lire une entrée ?</p>
+        <p className="mt-1">{data.howto.entry}</p>
+        <p className="mt-1">{data.howto.paper}</p>
       </section>
 
       {data.best && data.best.action !== "wait" && data.best.confidence >= 55 ? (
@@ -79,7 +151,7 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
           }`}
         >
           <p className="text-xs tracking-wide uppercase text-muted-foreground">
-            Setup prioritaire · notif Telegram si confiance élevée
+            Setup prioritaire · détail complet
           </p>
           <div className="mt-2 flex flex-wrap items-center gap-3">
             <CryptoLogo symbol={data.best.coin} size={40} />
@@ -92,12 +164,33 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
                 mise {data.best.sizePct}
               </p>
             </div>
+            <Badge
+              variant="outline"
+              className={
+                data.best.entryMode === "limit_wait"
+                  ? "border-amber-500/40 text-amber-100"
+                  : "border-long/40 text-long"
+              }
+            >
+              {data.best.entryMode === "limit_wait"
+                ? "Limite — attendre le prix"
+                : "Marché — entrer maintenant"}
+            </Badge>
           </div>
-          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-            <Level label="Prix" value={formatPx(data.best.price)} />
+
+          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
+            <Level label="Prix spot" value={formatPx(data.best.price)} />
             <Level
-              label="Entrée idéale"
+              label="Entrée"
               value={data.best.entry != null ? formatPx(data.best.entry) : "—"}
+            />
+            <Level
+              label="Idéal limite"
+              value={
+                data.best.idealEntry != null
+                  ? formatPx(data.best.idealEntry)
+                  : "—"
+              }
             />
             <Level
               label="TP"
@@ -110,7 +203,19 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
               className="text-short"
             />
           </div>
+
+          {data.best.entryHint ? (
+            <p className="mt-3 rounded-lg bg-background/40 px-3 py-2 text-sm">
+              {data.best.entryHint}
+            </p>
+          ) : null}
+
           <p className="mt-2 text-sm">{data.best.aiText || data.best.reason}</p>
+          {data.best.riskReward != null ? (
+            <p className="mt-1 text-xs text-muted-foreground">
+              Risk/Reward ~ {data.best.riskReward.toFixed(2)}
+            </p>
+          ) : null}
           {data.best.closeSuggestion ? (
             <p className="mt-2 text-sm text-amber-200">
               Fermeture suggérée : {data.best.closeSuggestion}
@@ -167,29 +272,49 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
                   ? "Attendre"
                   : card.direction.toUpperCase()}
               </Badge>
+              {card.entryMode ? (
+                <Badge variant="outline" className="text-[10px]">
+                  {card.entryMode === "limit_wait" ? "Limite" : "Marché"}
+                </Badge>
+              ) : null}
             </div>
 
             {(card.direction === "long" || card.direction === "short") &&
             (card.entry || card.tp || card.sl) ? (
-              <div className="mt-3 grid grid-cols-3 gap-1.5 text-[11px]">
-                <div className="rounded-md bg-muted/30 px-1.5 py-1">
-                  <p className="text-muted-foreground">Entrée</p>
-                  <p className="numeric font-medium">
-                    {card.entry != null ? formatPx(card.entry) : "—"}
-                  </p>
+              <div className="mt-3 space-y-2">
+                <div className="grid grid-cols-3 gap-1.5 text-[11px]">
+                  <div className="rounded-md bg-muted/30 px-1.5 py-1">
+                    <p className="text-muted-foreground">Entrée</p>
+                    <p className="numeric font-medium">
+                      {card.entry != null ? formatPx(card.entry) : "—"}
+                    </p>
+                  </div>
+                  <div className="rounded-md bg-muted/30 px-1.5 py-1">
+                    <p className="text-muted-foreground">TP</p>
+                    <p className="numeric font-medium text-long">
+                      {card.tp != null ? formatPx(card.tp) : "—"}
+                    </p>
+                  </div>
+                  <div className="rounded-md bg-muted/30 px-1.5 py-1">
+                    <p className="text-muted-foreground">SL</p>
+                    <p className="numeric font-medium text-short">
+                      {card.sl != null ? formatPx(card.sl) : "—"}
+                    </p>
+                  </div>
                 </div>
-                <div className="rounded-md bg-muted/30 px-1.5 py-1">
-                  <p className="text-muted-foreground">TP</p>
-                  <p className="numeric font-medium text-long">
-                    {card.tp != null ? formatPx(card.tp) : "—"}
+                {card.idealEntry != null ? (
+                  <p className="text-[11px] text-muted-foreground">
+                    Idéal limite {formatPx(card.idealEntry)}
+                    {card.riskReward != null
+                      ? ` · R:R ${card.riskReward.toFixed(1)}`
+                      : ""}
                   </p>
-                </div>
-                <div className="rounded-md bg-muted/30 px-1.5 py-1">
-                  <p className="text-muted-foreground">SL</p>
-                  <p className="numeric font-medium text-short">
-                    {card.sl != null ? formatPx(card.sl) : "—"}
+                ) : null}
+                {card.entryHint ? (
+                  <p className="text-[11px] leading-snug text-muted-foreground">
+                    {card.entryHint}
                   </p>
-                </div>
+                ) : null}
               </div>
             ) : null}
 
@@ -223,12 +348,19 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
             </div>
 
             {card.closeSuggestion ? (
-              <p className="mt-2 text-[11px] text-amber-200">{card.closeSuggestion}</p>
+              <p className="mt-2 text-[11px] text-amber-200">
+                {card.closeSuggestion}
+              </p>
             ) : null}
 
-            <p className="mt-3 text-xs text-muted-foreground line-clamp-3">
+            <p className="mt-3 text-xs text-muted-foreground line-clamp-4">
               {card.blurb}
             </p>
+            {card.invalidation ? (
+              <p className="mt-1 text-[10px] text-muted-foreground line-clamp-2">
+                Inv. {card.invalidation}
+              </p>
+            ) : null}
             <p className="mt-2 text-[11px] text-muted-foreground">
               Conf. {card.confidence} · {card.leverage} · {card.sizePct}
             </p>
@@ -237,33 +369,17 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
       </div>
 
       <div className="flex flex-wrap gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => onOpenTab?.("macro")}
-        >
-          Calendrier macro
+        <Button variant="outline" size="sm" onClick={() => onOpenTab?.("lab")}>
+          Lab · paper 1000 €
         </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => onOpenTab?.("btc")}
-        >
-          Analyse marché
+        <Button variant="outline" size="sm" onClick={() => onOpenTab?.("macro")}>
+          Macro
         </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => onOpenTab?.("whales")}
-        >
+        <Button variant="outline" size="sm" onClick={() => onOpenTab?.("btc")}>
+          Analyse
+        </Button>
+        <Button variant="outline" size="sm" onClick={() => onOpenTab?.("whales")}>
           Baleines
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => onOpenTab?.("lab")}
-        >
-          Lab · journal / paper
         </Button>
       </div>
 
@@ -287,6 +403,27 @@ function Level({
         {label}
       </p>
       <p className={`numeric mt-0.5 text-sm font-semibold ${className ?? ""}`}>
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function Stat({
+  label,
+  value,
+  className,
+}: {
+  label: string;
+  value: string;
+  className?: string;
+}) {
+  return (
+    <div>
+      <p className="text-[10px] tracking-wide text-muted-foreground uppercase">
+        {label}
+      </p>
+      <p className={`numeric mt-0.5 text-lg font-semibold ${className ?? ""}`}>
         {value}
       </p>
     </div>

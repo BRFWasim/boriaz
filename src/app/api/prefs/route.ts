@@ -32,6 +32,9 @@ export async function POST(request: Request) {
     if (typeof body.paperTradeEnabled === "boolean") {
       patch.paperTradeEnabled = body.paperTradeEnabled;
     }
+    if (typeof body.paperBankrollEur === "number") {
+      patch.paperBankrollEur = Math.min(100000, Math.max(100, body.paperBankrollEur));
+    }
     const prefs = await savePrefs(patch);
     return Response.json({ prefs });
   } catch (e) {
