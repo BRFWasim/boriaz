@@ -315,6 +315,7 @@ export async function getTradeSignals(options?: {
       { interval: "1h", horizon: "court (1h)" },
       { interval: "4h", horizon: "moyen (4h)" },
       { interval: "1d", horizon: "long (1d)" },
+      { interval: "1w", horizon: "très long (1w)" },
     ];
 
     const frames = await analyzeCoinFrames(coin, frameSpecs);
@@ -537,6 +538,8 @@ export async function getTradeSignals(options?: {
           {
             price: target.price,
             change24hPct: null,
+            change7dPct: null,
+            change30dPct: null,
             rsi14: null,
             macd: null,
             macdSignal: null,
@@ -582,31 +585,45 @@ export async function getTradeSignals(options?: {
       best = target;
     }
   } else if (ai?.action === "wait" && best) {
-    best.action = "wait";
-    best.aiText = ai.detail || "IA : patienter.";
-    best.confidence = Math.min(best.confidence, ai.confidence || 40);
-    best.entry = null;
-    best.idealEntry = null;
-    best.tp = null;
-    best.sl = null;
-    best.entryMode = null;
-    best.entryHint = "Pas d’entrée — attendre un meilleur setup.";
-    best.alignment = computeAlignment({
-      action: "wait",
-      confidence: best.confidence,
-      tfVotes: best.tfVotes,
-      crowd: crowd.find((c) => c.coin === best!.coin),
-      nansenLong: best.nansenLong,
-      nansenShort: best.nansenShort,
-      iaConfidence: ai.confidence || 40,
-      action1hHint: (() => {
-        const v = best!.tfVotes.find((x) => x.interval === "1h");
-        if (!v) return "wait";
-        if (v.bias === "haussier" || v.score >= 3) return "long";
-        if (v.bias === "baissier" || v.score <= -3) return "short";
-        return "wait";
-      })(),
-    });
+    const d = best.tfVotes.find((v) => v.interval === "1d");
+    const w = best.tfVotes.find((v) => v.interval === "1w");
+    const longTermAgrees =
+      best.action !== "wait" &&
+      ((best.action === "long" &&
+        (d?.bias === "haussier" || (d?.score ?? 0) >= 3) &&
+        w?.bias !== "baissier") ||
+        (best.action === "short" &&
+          (d?.bias === "baissier" || (d?.score ?? 0) <= -3) &&
+          w?.bias !== "haussier"));
+    if (longTermAgrees) {
+      best.aiText = `${ai.detail || "IA voulait WAIT"} · ignoré : 1d/1w alignés ${best.action.toUpperCase()}`;
+    } else {
+      best.action = "wait";
+      best.aiText = ai.detail || "IA : patienter.";
+      best.confidence = Math.min(best.confidence, ai.confidence || 40);
+      best.entry = null;
+      best.idealEntry = null;
+      best.tp = null;
+      best.sl = null;
+      best.entryMode = null;
+      best.entryHint = "Pas d’entrée — attendre un meilleur setup.";
+      best.alignment = computeAlignment({
+        action: "wait",
+        confidence: best.confidence,
+        tfVotes: best.tfVotes,
+        crowd: crowd.find((c) => c.coin === best!.coin),
+        nansenLong: best.nansenLong,
+        nansenShort: best.nansenShort,
+        iaConfidence: ai.confidence || 40,
+        action1hHint: (() => {
+          const v = best!.tfVotes.find((x) => x.interval === "1h");
+          if (!v) return "wait";
+          if (v.bias === "haussier" || v.score >= 3) return "long";
+          if (v.bias === "baissier" || v.score <= -3) return "short";
+          return "wait";
+        })(),
+      });
+    }
   }
 
   // Prefère le meilleur Alignement pour le trade
@@ -665,26 +682,75 @@ export async function getTradeSignals(options?: {
       best.alignment.tf1h4hAligned &&
       best.alignment.crowdWrOk);
 
+  const shouldSim =
+    best &&
+    best.action !== "wait" &&
+    best.confidence >= 62 &&
+    best.certainty !== "basse" &&
+    best.alignment.score >= 52 &&
+    best.entry &&
+    best.tp &&
+    best.sl &&
+    (!maxSafety ||
+      best.alignment.tf1h4hAligned ||
+      best.tfVotes.some((v) => v.interval === "1d" && (v.bias === "haussier" || v.bias === "baissier")));
+
+  if (shouldSim && prefs.paperTradeEnabled && options?.notify !== false) {
+    const levNum = Number(String(best!.leverage).match(/[\d.]+/)?.[0] || 1);
+    const sizeNum = Math.max(
+      10,
+      Number(String(best!.sizePct).match(/[\d.]+/)?.[0] || 10),
+    );
+    const side = best!.action === "short" ? "short" : "long";
+    await openPaperTrade({
+      openedAt: Date.now(),
+      coin: best!.coin,
+      side,
+      entry: best!.entry!,
+      tp: best!.tp!,
+      sl: best!.sl!,
+      leverage: levNum,
+      sizePct: sizeNum,
+      entryMode: best!.entryMode ?? "market_now",
+      note: `Simu auto 1000€ · Align ${best!.alignment.score}`,
+      bankrollEur: bankroll,
+      markPx: best!.price,
+    });
+    await appendJournal({
+      at: Date.now(),
+      coin: best!.coin,
+      action: best!.action,
+      confidence: best!.confidence,
+      entry: best!.entry!,
+      tp: best!.tp!,
+      sl: best!.sl!,
+      leverage: best!.leverage,
+      sizePct: `${sizeNum}%`,
+      reason: `Simu · Align ${best!.alignment.score} · ${best!.aiText || best!.reason}`,
+      source: "paper-sim",
+    });
+  }
+
   if (
     notify &&
     !hush &&
+    shouldSim &&
     best &&
-    best.action !== "wait" &&
     best.confidence >= 70 &&
-    best.certainty !== "basse" &&
     best.alignment.score >= 55 &&
-    passesSafety &&
-    best.entry &&
-    best.tp &&
-    best.sl
+    passesSafety
   ) {
-    const key = `${best.coin}:${best.action}:${Math.round(best.entry)}:${Math.round(best.alignment.score / 5)}:${best.entryMode}`;
+    const key = `${best.coin}:${best.action}:${Math.round(best.entry!)}:${Math.round(best.alignment.score / 5)}:${best.entryMode}`;
     if (key !== lastTgKey || Date.now() - lastTgAt > TG_COOLDOWN) {
+      const paperNow = await loadPaperTrades();
+      const accNow = computePaperAccount(paperNow, bankroll);
+      const delta = accNow.equityEur - accNow.bankrollStartEur;
       const text = [
         `SIGNAL ${best.action.toUpperCase()} · ${best.coin}`,
+        `SIMU 1000 € · equity ${accNow.equityEur.toFixed(2)} € (${delta >= 0 ? "+" : ""}${delta.toFixed(2)} €)`,
         `Alignement ${best.alignment.score}/100 (${best.alignment.label})`,
         best.alignment.breakdown,
-        maxSafety ? `Sureté max · 1h+4h OK · crowd WR OK` : "",
+        maxSafety ? `Sureté max · 1h+4h / 1d` : "",
         `Mode: ${best.entryMode === "limit_wait" ? "LIMITE (attendre le prix)" : "MARCHÉ (entrer maintenant)"}`,
         `Confiance ${best.confidence}/100 · certitude ${best.certainty}`,
         best.tfSummary ? `TF: ${best.tfSummary}` : "",
@@ -694,14 +760,14 @@ export async function getTradeSignals(options?: {
         `TP ~ ${best.tp}`,
         `SL ~ ${best.sl}`,
         `Levier: ${best.leverage}`,
-        `Mise: ${best.sizePct}`,
+        `Mise simu: ~10 % du compte 1000 €`,
         `Prix spot ~ ${best.price}`,
         best.entryHint || "",
         best.reason,
         best.aiText ? `IA: ${best.aiText}` : "",
         `Invalidation: ${best.invalidation}`,
         "",
-        "Pas un conseil financier. Risque de perte totale possible.",
+        "Simulation paper — pas un ordre réel. Pas un conseil financier.",
       ]
         .filter(Boolean)
         .join("\n");
@@ -711,41 +777,6 @@ export async function getTradeSignals(options?: {
       if (res.ok) {
         lastTgKey = key;
         lastTgAt = Date.now();
-        await appendJournal({
-          at: Date.now(),
-          coin: best.coin,
-          action: best.action,
-          confidence: best.confidence,
-          entry: best.entry,
-          tp: best.tp,
-          sl: best.sl,
-          leverage: best.leverage,
-          sizePct: best.sizePct,
-          reason: `Align ${best.alignment.score} · ${best.aiText || best.reason}`,
-          source: "trade-signal",
-        });
-        if (prefs.paperTradeEnabled) {
-          const levNum = Number(
-            String(best.leverage).match(/[\d.]+/)?.[0] || 1,
-          );
-          const sizeNum = Number(
-            String(best.sizePct).match(/[\d.]+/)?.[0] || 1,
-          );
-          await openPaperTrade({
-            openedAt: Date.now(),
-            coin: best.coin,
-            side: best.action,
-            entry: best.entry,
-            tp: best.tp,
-            sl: best.sl,
-            leverage: levNum,
-            sizePct: sizeNum,
-            entryMode: best.entryMode ?? "market_now",
-            note: `Ouvert auto · Align ${best.alignment.score}`,
-            bankrollEur: bankroll,
-            markPx: best.price,
-          });
-        }
       }
     }
   }

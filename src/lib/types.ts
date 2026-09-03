@@ -408,6 +408,8 @@ export interface Candle {
 export interface IndicatorSnapshot {
   price: number;
   change24hPct: number | null;
+  change7dPct: number | null;
+  change30dPct: number | null;
   rsi14: number | null;
   macd: number | null;
   macdSignal: number | null;

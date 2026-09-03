@@ -188,6 +188,31 @@ export async function savePaperTrades(trades: PaperTrade[]): Promise<void> {
   await writeText(KEYS.paper, JSON.stringify(trades.slice(0, 120)));
 }
 
+/** Fusionne un backup navigateur / autre instance (ids uniques). */
+export async function mergePaperTrades(
+  incoming: PaperTrade[],
+): Promise<PaperTrade[]> {
+  const cur = await loadPaperTrades();
+  const byId = new Map<string, PaperTrade>();
+  for (const t of cur) byId.set(t.id, normalizeTrade(t));
+  for (const raw of incoming) {
+    const t = normalizeTrade(raw as PaperTrade);
+    const prev = byId.get(t.id);
+    if (!prev) {
+      byId.set(t.id, t);
+      continue;
+    }
+    const prevClosed = prev.closedAt ?? 0;
+    const nextClosed = t.closedAt ?? 0;
+    if (nextClosed > prevClosed || (t.status !== prev.status && t.closedAt)) {
+      byId.set(t.id, t);
+    }
+  }
+  const merged = [...byId.values()].sort((a, b) => b.openedAt - a.openedAt);
+  await savePaperTrades(merged);
+  return merged;
+}
+
 export function computePaperAccount(
   trades: PaperTrade[],
   bankrollStartEur = 1000,
@@ -262,7 +287,7 @@ export async function openPaperTrade(input: {
   if (exists) return exists;
 
   const bankroll = input.bankrollEur ?? 1000;
-  const sizePct = Math.max(0.5, Math.min(5, input.sizePct || 1));
+  const sizePct = Math.max(0.5, Math.min(25, input.sizePct || 10));
   const marginEur = (bankroll * sizePct) / 100;
   const marketNow = input.entryMode === "market_now";
   const trade: PaperTrade = {

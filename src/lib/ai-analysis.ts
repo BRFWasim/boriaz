@@ -82,6 +82,16 @@ export function ruleBasedBtcView(ind: IndicatorSnapshot): {
   if (ind.change24hPct !== null) {
     bullets.push(`Variation 24h : ${ind.change24hPct.toFixed(2)} %.`);
   }
+  if (ind.change7dPct !== null) {
+    bullets.push(`Variation 7j : ${ind.change7dPct.toFixed(2)} %.`);
+    if (ind.change7dPct >= 8) score += 2;
+    else if (ind.change7dPct <= -8) score -= 2;
+  }
+  if (ind.change30dPct !== null) {
+    bullets.push(`Variation 30j : ${ind.change30dPct.toFixed(2)} %.`);
+    if (ind.change30dPct >= 15) score += 1;
+    else if (ind.change30dPct <= -15) score -= 1;
+  }
   if (ind.stochK !== null && ind.stochD !== null) {
     if (ind.stochK <= 20) {
       score += 1;
@@ -397,6 +407,7 @@ export async function batchWatchlistAi(input: {
     score: number;
     buyZone: string;
     indicators: IndicatorSnapshot;
+    tf?: { interval: string; bias: SignalBias; score: number }[];
   }[];
   includeAi?: boolean;
 }): Promise<WatchlistAiResult> {
@@ -430,6 +441,9 @@ export async function batchWatchlistAi(input: {
     bias: a.bias,
     score: a.score,
     zone: a.buyZone,
+    tf: a.tf ?? [],
+    ch7d: round(a.indicators.change7dPct, 2),
+    ch30d: round(a.indicators.change30dPct, 2),
     ind: {
       ...compactInd(a.indicators),
       stochK: round(a.indicators.stochK, 1),
@@ -438,9 +452,15 @@ export async function batchWatchlistAi(input: {
     },
   }));
 
-  const prompt = `Analyste crypto prudent. FR. PAS un conseil financier.
-Pour CHAQUE coin, 3–5 phrases : tendance, RSI/MACD/Stoch/ADX, zone d'achat, invalidation.
-Sépare chaque coin avec === COIN === (ex: === BTC ===).
+  const coins = input.assets.map((a) => a.coin).join(", ");
+  const prompt = `Analyste crypto PRUDENT. FR. PAS un conseil financier.
+Tu DOIS traiter TOUS ces coins, aucun oubli : ${coins}.
+Pour CHAQUE coin : 4–6 phrases. Croise 1h + 4h + 1d + 1w. Si 1d/1w haussiers, NE DIS PAS d’attendre juste parce que le 1h pause — note le trend long terme et le scénario de breakout.
+Format OBLIGATOIRE, un bloc par coin :
+=== BTC ===
+texte
+=== ETH ===
+texte
 Données: ${JSON.stringify(compact)}`;
 
   let text: string | null = null;
@@ -460,7 +480,7 @@ Données: ${JSON.stringify(compact)}`;
         body: JSON.stringify({
           model:
             process.env.ANTHROPIC_MODEL?.trim() || "claude-haiku-4-5-20251001",
-          max_tokens: 1200,
+          max_tokens: 2800,
           messages: [{ role: "user", content: prompt }],
         }),
       });
@@ -493,7 +513,7 @@ Données: ${JSON.stringify(compact)}`;
           body: JSON.stringify({
             model: process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini",
             temperature: 0.2,
-            max_tokens: 1400,
+            max_tokens: 2800,
             messages: [
               {
                 role: "system",
@@ -549,6 +569,20 @@ Données: ${JSON.stringify(compact)}`;
     }
     if (!briefs.length) {
       briefs.push({ coin: "ALL", text });
+    }
+  }
+
+  // Complète les coins manqués par une mini-requête (max 4)
+  const missing = input.assets.filter(
+    (a) => !briefs.some((b) => b.coin === a.coin),
+  );
+  for (const a of missing.slice(0, 4)) {
+    const onePrompt = `Analyste crypto FR. PAS un conseil. ${a.coin} : 4 phrases croisant 1h/4h/1d/1w, 7j=${round(a.indicators.change7dPct, 1)}% 30j=${round(a.indicators.change30dPct, 1)}%. Biais ${a.bias} score ${a.score}. TF ${JSON.stringify(a.tf ?? [])}. Zone ${a.buyZone}.`;
+    const one = await askOpenAi(onePrompt);
+    if (one.text) briefs.push({ coin: a.coin, text: one.text });
+    else {
+      const cl = await askAnthropic(onePrompt);
+      if (cl.text) briefs.push({ coin: a.coin, text: cl.text });
     }
   }
 

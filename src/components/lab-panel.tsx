@@ -15,6 +15,7 @@ import type {
 import type { BacktestPayload } from "@/lib/backtest";
 import type { CorrelationPayload } from "@/lib/correlation";
 import { DEFAULT_PREFS } from "@/lib/user-types";
+import { syncPaperFromBrowser, writeLocalPaper } from "@/lib/paper-local";
 
 export function LabPanel() {
   const [prefs, setPrefs] = useState<UserPrefs | null>(null);
@@ -23,6 +24,14 @@ export function LabPanel() {
   const [account, setAccount] = useState<PaperAccount | null>(null);
   const [corr, setCorr] = useState<CorrelationPayload | null>(null);
   const [bt, setBt] = useState<BacktestPayload | null>(null);
+  const [status, setStatus] = useState<{
+    keys: Record<string, boolean>;
+    missing: string[];
+    storage: string;
+    vercelEnvUrl: string;
+    upstashUrl: string;
+    howto: { where: string; upstash: string };
+  } | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -38,7 +47,10 @@ export function LabPanel() {
       setJournal(j.entries ?? []);
       setPaper(pa.trades ?? []);
       setAccount(pa.account ?? null);
+      if (pa.trades) writeLocalPaper(pa.trades);
       if (!c.error || c.latest) setCorr(c);
+      const st = await fetch("/api/status").then((r) => r.json());
+      setStatus(st);
     } catch (e) {
       setMsg(e instanceof Error ? e.message : "Erreur lab");
     } finally {
@@ -47,7 +59,7 @@ export function LabPanel() {
   }
 
   useEffect(() => {
-    void refresh();
+    void syncPaperFromBrowser().then(() => void refresh());
     const id = window.setInterval(() => void refresh(), 12_000);
     return () => window.clearInterval(id);
   }, []);
@@ -98,6 +110,48 @@ export function LabPanel() {
         </p>
         {msg ? <p className="mt-2 text-sm text-primary">{msg}</p> : null}
       </section>
+
+      {status ? (
+        <section className="rounded-2xl border border-primary/25 bg-primary/5 p-4">
+          <h3 className="font-medium">Clés — où les mettre</h3>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Tout va dans <strong className="text-foreground">Vercel → Environment Variables</strong>{" "}
+            (secrets, Environment = Production). Pas dans le chat. Pas dans
+            « Configuration » générique.
+          </p>
+          <p className="mt-2 text-sm">
+            <a
+              className="text-primary underline underline-offset-2"
+              href={status.vercelEnvUrl}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Ouvrir les variables de boriazbot-v4
+            </a>
+          </p>
+          <p className="mt-3 text-sm text-muted-foreground">{status.howto.upstash}</p>
+          <p className="mt-1 text-sm">
+            <a
+              className="text-primary underline underline-offset-2"
+              href={status.upstashUrl}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Créer le tiroir Upstash (gratuit)
+            </a>
+          </p>
+          <ul className="mt-3 grid gap-1 text-xs sm:grid-cols-2">
+            {Object.entries(status.keys).map(([name, ok]) => (
+              <li key={name} className={ok ? "text-long" : "text-short"}>
+                {ok ? "OK" : "MANQUE"} · {name}
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-xs text-muted-foreground">
+            Stockage actuel : {status.storage === "upstash" ? "Upstash (persistant)" : "/tmp (éphémère)"}
+          </p>
+        </section>
+      ) : null}
 
       <section className="rounded-2xl border border-border/80 bg-card/60 p-4">
         <h3 className="font-medium">Paper trade — c’est quoi ?</h3>

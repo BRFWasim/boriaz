@@ -23,7 +23,7 @@ import type {
   TimeframeFrame,
 } from "./types";
 
-export type CandleInterval = "1h" | "4h" | "1d";
+export type CandleInterval = "1h" | "4h" | "1d" | "1w";
 
 function fmtPx(px: number): string {
   if (px >= 1000) return px.toFixed(0);
@@ -36,13 +36,15 @@ const INTERVAL_MS: Record<CandleInterval, number> = {
   "1h": 3600_000,
   "4h": 4 * 3600_000,
   "1d": 24 * 3600_000,
+  "1w": 7 * 24 * 3600_000,
 };
 
-/** Combien de bougies charger par TF (≥220 pour EMA200). */
+/** Combien de bougies charger par TF (≥220 pour EMA200, 1w plus court). */
 const LOOKBACK: Record<CandleInterval, number> = {
   "1h": 260,
   "4h": 260,
   "1d": 260,
+  "1w": 120,
 };
 
 export async function loadCandles(
@@ -91,13 +93,21 @@ export function buildIndicators(candles: Candle[]): IndicatorSnapshot {
     volAvg && volAvg > 0 ? lastVol / volAvg : null;
 
   let change24hPct: number | null = null;
+  let change7dPct: number | null = null;
+  let change30dPct: number | null = null;
   if (candles.length > 1) {
-    const target = (candles.at(-1)?.t ?? 0) - 24 * 3600_000;
-    let ref = candles[0]!;
-    for (const c of candles) {
-      if (c.t <= target) ref = c;
-    }
-    if (ref.c > 0) change24hPct = ((price - ref.c) / ref.c) * 100;
+    const lastT = candles.at(-1)?.t ?? 0;
+    const pctSince = (ms: number) => {
+      const target = lastT - ms;
+      let ref = candles[0]!;
+      for (const c of candles) {
+        if (c.t <= target) ref = c;
+      }
+      return ref.c > 0 ? ((price - ref.c) / ref.c) * 100 : null;
+    };
+    change24hPct = pctSince(24 * 3600_000);
+    change7dPct = pctSince(7 * 24 * 3600_000);
+    change30dPct = pctSince(30 * 24 * 3600_000);
   }
 
   const window = closes.slice(-48);
@@ -107,6 +117,8 @@ export function buildIndicators(candles: Candle[]): IndicatorSnapshot {
   return {
     price,
     change24hPct,
+    change7dPct,
+    change30dPct,
     rsi14: lastNumber(rsi14),
     macd: lastNumber(macdSet.macd),
     macdSignal: lastNumber(macdSet.signal),
@@ -178,16 +190,18 @@ export async function analyzeCoinFrames(
   coin: string,
   frames: { interval: CandleInterval; horizon: string }[],
 ): Promise<TimeframeFrame[]> {
-  const results: TimeframeFrame[] = [];
-  // Séquentiel léger pour éviter de saturer l’API HL
-  for (const frame of frames) {
-    const candles = await loadCandles(coin, frame.interval);
-    if (candles.length < 30) continue;
-    results.push(
-      analyzeTimeframe(coin, frame.interval, candles, frame.horizon),
-    );
-  }
-  return results;
+  const settled = await Promise.all(
+    frames.map(async (frame) => {
+      try {
+        const candles = await loadCandles(coin, frame.interval);
+        if (candles.length < 20) return null;
+        return analyzeTimeframe(coin, frame.interval, candles, frame.horizon);
+      } catch {
+        return null;
+      }
+    }),
+  );
+  return settled.filter((f): f is TimeframeFrame => Boolean(f));
 }
 
 /** Watchlist : 1 TF 4h → zone d’achat (pas d’IA). */

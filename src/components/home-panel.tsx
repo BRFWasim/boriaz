@@ -6,11 +6,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { formatPct, formatPx, signedClass } from "@/lib/format";
 import type { HomePayload } from "@/lib/home";
-import type { PaperAccount } from "@/lib/user-types";
+import type { PaperAccount, PaperTrade } from "@/lib/user-types";
+import { syncPaperFromBrowser, writeLocalPaper } from "@/lib/paper-local";
 
 export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) {
   const [data, setData] = useState<HomePayload | null>(null);
   const [account, setAccount] = useState<PaperAccount | null>(null);
+  const [paperLive, setPaperLive] = useState<PaperTrade[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [liveAt, setLiveAt] = useState<number | null>(null);
@@ -25,6 +27,8 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
         if (alive) {
           setData(json);
           setAccount(json.account);
+          setPaperLive(json.paperOpen ?? []);
+          if (json.paperOpen?.length) writeLocalPaper(json.paperOpen);
           setError(null);
           setLiveAt(json.fetchedAt);
         }
@@ -40,6 +44,10 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
         const json = await res.json();
         if (!res.ok || !alive) return;
         setAccount(json.account);
+        if (Array.isArray(json.paper)) {
+          setPaperLive(json.paper);
+          writeLocalPaper(json.paper);
+        }
         setLiveAt(json.fetchedAt);
         setData((prev) => {
           if (!prev) return prev;
@@ -74,6 +82,9 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
         // ignore
       }
     }
+    void syncPaperFromBrowser().then((trades) => {
+      if (trades && alive) setPaperLive(trades.filter((t) => t.status === "open" || t.status === "pending"));
+    });
     void loadFull();
     const fullId = window.setInterval(() => void loadFull(), 60_000);
     const liveId = window.setInterval(() => void loadLive(), 4_000);
@@ -137,23 +148,64 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
       </section>
 
       {acc ? (
-        <section className="bb-reveal grid gap-3 sm:grid-cols-4" style={{ animationDelay: "80ms" }}>
-          <Stat label="Solde départ" value={`${acc.bankrollStartEur.toFixed(0)} €`} />
-          <Stat
-            label="Equity paper"
-            value={`${acc.equityEur.toFixed(2)} €`}
-            className={signedClass(acc.equityEur - acc.bankrollStartEur)}
-          />
-          <Stat
-            label="PnL réalisé"
-            value={`${acc.realizedPnlEur >= 0 ? "+" : ""}${acc.realizedPnlEur.toFixed(2)} €`}
-            className={signedClass(acc.realizedPnlEur)}
-          />
-          <Stat
-            label="PnL latent"
-            value={`${acc.unrealizedPnlEur >= 0 ? "+" : ""}${acc.unrealizedPnlEur.toFixed(2)} €`}
-            className={signedClass(acc.unrealizedPnlEur)}
-          />
+        <section
+          className="bb-reveal rounded-[1.5rem] border border-primary/25 bg-primary/5 px-4 py-5 sm:px-6"
+          style={{ animationDelay: "80ms" }}
+        >
+          <p className="text-[0.65rem] tracking-[0.28em] text-primary uppercase">
+            Simulation 1000 € · live ~4 s
+          </p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Chaque alerte ouvre un trade virtuel sur ce compte. La variation =
+            ce que tu aurais gagné ou perdu. Pas d’argent réel.
+          </p>
+          <div className="mt-4 grid gap-3 sm:grid-cols-4">
+            <Stat label="Départ" value={`${acc.bankrollStartEur.toFixed(0)} €`} />
+            <Stat
+              label="Equity maintenant"
+              value={`${acc.equityEur.toFixed(2)} €`}
+              className={signedClass(acc.equityEur - acc.bankrollStartEur)}
+            />
+            <Stat
+              label="Si tu avais suivi"
+              value={`${acc.equityEur - acc.bankrollStartEur >= 0 ? "+" : ""}${(acc.equityEur - acc.bankrollStartEur).toFixed(2)} €`}
+              className={signedClass(acc.equityEur - acc.bankrollStartEur)}
+            />
+            <Stat
+              label="Latent / réalisé"
+              value={`${acc.unrealizedPnlEur >= 0 ? "+" : ""}${acc.unrealizedPnlEur.toFixed(2)} / ${acc.realizedPnlEur >= 0 ? "+" : ""}${acc.realizedPnlEur.toFixed(2)} €`}
+              className={signedClass(acc.unrealizedPnlEur + acc.realizedPnlEur)}
+            />
+          </div>
+          {paperLive.length > 0 ? (
+            <ul className="mt-4 space-y-2">
+              {paperLive.map((t) => (
+                <li
+                  key={t.id}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/8 bg-background/35 px-3 py-2 text-sm"
+                >
+                  <span>
+                    {t.status === "pending" ? "Limite" : "Open"} {t.side.toUpperCase()}{" "}
+                    {t.coin} · entrée {formatPx(t.entry)}
+                  </span>
+                  <span className={`numeric font-semibold ${signedClass(t.pnlEur ?? 0)}`}>
+                    {t.status === "pending"
+                      ? "en attente"
+                      : `${(t.pnlEur ?? 0) >= 0 ? "+" : ""}${(t.pnlEur ?? 0).toFixed(2)} €`}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-3 text-xs text-muted-foreground">
+              Aucune position simu ouverte — la prochaine alerte en créera une.
+            </p>
+          )}
+          <p className="mt-3 text-[11px] text-muted-foreground">
+            {data.storage.backend === "upstash"
+              ? "Compte sauvé (Upstash) — survit aux redémarrages."
+              : "Sans Upstash le serveur peut oublier le compte : on le recopie aussi dans ton navigateur."}
+          </p>
         </section>
       ) : null}
 

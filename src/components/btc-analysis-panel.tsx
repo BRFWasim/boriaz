@@ -306,11 +306,9 @@ function AssetCard({
           <div>
             <h3 className="font-semibold">
               {asset.label}
-              {highlight ? (
-                <span className="ml-2 text-xs font-normal text-primary">
-                  analyse forcée multi-TF
-                </span>
-              ) : null}
+              <span className="ml-2 text-xs font-normal text-muted-foreground">
+                1h · 4h · 1d · 1w
+              </span>
             </h3>
             <p className="text-xs text-muted-foreground">
               {asset.timeframes.map((f) => f.interval).join(" · ")}
@@ -339,16 +337,25 @@ function AssetCard({
           value={main.indicators.adx14?.toFixed(0) ?? "n/d"}
         />
         <Metric
-          label="ROC12"
+          label="7j"
           value={
-            main.indicators.roc12 === null
+            (asset.timeframes.find((f) => f.interval === "1d") ?? main)
+              .indicators.change7dPct == null
               ? "n/d"
-              : formatPct(main.indicators.roc12, 2)
+              : formatPct(
+                  (asset.timeframes.find((f) => f.interval === "1d") ?? main)
+                    .indicators.change7dPct!,
+                  1,
+                )
           }
           className={
-            main.indicators.roc12 === null
+            (asset.timeframes.find((f) => f.interval === "1d") ?? main)
+              .indicators.change7dPct == null
               ? undefined
-              : signedClass(main.indicators.roc12)
+              : signedClass(
+                  (asset.timeframes.find((f) => f.interval === "1d") ?? main)
+                    .indicators.change7dPct!,
+                )
           }
         />
         <Metric
@@ -367,7 +374,7 @@ function AssetCard({
       {asset.aiText ? (
         <div className="mt-3 rounded-lg border border-long/25 bg-long/8 p-3">
           <p className="text-[11px] tracking-wide text-muted-foreground uppercase">
-            Avis IA
+            Analyse IA · 1h/4h/1d/1w
           </p>
           <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed">
             {asset.aiText}
@@ -375,7 +382,8 @@ function AssetCard({
         </div>
       ) : (
         <p className="mt-3 text-xs text-muted-foreground">
-          IA non chargée — clique « Rafraîchir IA ».
+          Clique « Rafraîchir IA » — une analyse règles 1d/1w s’affichera même
+          sans clé.
         </p>
       )}
 

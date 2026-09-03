@@ -57,26 +57,14 @@ export async function getBtcAnalysis(options?: {
 
     const watchCoins = WATCHLIST.map((w) => w.coin);
 
-    const frameJobs = watchCoins.map(async (coin) => {
-      if (coin === "BTC") {
-        return analyzeCoinFrames(coin, [
-          { interval: "1h", horizon: "court terme (1h)" },
-          { interval: "4h", horizon: "moyen terme (4h)" },
-          { interval: "1d", horizon: "long terme (1d)" },
-        ]);
-      }
-      if (coin === "SOL" || coin === "UNI") {
-        // UNI = analyse forcée multi-TF comme demandé
-        return analyzeCoinFrames(coin, [
-          { interval: "1h", horizon: `court terme ${coin} (1h)` },
-          { interval: "4h", horizon: `moyen terme ${coin} (4h)` },
-          { interval: "1d", horizon: `long terme ${coin} (1d)` },
-        ]);
-      }
-      return analyzeCoinFrames(coin, [
-        { interval: "4h", horizon: `moyen terme ${coin} (4h)` },
-      ]);
-    });
+    const frameJobs = watchCoins.map((coin) =>
+      analyzeCoinFrames(coin, [
+        { interval: "1h", horizon: `court ${coin} (1h)` },
+        { interval: "4h", horizon: `moyen ${coin} (4h)` },
+        { interval: "1d", horizon: `long ${coin} (1d)` },
+        { interval: "1w", horizon: `très long ${coin} (1w)` },
+      ]),
+    );
 
     const [allFrames, watchBuyZones, nansen] = await Promise.all([
       Promise.all(frameJobs),
@@ -132,6 +120,11 @@ export async function getBtcAnalysis(options?: {
           score: a.score,
           buyZone: a.buyZone,
           indicators: a.indicators,
+          tf: a.frames.map((f) => ({
+            interval: f.interval,
+            bias: f.bias,
+            score: f.score,
+          })),
         })),
         includeAi,
       }),
@@ -163,8 +156,8 @@ export async function getBtcAnalysis(options?: {
         aiText:
           aiBriefByCoin.get(a.coin) ??
           (aiBriefByCoin.get("ALL")
-            ? `${label}: voir synthèse globale`
-            : null),
+            ? `${label}: ${aiBriefByCoin.get("ALL")}`
+            : ruleFallbackText(a.frames, label)),
       };
     });
 
@@ -274,6 +267,25 @@ export async function getBtcAnalysis(options?: {
 
 export async function tickPriceWatch() {
   return runPriceWatch();
+}
+
+function ruleFallbackText(
+  frames: TimeframeFrame[],
+  label: string,
+): string {
+  const d = frames.find((f) => f.interval === "1d");
+  const w = frames.find((f) => f.interval === "1w");
+  const h = frames.find((f) => f.interval === "4h");
+  const parts = [
+    `${label} (règles, IA absente) :`,
+    h ? `4h ${h.bias} (${h.score})` : null,
+    d
+      ? `1d ${d.bias} (${d.score}) · 7j ${d.indicators.change7dPct?.toFixed(1) ?? "n/d"}% · 30j ${d.indicators.change30dPct?.toFixed(1) ?? "n/d"}%`
+      : null,
+    w ? `1w ${w.bias} (${w.score})` : null,
+    d?.summary ?? h?.summary ?? "",
+  ].filter(Boolean);
+  return parts.join(" · ");
 }
 
 async function fetchCoinGeckoContext(): Promise<BtcAnalysisPayload["external"]> {

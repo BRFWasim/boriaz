@@ -81,8 +81,12 @@ export function computeAlignment(input: {
   let tf = 28;
   if (vote1h) tf += Math.min(28, Math.abs(vote1h.score) * 4);
   if (vote4h) tf += Math.min(28, Math.abs(vote4h.score) * 3.5);
+  const vote1w = input.tfVotes.find((v) => v.interval === "1w");
   if (vote1d && sideFromBias(vote1d.bias, vote1d.score) === input.action) {
     tf += 12;
+  }
+  if (vote1w && sideFromBias(vote1w.bias, vote1w.score) === input.action) {
+    tf += 10;
   }
   if (alignedSame) tf += 10;
   if (tf1h4hAligned && input.action === side1h) tf += 8;

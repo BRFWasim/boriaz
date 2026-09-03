@@ -65,12 +65,16 @@ export function correlateSetup(input: {
   const score4h = frames.find((f) => f.interval === "4h")?.score ?? primary.score;
   const bias4h = frames.find((f) => f.interval === "4h")?.bias ?? primary.bias;
   const score1d = frames.find((f) => f.interval === "1d")?.score ?? 0;
+  const bias1d = frames.find((f) => f.interval === "1d")?.bias;
+  const score1w = frames.find((f) => f.interval === "1w")?.score ?? 0;
+  const bias1w = frames.find((f) => f.interval === "1w")?.bias;
 
-  // Blend : 1h compte fort pour le timing, 4h pour la tendance, 1d filtre
+  // Blend : 1h timing, 4h tendance, 1d+1w pèsent pour ne plus rater un trend
   const scoreBlend =
-    (bias1h ? score1h * 0.4 : 0) +
-    score4h * (bias1h ? 0.4 : 0.7) +
-    score1d * 0.2;
+    (bias1h ? score1h * 0.25 : 0) +
+    score4h * 0.3 +
+    score1d * 0.28 +
+    (bias1w ? score1w * 0.17 : 0);
 
   let action: "long" | "short" | "wait" = "wait";
   let confidence = 38;
@@ -151,6 +155,41 @@ export function correlateSetup(input: {
   if (action !== "wait" && alignedCount >= 3) {
     confidence += 6;
     reasons.push(`alignement 1h+4h+1d fort`);
+  }
+
+  // Long terme : 1d/1w haussiers = ne pas rester WAIT (cas « ça pète »)
+  if (
+    action === "wait" &&
+    (bias1d === "haussier" || score1d >= 3) &&
+    bias1w !== "baissier" &&
+    (bias4h === "haussier" || score4h >= 2 || bias1h === "haussier")
+  ) {
+    action = "long";
+    confidence = Math.max(confidence, 64 + Math.min(12, score1d * 2));
+    reasons.push(`Long terme haussier (1d ${score1d}${bias1w ? ` · 1w ${score1w}` : ""})`);
+  }
+  if (
+    action === "wait" &&
+    (bias1d === "baissier" || score1d <= -3) &&
+    bias1w !== "haussier" &&
+    (bias4h === "baissier" || score4h <= -2 || bias1h === "baissier")
+  ) {
+    action = "short";
+    confidence = Math.max(confidence, 64 + Math.min(12, Math.abs(score1d) * 2));
+    reasons.push(`Long terme baissier (1d ${score1d}${bias1w ? ` · 1w ${score1w}` : ""})`);
+  }
+
+  if (action === "long" && (bias1d === "haussier" || score1d >= 3)) {
+    confidence += 8;
+    reasons.push(`1d confirme LONG`);
+  }
+  if (action === "long" && (bias1w === "haussier" || score1w >= 3)) {
+    confidence += 6;
+    reasons.push(`1w confirme LONG`);
+  }
+  if (action === "short" && (bias1d === "baissier" || score1d <= -3)) {
+    confidence += 8;
+    reasons.push(`1d confirme SHORT`);
   }
 
   // Filtre 1d contraire fort

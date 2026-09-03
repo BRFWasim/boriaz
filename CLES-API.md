@@ -1,36 +1,40 @@
-# Clés API — quoi envoyer au prochain prompt
+# Clés — où les coller (un seul projet)
 
-Tu n’as **besoin d’aucune clé** pour :
-- Top 10 baleines Hyperliquid (perps + spot)
-- Crowd long/short (wallets qualité alignés)
-- Alertes prioritaires filtrées
-- Watchlist prix + bilans Telegram 2h / spikes +1.5 %
-- Analyses techniques multi-TF (0 token IA)
+**Lien unique :** [Variables d’environnement boriazbot-v4](https://vercel.com/boriaz-bot/boriazbot-v4/settings/environment-variables)
 
-## Publier le site
+Tout en **Environment Variables** (cadenas / Secret), Environment = **Production**.  
+Pas dans le chat. Pas dans un fichier « configuration » à part.
 
-Dans Cursor : bouton **Publish** (Vercel). Ou manuellement sur [vercel.com](https://vercel.com) en important le repo. Détails dans le README.
+## Upstash, en une phrase
 
-## Priorité haute (IA optionnelle)
+Vercel n’a pas de disque. `/tmp` = un brouillon jeté à chaque redémarrage.  
+**Upstash** = un petit tiroir Redis gratuit qui garde le paper 1000 € et le journal.
 
-1. **OPENAI_API_KEY** / **ANTHROPIC_API_KEY** — bouton « Avis IA » uniquement (cache 45 min)
+1. [console.upstash.com](https://console.upstash.com) → Create Redis (free)
+2. Copier **REST URL** + **REST TOKEN**
+3. Les coller sur Vercel :
+   - `UPSTASH_REDIS_REST_URL`
+   - `UPSTASH_REDIS_REST_TOKEN`
 
-## Priorité moyenne
+Sans ça, le compte simu peut revenir à 1000 € après un cold start (le navigateur essaie quand même de le recopier).
 
-2. **COINGECKO_API_KEY** (optionnel)  
-3. **TELEGRAM_BOT_TOKEN** — `/start` à @BoriazBot puis lier dans l’app
+## Checklist (Production, projet v4 seulement)
 
-## Hors Hyperliquid
+| Variable | Obligatoire ? | Pour quoi |
+|---|---|---|
+| `TELEGRAM_BOT_TOKEN` | Oui pour TG | Bot @BoriazBot |
+| `TELEGRAM_CHAT_ID` | Oui pour TG | Ton chat (ex. déjà 846787235) |
+| `CRON_SECRET` | Oui pour cron 15 min | Même secret que dans l’URL cron |
+| `OPENAI_API_KEY` | Fortement | IA toutes cryptos |
+| `ANTHROPIC_API_KEY` | Fortement | IA Claude (batch watchlist) |
+| `NANSEN_API_KEY` | Utile | Smart money / Alignement |
+| `UPSTASH_REDIS_REST_URL` | Pour paper durable | Tiroir simu 1000 € |
+| `UPSTASH_REDIS_REST_TOKEN` | Pour paper durable | Tiroir simu 1000 € |
+| `COINGECKO_API_KEY` | Optionnel | Cap / volumes BTC |
+| `ARKHAM_API_KEY` | Optionnel | Labels |
 
-4. **NANSEN_API_KEY** — smart money + leaderboard perps (déjà branché si présent dans `.env.local`)  
-5. **ARKHAM_API_KEY** — labels (optionnel)
+`OPENAI_MODEL` / `ANTHROPIC_MODEL` = configuration (pas secret).
 
-**Important :** ne colle jamais une clé API dans le chat en production longue — régénère-la sur Nansen si elle a fuité.
+## Cron 15 min
 
-## Telegram — ce qui est notifié (filtre prioritaire)
-
-- Crowd short/long synchronisé (wallets WR≥55 % ou méga-equity)
-- Short + spot si spot ≥ ~8k$
-- Accumulation spot ≥ ~50k$ (sinon UI only)
-- Bilan prix 2h + spike +1.5 %
-- Zone d’achat BTC claire / biais baissier fort
+GET `https://boriazbot-v4.vercel.app/api/cron?secret=TON_CRON_SECRET` toutes les 15 min (cron-job.org).

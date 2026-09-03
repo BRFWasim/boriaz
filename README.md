@@ -29,10 +29,15 @@ Ouvrir [http://127.0.0.1:4317](http://127.0.0.1:4317).
 
 Reste sur **boriazbot-v4**. Pas de v5. Si les variables sont déjà collées sur v4 → **ne rien refaire**.
 
-### Variables (une fois sur v4)
+### Lien pour mettre à jour les clés
 
-Voir `.env.example`. Obligatoires pour TG/cron : `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `CRON_SECRET`.  
-Persistants paper/journal : `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` (gratuit sur [upstash.com](https://upstash.com)).
+[https://vercel.com/boriaz-bot/boriazbot-v4/settings/environment-variables](https://vercel.com/boriaz-bot/boriazbot-v4/settings/environment-variables)
+
+Tout en **Environment Variables / Secret / Production**. Détail : `CLES-API.md`.
+
+### Upstash en une phrase
+
+Sans Upstash, Vercel jette le paper 1000 € à chaque redémarrage (`/tmp`). Avec Upstash (gratuit), le compte simu reste. Lab → section Clés.
 
 ### Cron 15 min — quoi faire avec le lien ?
 
