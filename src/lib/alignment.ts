@@ -106,13 +106,19 @@ export function computeAlignment(input: {
     else if (c.side && input.action !== "wait" && c.side !== input.action) {
       crowd = Math.max(15, crowd - 25);
     }
-  } else if (input.action !== "wait") {
-    crowd = 32;
+  } else {
+    // Aucune donnée crowd (pas de wallets qualité sur cette crypto) : neutre,
+    // pas pénalisant — sinon un TF fort est plombé quand crowd/Nansen manquent.
+    crowd = input.action !== "wait" ? 48 : 45;
   }
   crowd = clamp100(crowd);
 
+  // Absence totale de données Nansen (pas de clé / rien capté) = neutre.
+  const nansenAbsent = input.nansenLong === 0 && input.nansenShort === 0;
   let nansen = 40;
-  if (input.action === "long") {
+  if (nansenAbsent) {
+    nansen = 48;
+  } else if (input.action === "long") {
     nansen = 35 + Math.min(50, input.nansenLong * 12);
     if (input.nansenShort > input.nansenLong) nansen = Math.max(20, nansen - 15);
   } else if (input.action === "short") {
