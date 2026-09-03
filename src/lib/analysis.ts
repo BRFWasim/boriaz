@@ -283,6 +283,13 @@ export function buildOverview(whales: Whale[]): MarketOverview {
 
   const netBiasUsd = totalLongUsd - totalShortUsd;
   const gross = totalLongUsd + totalShortUsd;
+  const shortWithSpotCount = whales.filter((whale) =>
+    whale.alerts.some((alert) => alert.kind === "short_with_spot"),
+  ).length;
+  const totalSpotValueUsd = whales.reduce(
+    (acc, whale) => acc + (whale.spotValueUsd ?? 0),
+    0,
+  );
 
   return {
     whaleCount: whales.length,
@@ -297,6 +304,8 @@ export function buildOverview(whales: Whale[]): MarketOverview {
     totalPnl24h,
     crowded,
     riskiest,
+    shortWithSpotCount,
+    totalSpotValueUsd,
   };
 }
 

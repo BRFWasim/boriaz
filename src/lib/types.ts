@@ -14,6 +14,10 @@ export type SortKey =
 
 export type UiMode = "simple" | "advanced";
 
+export type AppTab = "whales" | "spot" | "btc";
+
+export type SignalBias = "haussier" | "baissier" | "neutre";
+
 export interface LeaderboardRow {
   ethAddress: string;
   accountValue: string;
@@ -157,6 +161,7 @@ export interface OpenPosition {
   tp: ProtectionLevel | null;
   openedAt: number | null;
   openedAtInferred: boolean;
+  baseAsset: string;
 }
 
 export interface ClosedPosition {
@@ -210,6 +215,51 @@ export interface ExposureStats {
   concentrationTopPct: number;
 }
 
+export interface SpotHolding {
+  coin: string;
+  baseAsset: string;
+  qty: number;
+  hold: number;
+  entryNtl: number;
+  avgEntryPx: number | null;
+  markPx: number | null;
+  valueUsd: number;
+  unrealizedPnl: number | null;
+  moveFromEntryPct: number | null;
+  alreadyAccumulating: boolean;
+  lastBuyPx: number | null;
+  lastBuyAt: number | null;
+  lastBuyQty: number | null;
+  buyCount: number;
+  sellCount: number;
+}
+
+export interface SpotBuyEvent {
+  coin: string;
+  baseAsset: string;
+  px: number;
+  qty: number;
+  notional: number;
+  time: number;
+  dir: "Buy" | "Sell";
+}
+
+export interface HedgeAlert {
+  id: string;
+  severity: "info" | "warn" | "critical";
+  kind: "short_with_spot" | "long_with_spot" | "spot_only_accumulation";
+  title: string;
+  detail: string;
+  baseAsset: string;
+  whaleAddress: string;
+  whaleAlias: string;
+  spotQty: number;
+  spotAvgPx: number | null;
+  perpSide: Side | null;
+  perpQty: number | null;
+  perpEntryPx: number | null;
+}
+
 export interface Whale {
   address: string;
   alias: string;
@@ -220,7 +270,6 @@ export interface Whale {
   week: WindowStats;
   month: WindowStats;
   allTime: WindowStats;
-  /** @deprecated use day.pnl — conservé pour compat UI */
   pnl24h: number;
   roi24h: number | null;
   winRate: number | null;
@@ -232,6 +281,10 @@ export interface Whale {
   bias: "long" | "short" | "neutre";
   positions: OpenPosition[];
   closed: ClosedPosition[];
+  spot: SpotHolding[];
+  spotBuys: SpotBuyEvent[];
+  alerts: HedgeAlert[];
+  spotValueUsd: number;
   error?: string;
 }
 
@@ -257,12 +310,16 @@ export interface MarketOverview {
   totalPnl24h: number;
   crowded: CoinCrowd[];
   riskiest: { alias: string; address: string; riskScore: number; riskLabel: string }[];
+  shortWithSpotCount: number;
+  totalSpotValueUsd: number;
 }
 
 export interface DashboardPayload {
   whales: Whale[];
   coins: string[];
   overview: MarketOverview;
+  alerts: HedgeAlert[];
+  integrations: IntegrationStatus;
   fetchedAt: number;
   nextRefreshSec: number;
   source: {
@@ -271,4 +328,75 @@ export interface DashboardPayload {
   };
   scanNote: string;
   cached: boolean;
+}
+
+export interface IntegrationStatus {
+  hyperliquid: boolean;
+  coingecko: boolean;
+  openai: boolean;
+  anthropic: boolean;
+  telegram: boolean;
+  arkham: boolean;
+  nansen: boolean;
+  missingKeys: string[];
+}
+
+export interface Candle {
+  t: number;
+  o: number;
+  h: number;
+  l: number;
+  c: number;
+  v: number;
+}
+
+export interface IndicatorSnapshot {
+  price: number;
+  change24hPct: number | null;
+  rsi14: number | null;
+  macd: number | null;
+  macdSignal: number | null;
+  macdHist: number | null;
+  ema20: number | null;
+  ema50: number | null;
+  ema200: number | null;
+  sma20: number | null;
+  sma50: number | null;
+  atr14: number | null;
+  bbUpper: number | null;
+  bbMiddle: number | null;
+  bbLower: number | null;
+  volumeAvg: number | null;
+  support: number | null;
+  resistance: number | null;
+}
+
+export interface BtcAnalysisPayload {
+  symbol: string;
+  interval: string;
+  candles: Candle[];
+  indicators: IndicatorSnapshot;
+  bias: SignalBias;
+  score: number;
+  horizon: string;
+  summary: string;
+  bullets: string[];
+  ai: {
+    enabled: boolean;
+    provider: string | null;
+    text: string | null;
+    error: string | null;
+  };
+  external: {
+    coingecko: {
+      enabled: boolean;
+      marketCapUsd: number | null;
+      volume24hUsd: number | null;
+      priceChange7dPct: number | null;
+      priceChange30dPct: number | null;
+    };
+  };
+  integrations: IntegrationStatus;
+  fetchedAt: number;
+  disclaimer: string;
 }

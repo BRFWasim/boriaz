@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 import {
   AlertTriangleIcon,
   FishIcon,
@@ -20,9 +20,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { MarketOverviewPanel } from "@/components/market-overview";
+import { BtcAnalysisPanel } from "@/components/btc-analysis-panel";
+import { SpotAlertsPanel } from "@/components/spot-alerts-panel";
 import { WhaleCard } from "@/components/whale-card";
 import { formatAgo, formatExactTime } from "@/lib/format";
-import type { DashboardPayload, SortKey, UiMode } from "@/lib/types";
+import type { AppTab, DashboardPayload, SortKey, UiMode } from "@/lib/types";
 
 const POLL_MS = 20_000;
 const MODE_KEY = "hl-whales-ui-mode";
@@ -36,6 +38,7 @@ export function WhalesDashboard() {
   const [sort, setSort] = useState<SortKey>("portfolio");
   const [coin, setCoin] = useState("all");
   const [mode, setModeState] = useUiMode();
+  const [tab, setTab] = useState<AppTab>("whales");
   const [now, setNow] = useState(() => Date.now());
 
   const load = useCallback(async (silent = false) => {
@@ -198,6 +201,24 @@ export function WhalesDashboard() {
             </p>
           </div>
 
+          <div className="flex flex-wrap gap-2">
+            <TabButton active={tab === "whales"} onClick={() => setTab("whales")}>
+              Baleines perps
+            </TabButton>
+            <TabButton active={tab === "spot"} onClick={() => setTab("spot")}>
+              Spot & alertes
+              {data?.overview.shortWithSpotCount ? (
+                <span className="ml-1 rounded-full bg-short/20 px-1.5 text-[10px] text-short">
+                  {data.overview.shortWithSpotCount}
+                </span>
+              ) : null}
+            </TabButton>
+            <TabButton active={tab === "btc"} onClick={() => setTab("btc")}>
+              Analyse BTC
+            </TabButton>
+          </div>
+
+          {tab === "whales" ? (
           <div className="grid gap-2 sm:grid-cols-[1fr_11rem_11rem]">
             <div className="relative">
               <Label htmlFor="search" className="sr-only">
@@ -263,13 +284,14 @@ export function WhalesDashboard() {
               </Select>
             </div>
           </div>
+          ) : null}
         </div>
       </header>
 
       <main className="mx-auto w-full max-w-7xl space-y-4 px-4 py-5 sm:px-6 lg:px-8">
-        {loading && !data ? <LoadingState /> : null}
+        {loading && !data && tab !== "btc" ? <LoadingState /> : null}
 
-        {error && !data ? (
+        {error && !data && tab !== "btc" ? (
           <div className="rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-6">
             <p className="font-medium">Chargement impossible</p>
             <p className="mt-1 text-sm text-muted-foreground">{error}</p>
@@ -279,12 +301,18 @@ export function WhalesDashboard() {
           </div>
         ) : null}
 
-        {error && data ? (
+        {error && data && tab === "whales" ? (
           <p className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm">
             Rafraîchissement échoué : {error}. Les dernières données restent affichées.
           </p>
         ) : null}
 
+        {tab === "btc" ? <BtcAnalysisPanel /> : null}
+
+        {tab === "spot" && data ? <SpotAlertsPanel data={data} /> : null}
+
+        {tab === "whales" ? (
+          <>
         {data?.overview ? <MarketOverviewPanel overview={data.overview} /> : null}
 
         {data && whales.length === 0 ? (
@@ -306,14 +334,40 @@ export function WhalesDashboard() {
           <footer className="space-y-2 pb-8 text-xs text-muted-foreground">
             <p>{data.scanNote}</p>
             <p>
-              Sources publiques Hyperliquid. Positions relues toutes les{" "}
-              {data.nextRefreshSec}s. Historique des fills si le set de
-              positions change, sinon toutes les 60s.
+              Sources publiques Hyperliquid + CoinGecko (BTC). Clés manquantes :{" "}
+              {data.integrations.missingKeys.join(", ") || "aucune critique"}.
+              Positions relues toutes les {data.nextRefreshSec}s.
             </p>
           </footer>
         ) : null}
+          </>
+        ) : null}
       </main>
     </div>
+  );
+}
+
+function TabButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`inline-flex items-center rounded-lg border px-3 py-1.5 text-sm transition ${
+        active
+          ? "border-primary/50 bg-primary/15 text-primary"
+          : "border-border bg-muted/30 text-muted-foreground hover:bg-muted/50"
+      }`}
+    >
+      {children}
+    </button>
   );
 }
 

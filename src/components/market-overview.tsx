@@ -34,7 +34,7 @@ export function MarketOverviewPanel({ overview }: { overview: MarketOverview }) 
         </span>
       </div>
 
-      <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+      <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-8">
         <Metric label="Equity perps" value={formatUsd(overview.totalEquity)} />
         <Metric
           label="Exposition brute"
@@ -59,6 +59,15 @@ export function MarketOverviewPanel({ overview }: { overview: MarketOverview }) 
           label="PnL 24h"
           value={formatUsd(overview.totalPnl24h)}
           className={signedClass(overview.totalPnl24h)}
+        />
+        <Metric
+          label="Spot total"
+          value={formatUsd(overview.totalSpotValueUsd)}
+        />
+        <Metric
+          label="Short+spot"
+          value={String(overview.shortWithSpotCount)}
+          className={overview.shortWithSpotCount > 0 ? "text-short" : undefined}
         />
       </div>
 

@@ -7,7 +7,6 @@ import {
   distanceToLiquidationPct,
   emptyExposure,
   emptyTradeStats,
-  emptyWindow,
   fullWindow,
   moveFromEntryPct,
   scoreRisk,
@@ -19,15 +18,22 @@ import {
   fetchLeaderboard,
   fetchMetaAndCtxs,
   fetchOpenOrders,
+  fetchSpotClearinghouse,
+  fetchSpotMetaAndCtxs,
   fetchUserFills,
   INFO_URL,
   LEADERBOARD_URL,
   mapPool,
 } from "./hyperliquid";
+import { getIntegrationStatus } from "./integrations";
+import { attachProtections, reconstructClosed } from "./positions";
 import {
-  attachProtections,
-  reconstructClosed,
-} from "./positions";
+  baseAssetFromCoin,
+  buildSpotHoldings,
+  buildSpotMarkMap,
+  detectHedgeAlerts,
+  extractSpotEvents,
+} from "./spot";
 import type {
   ClearinghouseState,
   DashboardPayload,
@@ -48,7 +54,6 @@ const MIN_PERP_EQUITY = 50_000;
 const PROBE_CONCURRENCY = 6;
 const DETAIL_CONCURRENCY = 3;
 const CLOSED_LIMIT = 16;
-const NEAR_LIQ_WARN_PCT = 8;
 
 interface SelectedRow {
   address: string;
@@ -92,15 +97,16 @@ export async function getWhaleDashboard(): Promise<DashboardPayload> {
 
 async function refreshDashboard(): Promise<DashboardPayload> {
   const selected = await selectWhales();
-  const meta = await fetchMetaAndCtxs().catch(() => ({
-    universe: [],
-    ctxs: [],
-  }));
+  const [meta, spotMeta] = await Promise.all([
+    fetchMetaAndCtxs().catch(() => ({ universe: [], ctxs: [] })),
+    fetchSpotMetaAndCtxs().catch(() => ({ ctxs: [] })),
+  ]);
   const maps = buildMarketMaps(meta.universe, meta.ctxs);
+  const spotMarks = buildSpotMarkMap(spotMeta.ctxs, maps.marks);
 
   const whales = await mapPool(selected, DETAIL_CONCURRENCY, async (row) => {
     try {
-      return await hydrateWhale(row, maps);
+      return await hydrateWhale(row, maps, spotMarks);
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Erreur de chargement";
@@ -109,10 +115,14 @@ async function refreshDashboard(): Promise<DashboardPayload> {
   });
 
   const coins = uniqueCoins(whales);
+  const overview = buildOverview(whales);
+  const alerts = whales.flatMap((whale) => whale.alerts);
   const payload: DashboardPayload = {
     whales,
     coins,
-    overview: buildOverview(whales),
+    overview,
+    alerts,
+    integrations: getIntegrationStatus(),
     fetchedAt: Date.now(),
     nextRefreshSec: getRefreshSeconds(),
     source: {
@@ -120,7 +130,7 @@ async function refreshDashboard(): Promise<DashboardPayload> {
       info: INFO_URL,
     },
     scanNote:
-      "Les 10 adresses sont les plus gros portefeuilles du leaderboard avec un compte perps actif. Facteurs lus : equity, PnL/ROI/volume (jour·semaine·mois·all-time), win rate, profit factor, expectancy, expositions long/short, levier moyen, marge, funding, distance à la liquidation, SL/TP, concentration. Une clôture + nouvelle entrée apparaît au cycle suivant (~20 s).",
+      "Perps + spot Hyperliquid. Alertes si short perps avec spot du même actif. Achats spot : entrée moyenne (entryNtl) + fills Buy/Sell quand présents dans l’historique. Analyse BTC dans l’onglet dédié (RSI/MACD + IA si clé).",
     cached: false,
   };
   detailsCache = { at: Date.now(), value: payload };
@@ -228,10 +238,12 @@ async function loadFills(
 async function hydrateWhale(
   row: SelectedRow,
   maps: ReturnType<typeof buildMarketMaps>,
+  spotMarks: Map<string, number>,
 ): Promise<Whale> {
-  const [state, orders] = await Promise.all([
+  const [state, orders, spotState] = await Promise.all([
     fetchClearinghouse(row.address),
     fetchOpenOrders(row.address).catch(() => [] as FrontendOrder[]),
+    fetchSpotClearinghouse(row.address).catch(() => ({ balances: [] })),
   ]);
   const { fills, historical } = await loadFills(
     row.address,
@@ -254,6 +266,7 @@ async function hydrateWhale(
       const { time, inferred } = findOpenTimeLocal(fills, position.coin, qtySigned);
       return {
         coin: position.coin,
+        baseAsset: baseAssetFromCoin(position.coin),
         side,
         qty: Math.abs(qtySigned),
         notionalUsd: Math.abs(parseNum(position.positionValue)),
@@ -284,6 +297,13 @@ async function hydrateWhale(
     .sort((a, b) => b.notionalUsd - a.notionalUsd);
 
   const positions = attachProtections(rawPositions, orders);
+  const spot = buildSpotHoldings(spotState.balances, spotMarks, fills);
+  const spotBuys = extractSpotEvents(fills).filter((e) => e.dir === "Buy").slice(0, 20);
+  const alerts = detectHedgeAlerts(
+    { address: row.address, alias: row.alias },
+    positions,
+    spot,
+  );
   const tradeStats = computeTradeStats(fills);
   const equity = parseNum(state.marginSummary?.accountValue);
   const marginUsed = parseNum(state.marginSummary?.totalMarginUsed);
@@ -295,6 +315,7 @@ async function hydrateWhale(
   });
   const risk = scoreRisk(exposure, positions.length);
   const bias = biasFromNet(exposure.netUsd, exposure.grossUsd);
+  const spotValueUsd = spot.reduce((acc, item) => acc + item.valueUsd, 0);
 
   return {
     address: row.address,
@@ -317,6 +338,10 @@ async function hydrateWhale(
     bias,
     positions,
     closed: reconstructClosed(fills, historical, CLOSED_LIMIT),
+    spot,
+    spotBuys,
+    alerts,
+    spotValueUsd,
   };
 }
 
@@ -372,6 +397,10 @@ function fallbackWhale(row: SelectedRow, error: string): Whale {
     bias: "neutre",
     positions: [],
     closed: [],
+    spot: [],
+    spotBuys: [],
+    alerts: [],
+    spotValueUsd: 0,
     error,
   };
 }
@@ -383,5 +412,3 @@ function uniqueCoins(whales: Whale[]): string[] {
   }
   return [...set].sort((a, b) => a.localeCompare(b));
 }
-
-export { NEAR_LIQ_WARN_PCT, emptyWindow };

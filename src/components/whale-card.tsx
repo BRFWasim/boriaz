@@ -77,6 +77,11 @@ export function WhaleCard({
                 #{whale.rank}
               </Badge>
               <h2 className="truncate text-lg font-semibold tracking-tight">{whale.alias}</h2>
+              {whale.alerts.some((a) => a.kind === "short_with_spot") ? (
+                <Badge className="border-short/40 bg-short/15 text-short" variant="outline">
+                  Short + spot
+                </Badge>
+              ) : null}
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <code className="numeric rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground">

@@ -40,7 +40,13 @@ npm start
 
 Filtres : recherche, tri (portefeuille, PnL 24h, PnL latent, positions, risque, win rate), filtre crypto.
 
-Modes **Simple** / **Avancé** (mémorisés). Rafraîchissement ~20 s.
+## Onglets
+
+1. **Baleines perps** — top 10, expositions, risque, SL/TP  
+2. **Spot & alertes** — soldes spot, entrée moyenne, achats, alerte **short + spot**  
+3. **Analyse BTC** — RSI, MACD, EMA, Bollinger, sparkline live + avis règles + IA si clé
+
+Voir `CLES-API.md` et `.env.example` pour les clés optionnelles.
 
 ### Téléphone et ordinateur (PWA)
 - iPhone / iPad : Partager → Sur l’écran d’accueil

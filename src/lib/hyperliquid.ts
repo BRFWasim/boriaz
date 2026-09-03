@@ -165,6 +165,59 @@ export async function fetchMetaAndCtxs(): Promise<{
   return { universe: payload[0]?.universe ?? [], ctxs: payload[1] ?? [] };
 }
 
+export async function fetchSpotClearinghouse(user: string): Promise<{
+  balances: {
+    coin: string;
+    token: number;
+    total: string;
+    hold: string;
+    entryNtl: string;
+  }[];
+}> {
+  const data = await postInfo<{
+    balances?: {
+      coin: string;
+      token: number;
+      total: string;
+      hold: string;
+      entryNtl: string;
+    }[];
+  }>({ type: "spotClearinghouseState", user });
+  return { balances: Array.isArray(data?.balances) ? data.balances : [] };
+}
+
+export async function fetchSpotMetaAndCtxs(): Promise<{
+  ctxs: { coin?: string; markPx?: string }[];
+}> {
+  const payload = await postInfo<
+    [unknown, { coin?: string; markPx?: string }[]]
+  >({ type: "spotMetaAndAssetCtxs" });
+  if (!Array.isArray(payload) || payload.length < 2) return { ctxs: [] };
+  return { ctxs: payload[1] ?? [] };
+}
+
+export async function fetchCandleSnapshot(params: {
+  coin: string;
+  interval: string;
+  startTime: number;
+  endTime: number;
+}): Promise<
+  { t: number; o: string; h: string; l: string; c: string; v: string }[]
+> {
+  const data = await postInfo<
+    { t: number; o: string; h: string; l: string; c: string; v: string }[]
+  >({
+    type: "candleSnapshot",
+    req: {
+      coin: params.coin,
+      interval: params.interval,
+      startTime: params.startTime,
+      endTime: params.endTime,
+    },
+  });
+  return Array.isArray(data) ? data : [];
+}
+
 export async function mapPool<T, R>(
   items: T[],
   concurrency: number,
