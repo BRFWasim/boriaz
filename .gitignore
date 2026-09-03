@@ -45,6 +45,7 @@ yarn-error.log*
 
 # vercel
 .vercel
+.deploy-mcp-args.json
 
 # typescript
 *.tsbuildinfo
