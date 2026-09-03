@@ -51,7 +51,7 @@ export async function GET(request: Request) {
         ? {
             bias: uniMain.bias,
             score: uniMain.score,
-            frames: uni.timeframes.map((f) => ({
+            frames: uni?.timeframes.map((f) => ({
               i: f.interval,
               b: f.bias,
               s: f.score,
