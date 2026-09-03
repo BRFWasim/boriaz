@@ -172,29 +172,29 @@ export function WhalesDashboard() {
 
   return (
     <div className="min-h-svh pb-[max(1.5rem,env(safe-area-inset-bottom))]">
-      <header className="sticky top-0 z-20 border-b border-border/80 bg-background/90 pt-[env(safe-area-inset-top)] backdrop-blur-md">
+      <header className="sticky top-0 z-20 border-b border-white/8 bg-background/75 pt-[env(safe-area-inset-top)] backdrop-blur-xl">
         <div className="mx-auto flex w-full max-w-7xl flex-col gap-4 px-4 py-4 sm:px-6 lg:px-8">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
-              <p className="flex items-center gap-2 text-xs tracking-[0.22em] text-primary uppercase">
-                <FishIcon className="size-4" />
-                BoriazBot · Hyperliquid
+              <p className="flex items-center gap-2 text-[0.65rem] tracking-[0.35em] text-primary uppercase">
+                <FishIcon className="size-3.5" />
+                Hyperliquid · @BoriazBot
               </p>
-              <h1 className="mt-1 text-xl font-semibold tracking-tight sm:text-3xl">
+              <h1 className="font-heading mt-1.5 text-3xl font-bold tracking-tight sm:text-4xl">
                 BoriazBot
               </h1>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Signaux · baleines · zones · macro · Telegram @BoriazBot
+              <p className="mt-1.5 max-w-md text-sm text-muted-foreground">
+                Alignement · signaux · baleines · macro · paper
               </p>
             </div>
             <div className="flex flex-col items-stretch gap-2 sm:items-end">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="inline-flex items-center gap-2 rounded-full border border-long/30 bg-long/10 px-2.5 py-1 text-xs text-long">
+                <span className="bb-live-dot inline-flex items-center gap-2 rounded-md border border-long/30 bg-long/10 px-2.5 py-1 text-xs text-long">
                   <span className="relative flex size-2">
                     <span className="absolute inline-flex size-2 animate-ping rounded-full bg-long opacity-70" />
                     <span className="relative inline-flex size-2 rounded-full bg-long" />
                   </span>
-                  Quasi en direct · {nextIn}s
+                  Live · {nextIn}s
                 </span>
                 <ModeSwitch mode={mode} onChange={chooseMode} />
                 <Button

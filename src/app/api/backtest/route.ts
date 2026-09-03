@@ -6,13 +6,13 @@ export const maxDuration = 90;
 export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
-    const days = Number(url.searchParams.get("days") || 60);
+    const days = Number(url.searchParams.get("days") || 90);
     const coinsParam = url.searchParams.get("coins");
     const coins = coinsParam
       ? coinsParam.split(",").map((c) => c.trim().toUpperCase()).filter(Boolean)
       : undefined;
     const payload = await runSimpleBacktest({
-      days: Math.min(90, Math.max(30, days)),
+      days: Math.min(90, Math.max(30, days || 90)),
       coins,
     });
     return Response.json(payload);

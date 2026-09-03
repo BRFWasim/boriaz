@@ -237,6 +237,16 @@ export function LabPanel() {
               />
               Paper trade auto
             </label>
+            <label className="flex items-center gap-2 text-sm sm:col-span-2">
+              <input
+                type="checkbox"
+                checked={prefs.maxSafetyMode !== false}
+                onChange={(e) =>
+                  setPrefs({ ...prefs, maxSafetyMode: e.target.checked })
+                }
+              />
+              Sureté max — TG seulement si 1h+4h alignés et crowd WR ≥58 %
+            </label>
           </div>
           <Button className="mt-3" size="sm" onClick={() => void savePrefs()}>
             Enregistrer
@@ -290,11 +300,11 @@ export function LabPanel() {
       <section className="rounded-2xl border border-border/80 bg-card/60 p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <h3 className="font-medium">Backtest RSI (4h)</h3>
+            <h3 className="font-medium">Backtest moteur corrélé (90 j)</h3>
             <p className="mt-1 text-sm text-muted-foreground">
-              Test historique simple : long si RSI croise au-dessus de 32, short
-              sous 68. Sert à voir si la règle technique de base a un edge sur
-              30–90 j — ce n’est pas le même moteur que le crowd/IA live.
+              Proxy multi-TF (1h+4h+1d) avec filtre sureté max : entrée seulement
+              si 1h et 4h alignés. Pas le RSI seul — même logique que le live,
+              sans crowd/Nansen historique.
             </p>
           </div>
           <div className="flex gap-2">
@@ -304,7 +314,7 @@ export function LabPanel() {
             <Button size="sm" variant="outline" onClick={() => void runBacktest(60)}>
               60 j
             </Button>
-            <Button size="sm" variant="outline" onClick={() => void runBacktest(90)}>
+            <Button size="sm" onClick={() => void runBacktest(90)}>
               90 j
             </Button>
           </div>
@@ -312,6 +322,7 @@ export function LabPanel() {
         {bt ? (
           <div className="mt-3 space-y-2">
             <div className="flex flex-wrap gap-2">
+              <Badge variant="outline">moteur {bt.engine ?? "correlated"}</Badge>
               <Badge variant="outline">n={bt.sample}</Badge>
               <Badge variant="outline">
                 WR{" "}
@@ -341,6 +352,9 @@ export function LabPanel() {
                   >
                     <span>
                       {t.side.toUpperCase()} {t.coin} · {t.rule}
+                      {"alignmentProxy" in t && t.alignmentProxy != null
+                        ? ` · Align~${t.alignmentProxy}`
+                        : ""}
                     </span>
                     <span className={signedClass(t.pnlPct)}>
                       {formatPct(t.pnlPct, 2)}
@@ -351,7 +365,7 @@ export function LabPanel() {
           </div>
         ) : (
           <p className="mt-2 text-sm text-muted-foreground">
-            Lance un backtest 30–90 j.
+            Lance le backtest corrélé (recommandé : 90 j).
           </p>
         )}
       </section>

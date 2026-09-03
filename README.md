@@ -1,8 +1,10 @@
 # BoriazBot
 
-Dashboard **BoriazBot** : signaux LONG/SHORT (entrée / TP / SL), baleines Hyperliquid, zones d’achat cohérentes, macro US, paper trade, journal et alertes Telegram (`@BoriazBot`).
+Dashboard **BoriazBot** : score **Alignement** (TF × crowd × Nansen × IA), signaux LONG/SHORT, baleines Hyperliquid, paper trade, journal et Telegram (`@BoriazBot`).
 
-Ce n’est **pas un conseil financier**. Les positions et les prix bougent vite. Les SL/TP affichés sur les baleines ne le sont que s’ils existent en carnet.
+**URL unique (ne change plus) :** [https://boriazbot-v4.vercel.app](https://boriazbot-v4.vercel.app)
+
+Ce n’est **pas un conseil financier**.
 
 ## Lancer en local
 
@@ -13,33 +15,50 @@ npm run dev
 
 Ouvrir [http://127.0.0.1:4317](http://127.0.0.1:4317).
 
-```bash
-npm run build && npm start
-```
-
 ## Fonctionnalités
 
-- **Accueil** — watchlist live, biais LONG/SHORT, entrée idéale / TP / SL, fermeture suggérée
-- **Baleines** — scan élargi (~18 wallets HL actifs), badge fiabilité WR (échantillon, PF, expectancy), labels Nansen
-- **Spot & alertes** — crowd long/short qualité, prix live
-- **Analyse marché** — BTC multi-TF, SOL, zones d’achat (corrigées vs tendance/prix)
-- **Macro** — calendrier High impact + alertes Telegram **T−30 min**
-- **Lab** — journal des signaux, paper trade, corrélation DXY/US10Y vs BTC, backtest RSI 30–90 j, préférences (levier max, cryptos, hush hours TG)
+- **Alignement** — score unique avant tout trade (TF × crowd × Nansen × IA)
+- **Sureté max** — Telegram seulement si 1h+4h alignés **et** crowd WR
+- **Divergences** — alerte si analyse 1h LONG mais signal WAIT
+- **Watchlist multi-TF** — BTC, ETH, SOL, UNI, AVAX, LINK, DOGE, SUI, RENDER, ONDO, HYPE, TAO
+- **Upstash KV** — paper + journal persistants (sinon `/tmp` éphémère)
+- **Backtest corrélé** — moteur multi-TF 90 j (pas RSI seul)
+- **Baleines / Macro / Lab** — inchangés + prefs sureté max
 
-## Telegram 24/7 (Vercel Cron)
+## Un seul projet Vercel
 
-`vercel.json` appelle `/api/cron` toutes les **15 minutes** (prix, signaux + TG, macro T−30).
+Reste sur **boriazbot-v4**. Pas de v5. Si les variables sont déjà collées sur v4 → **ne rien refaire**.
 
-Définis `CRON_SECRET` et (sur Vercel Pro/Hobby selon plan) les crons sont actifs après déploiement. En local :
+### Variables (une fois sur v4)
 
-```bash
-curl "http://127.0.0.1:4317/api/cron?secret=TON_SECRET"
+Voir `.env.example`. Obligatoires pour TG/cron : `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `CRON_SECRET`.  
+Persistants paper/journal : `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` (gratuit sur [upstash.com](https://upstash.com)).
+
+### Cron 15 min — quoi faire avec le lien ?
+
+Hobby Vercel ne lance le cron intégré qu’**1×/jour**. Pour 15 min :
+
+1. Crée un job sur [cron-job.org](https://cron-job.org) (ou équivalent)
+2. Méthode **GET**
+3. URL (remplace le secret si tu l’as changé) :
+
+```
+https://boriazbot-v4.vercel.app/api/cron?secret=TON_CRON_SECRET
 ```
 
-## Publier
+4. Intervalle : toutes les **15 minutes**
+5. C’est tout — ce lien réveille le bot (prix, Alignement, signaux TG, macro T−30)
 
-Next.js → Vercel (bouton **Publish** dans Cursor, ou import Git). Ajoute les variables de `.env.example` dans le projet Vercel.
+Test manuel :
+
+```bash
+curl "https://boriazbot-v4.vercel.app/api/cron?secret=TON_CRON_SECRET"
+```
+
+### Domaine custom
+
+Dans Vercel → projet **boriazbot-v4** → Settings → Domains → ajoute `boriazbot.com` (ou autre). L’URL `*.vercel.app` reste valide.
 
 ## Stack
 
-Next.js (App Router), TypeScript, Tailwind, shadcn/ui. Données Hyperliquid publiques ; Nansen / OpenAI / Anthropic / Telegram optionnels.
+Next.js, TypeScript, Tailwind, shadcn/ui. Hyperliquid public ; Nansen / OpenAI / Anthropic / Telegram / Upstash optionnels.

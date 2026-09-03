@@ -1,9 +1,15 @@
 import type { Metadata, Viewport } from "next";
-import { DM_Sans, JetBrains_Mono } from "next/font/google";
+import { Syne, Manrope, JetBrains_Mono } from "next/font/google";
 import { PwaRegister } from "@/components/pwa-register";
 import "./globals.css";
 
-const sans = DM_Sans({
+const heading = Syne({
+  variable: "--font-heading",
+  subsets: ["latin"],
+  weight: ["600", "700", "800"],
+});
+
+const sans = Manrope({
   variable: "--font-sans",
   subsets: ["latin"],
 });
@@ -14,9 +20,9 @@ const mono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "BoriazBot — signaux & baleines Hyperliquid",
+  title: "BoriazBot — Alignement & baleines Hyperliquid",
   description:
-    "BoriazBot : signaux LONG/SHORT avec entrée/TP/SL, baleines Hyperliquid, zones d’achat, macro US, paper trade et alertes Telegram.",
+    "BoriazBot : score Alignement (TF × crowd × Nansen × IA), signaux LONG/SHORT, baleines Hyperliquid, paper trade et Telegram.",
   applicationName: "BoriazBot",
   manifest: "/manifest.webmanifest",
   appleWebApp: {
@@ -31,7 +37,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#101625",
+  themeColor: "#0c1820",
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
@@ -43,7 +49,7 @@ export default function RootLayout({
   return (
     <html
       lang="fr"
-      className={`dark ${sans.variable} ${mono.variable} h-full antialiased`}
+      className={`dark ${heading.variable} ${sans.variable} ${mono.variable} h-full antialiased`}
     >
       <body className="min-h-full bg-background text-foreground">
         <PwaRegister />

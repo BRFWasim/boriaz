@@ -44,9 +44,14 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
         setData((prev) => {
           if (!prev) return prev;
           const by = new Map(
-            (json.quotes as { coin: string; price: number; change15mPct: number | null; change2hPct: number | null }[]).map(
-              (q) => [q.coin, q],
-            ),
+            (
+              json.quotes as {
+                coin: string;
+                price: number;
+                change15mPct: number | null;
+                change2hPct: number | null;
+              }[]
+            ).map((q) => [q.coin, q]),
           );
           return {
             ...prev,
@@ -66,7 +71,7 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
           };
         });
       } catch {
-        // ignore live hiccups
+        // ignore
       }
     }
     void loadFull();
@@ -82,7 +87,7 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
   if (loading && !data) {
     return (
       <p className="animate-pulse text-sm text-muted-foreground">
-        Chargement des signaux BoriazBot…
+        Calcul Alignement BoriazBot…
       </p>
     );
   }
@@ -99,24 +104,40 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
   if (!data) return null;
 
   const acc = account ?? data.account;
+  const bestAlign = data.best?.alignment;
 
   return (
-    <div className="space-y-5">
-      <section className="text-center sm:text-left">
-        <p className="text-xs tracking-[0.22em] text-primary uppercase">
-          BoriazBot
-        </p>
-        <h1 className="mt-1 text-2xl font-semibold tracking-tight sm:text-3xl">
-          Signaux live · watchlist
-        </h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Prix spot live ~4 s · entrée/TP/SL figés jusqu’au prochain signal · paper 1000 €
-          {liveAt ? ` · maj ${new Date(liveAt).toLocaleTimeString("fr-FR")}` : ""}
-        </p>
+    <div className="space-y-6">
+      <section className="bb-reveal relative overflow-hidden rounded-[1.75rem] border border-white/10 px-5 py-8 sm:px-8 sm:py-10">
+        <div className="pointer-events-none absolute inset-0 bb-hero-glow" />
+        <div className="relative">
+          <p className="font-heading text-[0.7rem] tracking-[0.35em] text-primary uppercase">
+            BoriazBot
+          </p>
+          <h1 className="font-heading mt-3 max-w-xl text-4xl leading-[0.95] tracking-tight text-foreground sm:text-5xl">
+            Alignement
+            <span className="block text-primary">avant le trade</span>
+          </h1>
+          <p className="mt-4 max-w-lg text-sm leading-relaxed text-muted-foreground sm:text-base">
+            Score unique TF × crowd × Nansen × IA. Watchlist multi-TF. Sureté max
+            Telegram. Paper {acc?.bankrollStartEur ?? 1000} €
+            {liveAt
+              ? ` · maj ${new Date(liveAt).toLocaleTimeString("fr-FR")}`
+              : ""}
+          </p>
+          <div className="mt-5 flex flex-wrap gap-2 text-xs">
+            <span className="rounded-md border border-primary/30 bg-primary/10 px-2.5 py-1 text-primary">
+              Stockage {data.storage.backend === "upstash" ? "Upstash KV" : "/tmp"}
+            </span>
+            <span className="rounded-md border border-white/10 bg-white/5 px-2.5 py-1 text-muted-foreground">
+              {data.maxSafetyMode ? "Sureté max ON" : "Sureté max OFF"}
+            </span>
+          </div>
+        </div>
       </section>
 
       {acc ? (
-        <section className="grid gap-2 rounded-2xl border border-border/80 bg-card/70 p-4 sm:grid-cols-4">
+        <section className="bb-reveal grid gap-3 sm:grid-cols-4" style={{ animationDelay: "80ms" }}>
           <Stat label="Solde départ" value={`${acc.bankrollStartEur.toFixed(0)} €`} />
           <Stat
             label="Equity paper"
@@ -136,40 +157,44 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
         </section>
       ) : null}
 
-      <section className="rounded-xl border border-border/60 bg-muted/20 px-3 py-2.5 text-sm text-muted-foreground">
-        <p className="font-medium text-foreground">Comment lire une entrée ?</p>
-        <p className="mt-1">{data.howto.entry}</p>
-        <p className="mt-1">{data.howto.paper}</p>
-        {data.howto.live ? (
-          <p className="mt-1">{data.howto.live}</p>
-        ) : null}
-        {data.warning ? (
-          <p className="mt-2 text-amber-200">{data.warning}</p>
-        ) : null}
-      </section>
+      {data.divergences.length > 0 ? (
+        <section className="bb-reveal space-y-2 rounded-2xl border border-amber-500/35 bg-amber-500/8 px-4 py-3">
+          <p className="text-xs tracking-[0.2em] text-amber-200 uppercase">
+            Alertes divergence
+          </p>
+          {data.divergences.map((d) => (
+            <p key={d} className="text-sm text-amber-50/95">
+              {d}
+            </p>
+          ))}
+        </section>
+      ) : null}
 
       {data.best && data.best.action !== "wait" && data.best.confidence >= 55 ? (
         <section
-          className={`rounded-2xl border px-4 py-4 ${
+          className={`bb-reveal relative overflow-hidden rounded-[1.5rem] border px-4 py-5 sm:px-6 ${
             data.best.action === "short"
-              ? "border-short/40 bg-short/10"
-              : "border-long/40 bg-long/10"
+              ? "border-short/35 bg-short/8"
+              : "border-long/35 bg-long/8"
           }`}
         >
-          <p className="text-xs tracking-wide uppercase text-muted-foreground">
-            Setup prioritaire · détail complet
+          <p className="text-[0.65rem] tracking-[0.28em] text-muted-foreground uppercase">
+            Setup prioritaire · Alignement d’abord
           </p>
-          <div className="mt-2 flex flex-wrap items-center gap-3">
-            <CryptoLogo symbol={data.best.coin} size={40} />
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <CryptoLogo symbol={data.best.coin} size={44} />
             <div>
-              <p className="text-xl font-semibold">
+              <p className="font-heading text-2xl font-semibold tracking-tight">
                 {data.best.action.toUpperCase()} {data.best.coin}
               </p>
               <p className="text-sm text-muted-foreground">
-                Confiance {data.best.confidence}/100 · levier {data.best.leverage} ·
-                mise {data.best.sizePct}
+                Conf. {data.best.confidence}/100 · {data.best.leverage} ·{" "}
+                {data.best.sizePct}
               </p>
             </div>
+            {bestAlign ? (
+              <AlignBadge score={bestAlign.score} label={bestAlign.label} />
+            ) : null}
             <Badge
               variant="outline"
               className={
@@ -179,15 +204,21 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
               }
             >
               {data.best.entryMode === "limit_wait"
-                ? "Limite — attendre le prix"
-                : "Marché — entrer maintenant"}
-            </Badge>
-            <Badge variant="outline">
-              Certitude {data.best.certainty}
+                ? "Limite — attendre"
+                : "Marché — maintenant"}
             </Badge>
           </div>
 
-          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
+          {bestAlign ? (
+            <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <MiniBar label="TF" value={bestAlign.parts.tf} />
+              <MiniBar label="Crowd" value={bestAlign.parts.crowd} />
+              <MiniBar label="Nansen" value={bestAlign.parts.nansen} />
+              <MiniBar label="IA" value={bestAlign.parts.ia} />
+            </div>
+          ) : null}
+
+          <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-5">
             <Level label="Prix spot" value={formatPx(data.best.price)} />
             <Level
               label="Entrée"
@@ -214,59 +245,51 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
           </div>
 
           {data.best.entryHint ? (
-            <p className="mt-3 rounded-lg bg-background/40 px-3 py-2 text-sm">
+            <p className="mt-3 rounded-lg bg-background/35 px-3 py-2 text-sm">
               {data.best.entryHint}
             </p>
           ) : null}
-
           <p className="mt-2 text-sm">{data.best.aiText || data.best.reason}</p>
-          {data.best.riskReward != null ? (
+          {data.best.tfSummary ? (
             <p className="mt-1 text-xs text-muted-foreground">
-              Risk/Reward ~ {data.best.riskReward.toFixed(2)}
+              TF {data.best.tfSummary}
+              {data.best.crowdWr != null
+                ? ` · WR ${data.best.crowdWr.toFixed(0)}%`
+                : ""}
             </p>
           ) : null}
-          {data.best.closeSuggestion ? (
-            <p className="mt-2 text-sm text-amber-200">
-              Fermeture suggérée : {data.best.closeSuggestion}
-            </p>
-          ) : null}
-          <p className="mt-2 text-xs text-muted-foreground">
-            Invalidation : {data.best.invalidation}
-          </p>
         </section>
       ) : null}
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {data.cards.map((card) => (
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        {data.cards.map((card, i) => (
           <article
             key={card.coin}
-            className="rounded-2xl border border-border/80 bg-card/80 p-4 shadow-none"
+            className="bb-reveal group rounded-2xl border border-white/8 bg-card/50 p-4 backdrop-blur-sm transition-colors duration-300 hover:border-primary/25 hover:bg-card/80"
+            style={{ animationDelay: `${120 + i * 40}ms` }}
           >
             <div className="flex items-start justify-between gap-2">
               <div className="flex items-center gap-3">
-                <CryptoLogo symbol={card.coin} size={48} />
+                <CryptoLogo symbol={card.coin} size={44} />
                 <div>
-                  <p className="text-lg font-semibold">{card.label}</p>
+                  <p className="font-heading text-lg font-semibold tracking-tight">
+                    {card.label}
+                  </p>
                   <p className="numeric text-xl font-medium">
                     {formatPx(card.price)}
                   </p>
                 </div>
               </div>
+              {card.alignment ? (
+                <AlignBadge
+                  score={card.alignment.score}
+                  label={card.alignment.label}
+                  compact
+                />
+              ) : null}
             </div>
 
-            <div className="mt-3 flex flex-wrap gap-2">
-              <Badge
-                variant="outline"
-                className={
-                  card.spotPhase === "achat"
-                    ? "border-long/40 text-long"
-                    : card.spotPhase === "vente"
-                      ? "border-short/40 text-short"
-                      : ""
-                }
-              >
-                Spot · {card.spotPhase}
-              </Badge>
+            <div className="mt-3 flex flex-wrap gap-1.5">
               <Badge
                 variant="outline"
                 className={
@@ -286,63 +309,40 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
                   {card.entryMode === "limit_wait" ? "Limite" : "Marché"}
                 </Badge>
               ) : null}
-              {card.certainty ? (
-                <Badge
-                  variant="outline"
-                  className={
-                    card.certainty === "haute"
-                      ? "border-long/40 text-long text-[10px]"
-                      : card.certainty === "moyenne"
-                        ? "border-amber-500/40 text-amber-100 text-[10px]"
-                        : "text-[10px]"
-                  }
-                >
-                  Cert. {card.certainty}
-                </Badge>
-              ) : null}
             </div>
+
+            {card.alignment ? (
+              <p className="mt-2 text-[10px] text-muted-foreground">
+                {card.alignment.breakdown}
+              </p>
+            ) : null}
 
             {(card.direction === "long" || card.direction === "short") &&
             (card.entry || card.tp || card.sl) ? (
-              <div className="mt-3 space-y-2">
-                <div className="grid grid-cols-3 gap-1.5 text-[11px]">
-                  <div className="rounded-md bg-muted/30 px-1.5 py-1">
-                    <p className="text-muted-foreground">Entrée</p>
-                    <p className="numeric font-medium">
-                      {card.entry != null ? formatPx(card.entry) : "—"}
-                    </p>
-                  </div>
-                  <div className="rounded-md bg-muted/30 px-1.5 py-1">
-                    <p className="text-muted-foreground">TP</p>
-                    <p className="numeric font-medium text-long">
-                      {card.tp != null ? formatPx(card.tp) : "—"}
-                    </p>
-                  </div>
-                  <div className="rounded-md bg-muted/30 px-1.5 py-1">
-                    <p className="text-muted-foreground">SL</p>
-                    <p className="numeric font-medium text-short">
-                      {card.sl != null ? formatPx(card.sl) : "—"}
-                    </p>
-                  </div>
+              <div className="mt-3 grid grid-cols-3 gap-1.5 text-[11px]">
+                <div className="rounded-md bg-muted/25 px-1.5 py-1">
+                  <p className="text-muted-foreground">Entrée</p>
+                  <p className="numeric font-medium">
+                    {card.entry != null ? formatPx(card.entry) : "—"}
+                  </p>
                 </div>
-                {card.idealEntry != null ? (
-                  <p className="text-[11px] text-muted-foreground">
-                    Idéal limite {formatPx(card.idealEntry)}
-                    {card.riskReward != null
-                      ? ` · R:R ${card.riskReward.toFixed(1)}`
-                      : ""}
+                <div className="rounded-md bg-muted/25 px-1.5 py-1">
+                  <p className="text-muted-foreground">TP</p>
+                  <p className="numeric font-medium text-long">
+                    {card.tp != null ? formatPx(card.tp) : "—"}
                   </p>
-                ) : null}
-                {card.entryHint ? (
-                  <p className="text-[11px] leading-snug text-muted-foreground">
-                    {card.entryHint}
+                </div>
+                <div className="rounded-md bg-muted/25 px-1.5 py-1">
+                  <p className="text-muted-foreground">SL</p>
+                  <p className="numeric font-medium text-short">
+                    {card.sl != null ? formatPx(card.sl) : "—"}
                   </p>
-                ) : null}
+                </div>
               </div>
             ) : null}
 
             <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-              <div className="rounded-lg bg-muted/30 px-2 py-1.5">
+              <div className="rounded-lg bg-muted/20 px-2 py-1.5">
                 <p className="text-muted-foreground">15m</p>
                 <p
                   className={`numeric font-medium ${
@@ -356,7 +356,7 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
                     : formatPct(card.change15mPct, 2)}
                 </p>
               </div>
-              <div className="rounded-lg bg-muted/30 px-2 py-1.5">
+              <div className="rounded-lg bg-muted/20 px-2 py-1.5">
                 <p className="text-muted-foreground">2h</p>
                 <p
                   className={`numeric font-medium ${
@@ -370,28 +370,19 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
               </div>
             </div>
 
-            {card.closeSuggestion ? (
+            {card.alignment?.divergence ? (
               <p className="mt-2 text-[11px] text-amber-200">
-                {card.closeSuggestion}
+                {card.alignment.divergence}
               </p>
             ) : null}
 
             {card.tfSummary ? (
-              <p className="mt-2 text-[10px] text-muted-foreground line-clamp-2">
+              <p className="mt-2 line-clamp-2 text-[10px] text-muted-foreground">
                 TF {card.tfSummary}
-                {card.crowdWr != null ? ` · wallets WR ${card.crowdWr.toFixed(0)}%` : ""}
               </p>
             ) : null}
-            <p className="mt-3 text-xs text-muted-foreground line-clamp-4">
+            <p className="mt-2 line-clamp-3 text-xs text-muted-foreground">
               {card.blurb}
-            </p>
-            {card.invalidation ? (
-              <p className="mt-1 text-[10px] text-muted-foreground line-clamp-2">
-                Inv. {card.invalidation}
-              </p>
-            ) : null}
-            <p className="mt-2 text-[11px] text-muted-foreground">
-              Conf. {card.confidence} · {card.leverage} · {card.sizePct}
             </p>
           </article>
         ))}
@@ -399,7 +390,7 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
 
       <div className="flex flex-wrap gap-2">
         <Button variant="outline" size="sm" onClick={() => onOpenTab?.("lab")}>
-          Lab · paper 1000 €
+          Lab · paper & backtest
         </Button>
         <Button variant="outline" size="sm" onClick={() => onOpenTab?.("macro")}>
           Macro
@@ -412,7 +403,56 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
         </Button>
       </div>
 
+      <p className="text-xs text-muted-foreground">{data.storage.note}</p>
       <p className="text-xs text-muted-foreground">{data.disclaimer}</p>
+    </div>
+  );
+}
+
+function AlignBadge({
+  score,
+  label,
+  compact,
+}: {
+  score: number;
+  label: string;
+  compact?: boolean;
+}) {
+  const tone =
+    label === "fort"
+      ? "border-long/40 bg-long/15 text-long"
+      : label === "moyen"
+        ? "border-primary/40 bg-primary/10 text-primary"
+        : label === "bloqué"
+          ? "border-short/40 bg-short/10 text-short"
+          : "border-white/15 bg-white/5 text-muted-foreground";
+  return (
+    <div
+      className={`rounded-xl border px-2.5 py-1.5 text-center ${tone} ${
+        compact ? "" : "min-w-[4.5rem]"
+      }`}
+    >
+      <p className="numeric text-lg font-semibold leading-none">{score}</p>
+      <p className="mt-0.5 text-[9px] tracking-wide uppercase opacity-80">
+        Align · {label}
+      </p>
+    </div>
+  );
+}
+
+function MiniBar({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-lg bg-background/30 px-2.5 py-2">
+      <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+        <span>{label}</span>
+        <span className="numeric">{value}</span>
+      </div>
+      <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-white/10">
+        <div
+          className="h-full rounded-full bg-primary/80 transition-all duration-700"
+          style={{ width: `${Math.min(100, value)}%` }}
+        />
+      </div>
     </div>
   );
 }
@@ -427,7 +467,7 @@ function Level({
   className?: string;
 }) {
   return (
-    <div className="rounded-lg bg-background/40 px-2.5 py-2">
+    <div className="rounded-lg bg-background/35 px-2.5 py-2">
       <p className="text-[10px] tracking-wide text-muted-foreground uppercase">
         {label}
       </p>
@@ -448,7 +488,7 @@ function Stat({
   className?: string;
 }) {
   return (
-    <div>
+    <div className="rounded-2xl border border-white/8 bg-card/40 px-3 py-3">
       <p className="text-[10px] tracking-wide text-muted-foreground uppercase">
         {label}
       </p>

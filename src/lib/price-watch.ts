@@ -4,14 +4,18 @@ import { parseNum } from "./format";
 import { postInfo } from "./hyperliquid";
 import { sendTelegramMessage } from "./telegram";
 
-/** Tickers Hyperliquid (Uniswap = UNI). */
+/** Tickers Hyperliquid — watchlist multi-TF élargie. */
 export const WATCHLIST = [
+  { coin: "BTC", label: "BTC" },
+  { coin: "ETH", label: "ETH" },
+  { coin: "SOL", label: "SOL" },
+  { coin: "UNI", label: "UNISWAP" },
+  { coin: "AVAX", label: "AVAX" },
+  { coin: "LINK", label: "LINK" },
+  { coin: "DOGE", label: "DOGE" },
+  { coin: "SUI", label: "SUI" },
   { coin: "RENDER", label: "RENDER" },
   { coin: "ONDO", label: "ONDO" },
-  { coin: "UNI", label: "UNISWAP" },
-  { coin: "BTC", label: "BTC" },
-  { coin: "SOL", label: "SOL" },
-  { coin: "ETH", label: "ETH" },
   { coin: "HYPE", label: "HYPE" },
   { coin: "TAO", label: "TAO" },
 ] as const;

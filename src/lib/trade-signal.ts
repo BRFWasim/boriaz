@@ -6,6 +6,7 @@ import { detectCrowdFlows } from "./crowd-flow";
 import { getWhaleDashboard } from "./dashboard";
 import { sendTelegramMessage } from "./telegram";
 import { correlateSetup } from "./signal-score";
+import { computeAlignment, type AlignmentScore } from "./alignment";
 import {
   appendJournal,
   computePaperAccount,
@@ -14,6 +15,7 @@ import {
   openPaperTrade,
   loadPaperTrades,
   savePaperTrades,
+  storageInfo,
   type PaperAccount,
   type PaperTrade,
 } from "./persist";
@@ -45,15 +47,23 @@ export interface DirectionSignal {
   tfSummary: string;
   alignedTf: number;
   crowdWr: number | null;
+  /** Score unique Alignement (TF × crowd × Nansen × IA). */
+  alignment: AlignmentScore;
+  nansenLong: number;
+  nansenShort: number;
+  tfVotes: { interval: string; bias: SignalBias; score: number }[];
 }
 
 export interface TradeSignalPayload {
   signals: DirectionSignal[];
   best: DirectionSignal | null;
+  divergences: string[];
   paper: PaperTrade[];
   account: PaperAccount;
   telegramSent: boolean;
   telegramError: string | null;
+  storage: { backend: "upstash" | "tmp"; note: string };
+  maxSafetyMode: boolean;
   fetchedAt: number;
   disclaimer: string;
 }
@@ -300,15 +310,12 @@ export async function getTradeSignals(options?: {
   const signals: DirectionSignal[] = [];
 
   for (const { coin } of watch) {
-    // Même grille TF que l’onglet Analyse : BTC/SOL/UNI = 1h+4h+1d
-    const frameSpecs: { interval: CandleInterval; horizon: string }[] =
-      coin === "BTC" || coin === "SOL" || coin === "UNI"
-        ? [
-            { interval: "1h", horizon: "court (1h)" },
-            { interval: "4h", horizon: "moyen (4h)" },
-            { interval: "1d", horizon: "long (1d)" },
-          ]
-        : [{ interval: "4h", horizon: "moyen (4h)" }];
+    // Watchlist entière en multi-TF (1h + 4h + 1d)
+    const frameSpecs: { interval: CandleInterval; horizon: string }[] = [
+      { interval: "1h", horizon: "court (1h)" },
+      { interval: "4h", horizon: "moyen (4h)" },
+      { interval: "1d", horizon: "long (1d)" },
+    ];
 
     const frames = await analyzeCoinFrames(coin, frameSpecs);
     if (!frames.length) continue;
@@ -338,6 +345,26 @@ export async function getTradeSignals(options?: {
     const confidence = corr.confidence;
     const main = corr.primary;
     const price = quote?.price ?? main.indicators.price;
+
+    const vote1h = corr.tfVotes.find((v) => v.interval === "1h");
+    const action1hHint: "long" | "short" | "wait" = vote1h
+      ? vote1h.bias === "haussier" || vote1h.score >= 3
+        ? "long"
+        : vote1h.bias === "baissier" || vote1h.score <= -3
+          ? "short"
+          : "wait"
+      : "wait";
+
+    const alignment = computeAlignment({
+      action,
+      confidence,
+      tfVotes: corr.tfVotes,
+      crowd: crowdHit,
+      nansenLong,
+      nansenShort,
+      iaConfidence: null,
+      action1hHint,
+    });
 
     let entry: number | null = null;
     let idealEntry: number | null = null;
@@ -412,6 +439,10 @@ export async function getTradeSignals(options?: {
       tfSummary,
       alignedTf: corr.alignedCount,
       crowdWr,
+      alignment,
+      nansenLong,
+      nansenShort,
+      tfVotes: corr.tfVotes,
     });
   }
 
@@ -420,6 +451,8 @@ export async function getTradeSignals(options?: {
     actionRule: s.action,
     confidence: s.confidence,
     certainty: s.certainty,
+    alignment: s.alignment.score,
+    alignmentParts: s.alignment.parts,
     bias: s.bias,
     tfSummary: s.tfSummary,
     alignedTf: s.alignedTf,
@@ -452,7 +485,9 @@ export async function getTradeSignals(options?: {
   const ai = parseAiJson(aiRaw);
 
   let best: DirectionSignal | null =
-    [...signals].sort((a, b) => b.confidence - a.confidence)[0] ?? null;
+    [...signals]
+      .sort((a, b) => b.alignment.score - a.alignment.score || b.confidence - a.confidence)[0] ??
+    null;
 
   if (ai && ai.action !== "wait" && ai.coin) {
     const target = signals.find((s) => s.coin === ai.coin) ?? best;
@@ -473,6 +508,26 @@ export async function getTradeSignals(options?: {
       if (ai.entry && ai.entry > 0) target.entry = ai.entry;
       if (ai.tp && ai.tp > 0) target.tp = ai.tp;
       if (ai.sl && ai.sl > 0) target.sl = ai.sl;
+
+      // Recalcule Alignement avec la partie IA
+      const crowdHit = crowd.find((c) => c.coin === target.coin);
+      const vote1h = target.tfVotes.find((v) => v.interval === "1h");
+      target.alignment = computeAlignment({
+        action: target.action,
+        confidence: target.confidence,
+        tfVotes: target.tfVotes,
+        crowd: crowdHit,
+        nansenLong: target.nansenLong,
+        nansenShort: target.nansenShort,
+        iaConfidence: ai.confidence || target.confidence,
+        action1hHint: vote1h
+          ? vote1h.bias === "haussier" || vote1h.score >= 3
+            ? "long"
+            : vote1h.bias === "baissier" || vote1h.score <= -3
+              ? "short"
+              : "wait"
+          : "wait",
+      });
 
       // Recalcule cohérent si manquant
       if (target.action === "long" || target.action === "short") {
@@ -514,7 +569,6 @@ export async function getTradeSignals(options?: {
         target.entryHint = target.entryHint ?? lv.entryHint;
         target.riskReward = target.riskReward ?? lv.riskReward;
 
-        // Si IA dit market mais entry loin du prix → ramener au spot
         if (
           (target.entryMode === "market_now" || target.confidence >= 62) &&
           target.entry &&
@@ -537,12 +591,42 @@ export async function getTradeSignals(options?: {
     best.sl = null;
     best.entryMode = null;
     best.entryHint = "Pas d’entrée — attendre un meilleur setup.";
+    best.alignment = computeAlignment({
+      action: "wait",
+      confidence: best.confidence,
+      tfVotes: best.tfVotes,
+      crowd: crowd.find((c) => c.coin === best!.coin),
+      nansenLong: best.nansenLong,
+      nansenShort: best.nansenShort,
+      iaConfidence: ai.confidence || 40,
+      action1hHint: (() => {
+        const v = best!.tfVotes.find((x) => x.interval === "1h");
+        if (!v) return "wait";
+        if (v.bias === "haussier" || v.score >= 3) return "long";
+        if (v.bias === "baissier" || v.score <= -3) return "short";
+        return "wait";
+      })(),
+    });
   }
+
+  // Prefère le meilleur Alignement pour le trade
+  best =
+    [...signals]
+      .filter((s) => s.action !== "wait")
+      .sort(
+        (a, b) =>
+          b.alignment.score - a.alignment.score || b.confidence - a.confidence,
+      )[0] ?? best;
+
+  const divergences = signals
+    .map((s) => s.alignment.divergence)
+    .filter((d): d is string => Boolean(d));
 
   let telegramSent = false;
   let telegramError: string | null = null;
   const notify = options?.notify !== false && prefs.telegramEnabled;
   const hush = inHushHours(prefs);
+  const maxSafety = prefs.maxSafetyMode !== false;
 
   if (notify && !hush) {
     for (const c of closes.slice(0, 2)) {
@@ -559,7 +643,27 @@ export async function getTradeSignals(options?: {
       if (res.ok) telegramSent = true;
       else telegramError = res.error ?? telegramError;
     }
+
+    // Alertes divergence (throttle via clé)
+    for (const d of divergences.slice(0, 2)) {
+      const dKey = `div:${d.slice(0, 80)}`;
+      if (dKey === lastTgKey && Date.now() - lastTgAt < TG_COOLDOWN) continue;
+      const res = await sendTelegramMessage(
+        [`⚠ DIVERGENCE`, d, "", "Pas un conseil financier."].join("\n"),
+      );
+      if (res.ok) {
+        telegramSent = true;
+        lastTgKey = dKey;
+        lastTgAt = Date.now();
+      } else telegramError = res.error ?? telegramError;
+    }
   }
+
+  const passesSafety =
+    !maxSafety ||
+    (best?.alignment.maxSafetyPass === true &&
+      best.alignment.tf1h4hAligned &&
+      best.alignment.crowdWrOk);
 
   if (
     notify &&
@@ -568,14 +672,19 @@ export async function getTradeSignals(options?: {
     best.action !== "wait" &&
     best.confidence >= 70 &&
     best.certainty !== "basse" &&
+    best.alignment.score >= 55 &&
+    passesSafety &&
     best.entry &&
     best.tp &&
     best.sl
   ) {
-    const key = `${best.coin}:${best.action}:${Math.round(best.entry)}:${Math.round(best.confidence / 5)}:${best.entryMode}`;
+    const key = `${best.coin}:${best.action}:${Math.round(best.entry)}:${Math.round(best.alignment.score / 5)}:${best.entryMode}`;
     if (key !== lastTgKey || Date.now() - lastTgAt > TG_COOLDOWN) {
       const text = [
         `SIGNAL ${best.action.toUpperCase()} · ${best.coin}`,
+        `Alignement ${best.alignment.score}/100 (${best.alignment.label})`,
+        best.alignment.breakdown,
+        maxSafety ? `Sureté max · 1h+4h OK · crowd WR OK` : "",
         `Mode: ${best.entryMode === "limit_wait" ? "LIMITE (attendre le prix)" : "MARCHÉ (entrer maintenant)"}`,
         `Confiance ${best.confidence}/100 · certitude ${best.certainty}`,
         best.tfSummary ? `TF: ${best.tfSummary}` : "",
@@ -612,7 +721,7 @@ export async function getTradeSignals(options?: {
           sl: best.sl,
           leverage: best.leverage,
           sizePct: best.sizePct,
-          reason: best.aiText || best.reason,
+          reason: `Align ${best.alignment.score} · ${best.aiText || best.reason}`,
           source: "trade-signal",
         });
         if (prefs.paperTradeEnabled) {
@@ -632,7 +741,7 @@ export async function getTradeSignals(options?: {
             leverage: levNum,
             sizePct: sizeNum,
             entryMode: best.entryMode ?? "market_now",
-            note: "Ouvert auto depuis signal",
+            note: `Ouvert auto · Align ${best.alignment.score}`,
             bankrollEur: bankroll,
             markPx: best.price,
           });
@@ -645,15 +754,21 @@ export async function getTradeSignals(options?: {
   const account = computePaperAccount(paperLatest, bankroll);
 
   const value: TradeSignalPayload = {
-    signals: signals.sort((a, b) => b.confidence - a.confidence),
+    signals: signals.sort(
+      (a, b) =>
+        b.alignment.score - a.alignment.score || b.confidence - a.confidence,
+    ),
     best,
+    divergences,
     paper: paperLatest.slice(0, 40),
     account,
     telegramSent,
     telegramError,
+    storage: storageInfo(),
+    maxSafetyMode: maxSafety,
     fetchedAt: Date.now(),
     disclaimer:
-      "Suggestions éducatives (règles + IA + wallets). Paper = simulation 1000 €. Pas un conseil financier.",
+      "Suggestions éducatives (Alignement TF×crowd×Nansen×IA). Paper = simulation 1000 €. Pas un conseil financier.",
   };
   cache = { at: Date.now(), value };
   return value;

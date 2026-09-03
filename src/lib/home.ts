@@ -5,8 +5,10 @@ import {
   computePaperAccount,
   loadPaperTrades,
   loadPrefs,
+  storageInfo,
 } from "./persist";
 import type { PaperAccount, PaperTrade } from "./user-types";
+import type { AlignmentScore } from "./alignment";
 
 export interface HomeCard {
   coin: string;
@@ -32,14 +34,18 @@ export interface HomeCard {
   certainty: "haute" | "moyenne" | "basse" | null;
   tfSummary: string | null;
   crowdWr: number | null;
+  alignment: AlignmentScore | null;
   blurb: string;
 }
 
 export interface HomePayload {
   cards: HomeCard[];
   best: DirectionSignal | null;
+  divergences: string[];
   account: PaperAccount;
   paperOpen: PaperTrade[];
+  storage: { backend: "upstash" | "tmp"; note: string };
+  maxSafetyMode: boolean;
   fetchedAt: number;
   disclaimer: string;
   howto: {
@@ -61,7 +67,6 @@ export async function getHomeSnapshot(): Promise<HomePayload> {
     warning = e instanceof Error ? e.message : "Prix indisponibles";
   }
 
-  // Repli mids HL si snapshot bougies rate-limité (429) ou vide
   if (!quotes?.quotes?.length) {
     try {
       const { postInfo } = await import("./hyperliquid");
@@ -82,7 +87,8 @@ export async function getHomeSnapshot(): Promise<HomePayload> {
         lastDigestAt: 0,
       };
       if (warning?.includes("429")) {
-        warning = "HL rate-limit bougies — prix mids live OK, % 15m/2h en attente.";
+        warning =
+          "HL rate-limit bougies — prix mids live OK, % 15m/2h en attente.";
       }
     } catch (e) {
       warning = e instanceof Error ? e.message : warning;
@@ -90,7 +96,6 @@ export async function getHomeSnapshot(): Promise<HomePayload> {
   }
 
   try {
-    // notify:false sur l’accueil pour éviter écritures/TG lourdes à chaque refresh
     signals = await getTradeSignals({ notify: false });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Signaux indisponibles";
@@ -100,8 +105,8 @@ export async function getHomeSnapshot(): Promise<HomePayload> {
   const prefs = await loadPrefs().catch(() => null);
   const bankroll = prefs?.paperBankrollEur || 1000;
   const paper = signals?.paper ?? (await loadPaperTrades().catch(() => []));
-  const account =
-    signals?.account ?? computePaperAccount(paper, bankroll);
+  const account = signals?.account ?? computePaperAccount(paper, bankroll);
+  const storage = signals?.storage ?? storageInfo();
 
   const byCoin = new Map((signals?.signals ?? []).map((s) => [s.coin, s]));
   const cards: HomeCard[] = (quotes?.quotes ?? []).map((q) => {
@@ -131,29 +136,37 @@ export async function getHomeSnapshot(): Promise<HomePayload> {
       certainty: sig?.certainty ?? null,
       tfSummary: sig?.tfSummary ?? null,
       crowdWr: sig?.crowdWr ?? null,
+      alignment: sig?.alignment ?? null,
       blurb: sig?.aiText || sig?.reason || "Analyse en cours…",
     };
   });
 
-  cards.sort((a, b) => b.confidence - a.confidence);
+  cards.sort(
+    (a, b) =>
+      (b.alignment?.score ?? 0) - (a.alignment?.score ?? 0) ||
+      b.confidence - a.confidence,
+  );
 
   return {
     cards,
     best: signals?.best ?? null,
+    divergences: signals?.divergences ?? [],
     account,
     paperOpen: paper.filter(
       (p) => p.status === "open" || p.status === "pending",
     ),
+    storage,
+    maxSafetyMode: signals?.maxSafetyMode ?? prefs?.maxSafetyMode !== false,
     fetchedAt: Date.now(),
     disclaimer:
       signals?.disclaimer ??
       "Suggestions éducatives. Paper = simulation 1000 €. Pas un conseil financier.",
     howto: {
       entry:
-        "Entrée / TP / SL sont FIGÉS pour le setup affiché (comme un ordre planifié). Le prix SPOT bouge en live. Mode Marché = tu peux entrer au spot maintenant ; Mode Limite = attendre que le spot touche l’entrée.",
+        "Alignement (TF × crowd × Nansen × IA) d’abord. Entrée / TP / SL figés pour le setup. Spot live à part. Marché = maintenant ; Limite = attendre le prix.",
       paper:
-        "Paper trade = compte virtuel 1000 € qui suit les signaux. PnL € = ce que tu aurais gagné/perdu.",
-      live: "Les prix spot se rafraîchissent toutes les ~4 s. Les niveaux entrée/TP/SL ne bougent que quand un nouveau signal est calculé (~1–3 min).",
+        "Paper 1000 € virtuel. Avec Upstash KV, le journal et le paper survivent aux redémarrages Vercel.",
+      live: "Prix ~4 s. Signaux / Alignement ~1–3 min. Sureté max = TG seulement si 1h+4h alignés et crowd WR.",
     },
     warning,
   };

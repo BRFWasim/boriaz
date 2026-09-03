@@ -49,6 +49,26 @@ export const CRYPTO_META: Record<
     logo: "https://assets.coingecko.com/coins/images/28452/small/ARNjpciaCz_D_e6Kj9UdpqJUeOm5Fmeo-wckckGFcA.png",
     color: "#1A1A1A",
   },
+  AVAX: {
+    label: "Avalanche",
+    logo: "https://assets.coingecko.com/coins/images/12559/small/Avalanche_Circle_RedWhite_Trans.png",
+    color: "#E84142",
+  },
+  LINK: {
+    label: "Chainlink",
+    logo: "https://assets.coingecko.com/coins/images/877/small/chainlink-new-logo.png",
+    color: "#2A5ADA",
+  },
+  DOGE: {
+    label: "Dogecoin",
+    logo: "https://assets.coingecko.com/coins/images/5/small/dogecoin.png",
+    color: "#C2A633",
+  },
+  SUI: {
+    label: "Sui",
+    logo: "https://assets.coingecko.com/coins/images/26375/small/sui-ocean-square.png",
+    color: "#4DA2FF",
+  },
   XRP: {
     label: "XRP",
     logo: "https://assets.coingecko.com/coins/images/44/small/xrp-symbol-white-128.png",

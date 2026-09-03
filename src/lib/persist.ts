@@ -8,12 +8,20 @@ import {
   type UserPrefs,
 } from "./user-types";
 import { dataPath, ensureDataDir } from "./data-dir";
+import { kvBackend, kvGet, kvSet } from "./kv";
 
 export type { EntryMode, JournalEntry, PaperAccount, PaperTrade, UserPrefs };
 export { DEFAULT_PREFS };
 
-/** Fallback mémoire si /tmp échoue (ne doit jamais planter l’API). */
+/** Fallback mémoire si /tmp et Upstash échouent. */
 const mem = new Map<string, string>();
+
+const KEYS = {
+  prefs: "boriazbot:prefs",
+  journal: "boriazbot:journal",
+  paper: "boriazbot:paper",
+  macro: "boriazbot:macro-alerts",
+} as const;
 
 function prefsFile() {
   return dataPath(".user-prefs.json");
@@ -28,29 +36,60 @@ function macroAlertsFile() {
   return dataPath(".macro-alerts-sent.json");
 }
 
-async function readText(file: string): Promise<string | null> {
+function fileForKey(key: string): string {
+  if (key === KEYS.prefs) return prefsFile();
+  if (key === KEYS.journal) return journalFile();
+  if (key === KEYS.paper) return paperFile();
+  return macroAlertsFile();
+}
+
+async function readText(key: string): Promise<string | null> {
+  // 1) Upstash si dispo
+  if (kvBackend() === "upstash") {
+    const fromKv = await kvGet(key);
+    if (fromKv != null) {
+      mem.set(key, fromKv);
+      return fromKv;
+    }
+  }
+  // 2) Fichier /tmp
+  const file = fileForKey(key);
   try {
     const raw = await fs.readFile(file, "utf8");
-    mem.set(file, raw);
+    mem.set(key, raw);
     return raw;
   } catch {
-    return mem.get(file) ?? null;
+    return mem.get(key) ?? null;
   }
 }
 
-async function writeText(file: string, raw: string): Promise<void> {
-  mem.set(file, raw);
+async function writeText(key: string, raw: string): Promise<void> {
+  mem.set(key, raw);
+  if (kvBackend() === "upstash") {
+    await kvSet(key, raw);
+  }
   try {
     await ensureDataDir();
-    await fs.writeFile(file, raw, "utf8");
+    await fs.writeFile(fileForKey(key), raw, "utf8");
   } catch {
-    // EROFS ou autre : on garde la mémoire process — l’UI ne crash plus
+    // EROFS : mémoire (+ Upstash si OK)
   }
+}
+
+export function storageInfo(): { backend: "upstash" | "tmp"; note: string } {
+  const backend = kvBackend();
+  return {
+    backend,
+    note:
+      backend === "upstash"
+        ? "Paper/journal persistants via Upstash KV."
+        : "Sans UPSTASH_REDIS_REST_* : paper/journal en /tmp (éphémère sur Vercel).",
+  };
 }
 
 export async function loadPrefs(): Promise<UserPrefs> {
   try {
-    const raw = await readText(prefsFile());
+    const raw = await readText(KEYS.prefs);
     if (!raw) return { ...DEFAULT_PREFS };
     return { ...DEFAULT_PREFS, ...(JSON.parse(raw) as UserPrefs) };
   } catch {
@@ -61,7 +100,7 @@ export async function loadPrefs(): Promise<UserPrefs> {
 export async function savePrefs(prefs: Partial<UserPrefs>): Promise<UserPrefs> {
   const cur = await loadPrefs();
   const next = { ...cur, ...prefs };
-  await writeText(prefsFile(), JSON.stringify(next, null, 2));
+  await writeText(KEYS.prefs, JSON.stringify(next, null, 2));
   return next;
 }
 
@@ -83,20 +122,20 @@ export async function appendJournal(
   };
   let list: JournalEntry[] = [];
   try {
-    const raw = await readText(journalFile());
+    const raw = await readText(KEYS.journal);
     if (raw) list = JSON.parse(raw) as JournalEntry[];
   } catch {
     list = [];
   }
   list.unshift(full);
   list = list.slice(0, 200);
-  await writeText(journalFile(), JSON.stringify(list));
+  await writeText(KEYS.journal, JSON.stringify(list));
   return full;
 }
 
 export async function readJournal(limit = 50): Promise<JournalEntry[]> {
   try {
-    const raw = await readText(journalFile());
+    const raw = await readText(KEYS.journal);
     if (!raw) return [];
     return (JSON.parse(raw) as JournalEntry[]).slice(0, limit);
   } catch {
@@ -136,7 +175,7 @@ function normalizeTrade(raw: Partial<PaperTrade> & PaperTrade): PaperTrade {
 
 export async function loadPaperTrades(): Promise<PaperTrade[]> {
   try {
-    const raw = await readText(paperFile());
+    const raw = await readText(KEYS.paper);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as Partial<PaperTrade>[];
     return parsed.map((t) => normalizeTrade(t as PaperTrade));
@@ -146,7 +185,7 @@ export async function loadPaperTrades(): Promise<PaperTrade[]> {
 }
 
 export async function savePaperTrades(trades: PaperTrade[]): Promise<void> {
-  await writeText(paperFile(), JSON.stringify(trades.slice(0, 120)));
+  await writeText(KEYS.paper, JSON.stringify(trades.slice(0, 120)));
 }
 
 export function computePaperAccount(
@@ -255,7 +294,7 @@ export async function openPaperTrade(input: {
 
 export async function loadMacroAlertKeys(): Promise<Set<string>> {
   try {
-    const raw = await readText(macroAlertsFile());
+    const raw = await readText(KEYS.macro);
     if (!raw) return new Set();
     return new Set(JSON.parse(raw) as string[]);
   } catch {
@@ -264,5 +303,5 @@ export async function loadMacroAlertKeys(): Promise<Set<string>> {
 }
 
 export async function saveMacroAlertKeys(keys: Set<string>): Promise<void> {
-  await writeText(macroAlertsFile(), JSON.stringify([...keys].slice(-200)));
+  await writeText(KEYS.macro, JSON.stringify([...keys].slice(-200)));
 }

@@ -7,16 +7,35 @@ export interface UserPrefs {
   paperTradeEnabled: boolean;
   /** Solde paper de départ en € */
   paperBankrollEur: number;
+  /**
+   * Sureté max : Telegram UNIQUEMENT si 1h+4h alignés
+   * ET crowd WR qualité (≥58 %).
+   */
+  maxSafetyMode: boolean;
 }
 
 export const DEFAULT_PREFS: UserPrefs = {
   maxLeverage: 3,
-  watchCoins: ["BTC", "ETH", "SOL", "UNI", "RENDER", "ONDO", "HYPE", "TAO"],
+  watchCoins: [
+    "BTC",
+    "ETH",
+    "SOL",
+    "UNI",
+    "RENDER",
+    "ONDO",
+    "HYPE",
+    "TAO",
+    "AVAX",
+    "LINK",
+    "DOGE",
+    "SUI",
+  ],
   hushHoursStart: 2,
   hushHoursEnd: 6,
   telegramEnabled: true,
   paperTradeEnabled: true,
   paperBankrollEur: 1000,
+  maxSafetyMode: true,
 };
 
 export interface JournalEntry {
