@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { cryptoMeta } from "@/lib/crypto-meta";
+import { cryptoMeta, logoFallbacks } from "@/lib/crypto-meta";
 
 export function CryptoLogo({
   symbol,
@@ -13,7 +13,9 @@ export function CryptoLogo({
   className?: string;
 }) {
   const meta = cryptoMeta(symbol);
-  const [failed, setFailed] = useState(!meta.logo);
+  const urls = logoFallbacks(symbol);
+  const [idx, setIdx] = useState(0);
+  const failed = idx >= urls.length || !urls[0];
   const letter = (meta.label || symbol).slice(0, 1).toUpperCase();
 
   if (failed) {
@@ -35,14 +37,14 @@ export function CryptoLogo({
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img
-      src={meta.logo}
+      src={urls[idx]}
       alt=""
       width={size}
       height={size}
-      className={`inline-block shrink-0 rounded-full bg-background object-cover ${className}`}
+      className={`inline-block shrink-0 rounded-full bg-white object-cover ${className}`}
       style={{ width: size, height: size }}
       loading="lazy"
-      onError={() => setFailed(true)}
+      onError={() => setIdx((i) => i + 1)}
     />
   );
 }

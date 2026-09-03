@@ -16,31 +16,33 @@ export { DEFAULT_PREFS };
 /** Fallback mémoire si /tmp et Upstash échouent. */
 const mem = new Map<string, string>();
 
-const KEYS = {
-  prefs: "boriazbot:prefs",
-  journal: "boriazbot:journal",
-  paper: "boriazbot:paper",
-  macro: "boriazbot:macro-alerts",
-} as const;
+let scopedUser = "default";
 
-function prefsFile() {
-  return dataPath(".user-prefs.json");
+export function setPersistUser(id: string | null | undefined): void {
+  scopedUser = id?.trim() || "default";
 }
-function journalFile() {
-  return dataPath(".signal-journal.json");
+
+export function persistUserId(): string {
+  return scopedUser;
 }
-function paperFile() {
-  return dataPath(".paper-trades.json");
-}
-function macroAlertsFile() {
-  return dataPath(".macro-alerts-sent.json");
+
+function storeKeys() {
+  const u = scopedUser;
+  return {
+    prefs: `boriazbot:${u}:prefs`,
+    journal: `boriazbot:${u}:journal`,
+    paper: `boriazbot:${u}:paper`,
+    book: "boriazbot:global:book",
+    macro: "boriazbot:macro-alerts",
+    legacyPaper: "boriazbot:paper",
+    legacyJournal: "boriazbot:journal",
+    legacyPrefs: "boriazbot:prefs",
+  };
 }
 
 function fileForKey(key: string): string {
-  if (key === KEYS.prefs) return prefsFile();
-  if (key === KEYS.journal) return journalFile();
-  if (key === KEYS.paper) return paperFile();
-  return macroAlertsFile();
+  const safe = key.replace(/[^a-zA-Z0-9._-]/g, "_");
+  return dataPath(`.${safe}.json`);
 }
 
 async function readText(key: string): Promise<string | null> {
@@ -89,7 +91,8 @@ export function storageInfo(): { backend: "upstash" | "tmp"; note: string } {
 
 export async function loadPrefs(): Promise<UserPrefs> {
   try {
-    const raw = await readText(KEYS.prefs);
+    const k = storeKeys();
+    const raw = (await readText(k.prefs)) ?? (await readText(k.legacyPrefs));
     if (!raw) return { ...DEFAULT_PREFS };
     return { ...DEFAULT_PREFS, ...(JSON.parse(raw) as UserPrefs) };
   } catch {
@@ -100,7 +103,7 @@ export async function loadPrefs(): Promise<UserPrefs> {
 export async function savePrefs(prefs: Partial<UserPrefs>): Promise<UserPrefs> {
   const cur = await loadPrefs();
   const next = { ...cur, ...prefs };
-  await writeText(KEYS.prefs, JSON.stringify(next, null, 2));
+  await writeText(storeKeys().prefs, JSON.stringify(next, null, 2));
   return next;
 }
 
@@ -122,20 +125,22 @@ export async function appendJournal(
   };
   let list: JournalEntry[] = [];
   try {
-    const raw = await readText(KEYS.journal);
+    const k = storeKeys();
+    const raw = (await readText(k.journal)) ?? (await readText(k.legacyJournal));
     if (raw) list = JSON.parse(raw) as JournalEntry[];
   } catch {
     list = [];
   }
   list.unshift(full);
   list = list.slice(0, 200);
-  await writeText(KEYS.journal, JSON.stringify(list));
+  await writeText(storeKeys().journal, JSON.stringify(list));
   return full;
 }
 
 export async function readJournal(limit = 50): Promise<JournalEntry[]> {
   try {
-    const raw = await readText(KEYS.journal);
+    const k = storeKeys();
+    const raw = (await readText(k.journal)) ?? (await readText(k.legacyJournal));
     if (!raw) return [];
     return (JSON.parse(raw) as JournalEntry[]).slice(0, limit);
   } catch {
@@ -175,7 +180,8 @@ function normalizeTrade(raw: Partial<PaperTrade> & PaperTrade): PaperTrade {
 
 export async function loadPaperTrades(): Promise<PaperTrade[]> {
   try {
-    const raw = await readText(KEYS.paper);
+    const k = storeKeys();
+    const raw = (await readText(k.paper)) ?? (await readText(k.legacyPaper));
     if (!raw) return [];
     const parsed = JSON.parse(raw) as Partial<PaperTrade>[];
     return parsed.map((t) => normalizeTrade(t as PaperTrade));
@@ -185,7 +191,7 @@ export async function loadPaperTrades(): Promise<PaperTrade[]> {
 }
 
 export async function savePaperTrades(trades: PaperTrade[]): Promise<void> {
-  await writeText(KEYS.paper, JSON.stringify(trades.slice(0, 120)));
+  await writeText(storeKeys().paper, JSON.stringify(trades.slice(0, 120)));
 }
 
 /** Fusionne un backup navigateur / autre instance (ids uniques). */
@@ -229,6 +235,7 @@ export function computePaperAccount(
   for (const t of trades) {
     if (t.status === "pending") {
       pendingCount += 1;
+      marginUsed += t.marginEur;
       continue;
     }
     if (t.status === "open") {
@@ -277,18 +284,42 @@ export async function openPaperTrade(input: {
   markPx?: number;
 }): Promise<PaperTrade> {
   const trades = await loadPaperTrades();
-  const exists = trades.find(
-    (t) =>
-      (t.status === "open" || t.status === "pending") &&
-      t.coin === input.coin &&
-      t.side === input.side &&
-      Date.now() - t.openedAt < 2 * 3600_000,
-  );
-  if (exists) return exists;
+  const live = trades.filter((t) => t.status === "open" || t.status === "pending");
+  const same = live.find((t) => t.coin === input.coin && t.side === input.side);
+  if (same) return same;
+  const opposite = live.find((t) => t.coin === input.coin && t.side !== input.side);
+  if (opposite) return opposite;
 
   const bankroll = input.bankrollEur ?? 1000;
-  const sizePct = Math.max(0.5, Math.min(25, input.sizePct || 10));
+  const sizePct = Math.max(0.5, Math.min(15, input.sizePct || 10));
   const marginEur = (bankroll * sizePct) / 100;
+  const acc = computePaperAccount(trades, bankroll);
+  if (acc.cashEur < marginEur) {
+    return (
+      live[0] ?? {
+        id: `pt-skip-${input.coin}`,
+        openedAt: input.openedAt,
+        filledAt: null,
+        coin: input.coin,
+        side: input.side,
+        entry: input.entry,
+        tp: input.tp,
+        sl: input.sl,
+        leverage: input.leverage,
+        sizePct,
+        marginEur,
+        notionalEur: marginEur * input.leverage,
+        entryMode: input.entryMode,
+        status: "pending",
+        closedAt: null,
+        exitPx: null,
+        markPx: input.markPx ?? input.entry,
+        pnlPct: 0,
+        pnlEur: 0,
+        note: "Cash insuffisant — trade non ouvert",
+      }
+    );
+  }
   const marketNow = input.entryMode === "market_now";
   const trade: PaperTrade = {
     id: `pt-${input.openedAt}-${input.coin}-${input.side}`,
@@ -319,7 +350,7 @@ export async function openPaperTrade(input: {
 
 export async function loadMacroAlertKeys(): Promise<Set<string>> {
   try {
-    const raw = await readText(KEYS.macro);
+    const raw = await readText(storeKeys().macro);
     if (!raw) return new Set();
     return new Set(JSON.parse(raw) as string[]);
   } catch {
@@ -327,6 +358,51 @@ export async function loadMacroAlertKeys(): Promise<Set<string>> {
   }
 }
 
-export async function saveMacroAlertKeys(keys: Set<string>): Promise<void> {
-  await writeText(KEYS.macro, JSON.stringify([...keys].slice(-200)));
+export async function saveMacroAlertKeys(alertKeys: Set<string>): Promise<void> {
+  await writeText(storeKeys().macro, JSON.stringify([...alertKeys].slice(-200)));
+}
+
+export async function loadBook(): Promise<import("./user-types").BookTrade[]> {
+  try {
+    const raw = await readText(storeKeys().book);
+    if (!raw) return [];
+    return JSON.parse(raw) as import("./user-types").BookTrade[];
+  } catch {
+    return [];
+  }
+}
+
+export async function followBook(bankrollEur = 1000): Promise<PaperTrade[]> {
+  const book = await loadBook();
+  for (const b of book.slice(0, 10)) {
+    await openPaperTrade({
+      openedAt: b.at,
+      coin: b.coin,
+      side: b.side,
+      entry: b.entry,
+      tp: b.tp,
+      sl: b.sl,
+      leverage: b.leverage,
+      sizePct: b.sizePct,
+      entryMode: "market_now",
+      note: `Suivi carnet · ${b.reason}`.slice(0, 160),
+      bankrollEur,
+      markPx: b.entry,
+    });
+  }
+  return loadPaperTrades();
+}
+
+export async function appendBook(
+  entry: import("./user-types").BookTrade,
+): Promise<import("./user-types").BookTrade[]> {
+  const list = await loadBook();
+  if (list.some((b) => b.id === entry.id)) return list;
+  const sameOpen = list.find(
+    (b) => b.coin === entry.coin && b.side === entry.side && Date.now() - b.at < 6 * 3600_000,
+  );
+  if (sameOpen) return list;
+  list.unshift(entry);
+  await writeText(storeKeys().book, JSON.stringify(list.slice(0, 80)));
+  return list.slice(0, 80);
 }

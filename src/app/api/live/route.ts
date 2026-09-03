@@ -7,6 +7,7 @@ import {
 import { postInfo } from "@/lib/hyperliquid";
 import { parseNum } from "@/lib/format";
 import { WATCHLIST } from "@/lib/price-watch";
+import { bindUserRequest } from "@/lib/bind-request";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -14,6 +15,7 @@ export const runtime = "nodejs";
 /** Prix mids ultra-légers + paper mark-to-market. Pas d’écriture FS obligatoire. */
 export async function GET() {
   try {
+    await bindUserRequest({ follow: false });
     let quotes: {
       coin: string;
       label: string;
@@ -86,9 +88,7 @@ export async function GET() {
     return Response.json({
       quotes,
       account,
-      paper: trades.filter(
-        (t) => t.status === "open" || t.status === "pending",
-      ),
+      paper: trades.slice(0, 40),
       fetchedAt: Date.now(),
     });
   } catch (e) {

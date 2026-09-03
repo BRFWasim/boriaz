@@ -1,14 +1,17 @@
 import { DEFAULT_PREFS, loadPrefs, savePrefs } from "@/lib/persist";
+import { bindUserRequest } from "@/lib/bind-request";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
+  await bindUserRequest();
   const prefs = await loadPrefs();
   return Response.json({ prefs, defaults: DEFAULT_PREFS });
 }
 
 export async function POST(request: Request) {
   try {
+    await bindUserRequest();
     const body = (await request.json()) as Record<string, unknown>;
     const patch: Record<string, unknown> = {};
     if (typeof body.maxLeverage === "number") {

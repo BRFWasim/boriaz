@@ -84,6 +84,22 @@ export interface PaperTrade {
   note: string;
 }
 
+export interface BookTrade {
+  id: string;
+  at: number;
+  coin: string;
+  side: "long" | "short";
+  entry: number;
+  tp: number;
+  sl: number;
+  leverage: number;
+  marginEur: number;
+  notionalEur: number;
+  sizePct: number;
+  alignment: number;
+  reason: string;
+}
+
 export interface PaperAccount {
   bankrollStartEur: number;
   /** Cash libre + marges ouvertes (valeur mark-to-market). */

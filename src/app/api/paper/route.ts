@@ -7,12 +7,14 @@ import {
 } from "@/lib/persist";
 import { getTradeSignals } from "@/lib/trade-signal";
 import type { PaperTrade } from "@/lib/user-types";
+import { bindUserRequest } from "@/lib/bind-request";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 export async function GET() {
   try {
+    await bindUserRequest();
     const sig = await getTradeSignals({ notify: false, force: true });
     return Response.json({
       trades: sig.paper,
@@ -36,6 +38,7 @@ export async function GET() {
 /** Restaure le paper depuis le navigateur si /tmp Vercel a été vidé. */
 export async function POST(request: Request) {
   try {
+    await bindUserRequest();
     const body = (await request.json()) as { trades?: PaperTrade[] };
     const incoming = Array.isArray(body.trades) ? body.trades : [];
     const merged = await mergePaperTrades(incoming.slice(0, 80));

@@ -3,11 +3,12 @@ import { getWatchlistSnapshot } from "./price-watch";
 import { cryptoMeta } from "./crypto-meta";
 import {
   computePaperAccount,
+  loadBook,
   loadPaperTrades,
   loadPrefs,
   storageInfo,
 } from "./persist";
-import type { PaperAccount, PaperTrade } from "./user-types";
+import type { BookTrade, PaperAccount, PaperTrade } from "./user-types";
 import type { AlignmentScore } from "./alignment";
 
 export interface HomeCard {
@@ -44,6 +45,8 @@ export interface HomePayload {
   divergences: string[];
   account: PaperAccount;
   paperOpen: PaperTrade[];
+  paperAll: PaperTrade[];
+  book: BookTrade[];
   storage: { backend: "upstash" | "tmp"; note: string };
   maxSafetyMode: boolean;
   fetchedAt: number;
@@ -109,8 +112,14 @@ export async function getHomeSnapshot(): Promise<HomePayload> {
   const storage = signals?.storage ?? storageInfo();
 
   const byCoin = new Map((signals?.signals ?? []).map((s) => [s.coin, s]));
+  const openByCoin = new Map(
+    paper
+      .filter((p) => p.status === "open" || p.status === "pending")
+      .map((p) => [p.coin, p]),
+  );
   const cards: HomeCard[] = (quotes?.quotes ?? []).map((q) => {
     const sig = byCoin.get(q.coin);
+    const frozen = openByCoin.get(q.coin);
     const meta = cryptoMeta(q.coin);
     return {
       coin: q.coin,
@@ -120,24 +129,32 @@ export async function getHomeSnapshot(): Promise<HomePayload> {
       change15mPct: q.change15mPct,
       change2hPct: q.change2hPct,
       spotPhase: sig?.spotPhase ?? "neutre",
-      direction: sig?.action ?? "wait",
+      direction: frozen
+        ? frozen.side === "long"
+          ? "long"
+          : "short"
+        : (sig?.action ?? "wait"),
       confidence: sig?.confidence ?? 0,
-      leverage: sig?.leverage ?? "—",
-      sizePct: sig?.sizePct ?? "—",
-      entry: sig?.entry ?? null,
-      idealEntry: sig?.idealEntry ?? null,
-      tp: sig?.tp ?? null,
-      sl: sig?.sl ?? null,
-      entryMode: sig?.entryMode ?? null,
-      entryHint: sig?.entryHint ?? null,
+      leverage: frozen ? `${frozen.leverage}×` : (sig?.leverage ?? "—"),
+      sizePct: frozen ? `${frozen.sizePct} %` : (sig?.sizePct ?? "—"),
+      entry: frozen?.entry ?? sig?.entry ?? null,
+      idealEntry: frozen?.entry ?? sig?.idealEntry ?? null,
+      tp: frozen?.tp ?? sig?.tp ?? null,
+      sl: frozen?.sl ?? sig?.sl ?? null,
+      entryMode: frozen?.entryMode ?? sig?.entryMode ?? null,
+      entryHint: frozen
+        ? `FIGÉ jusqu’au TP/SL · spot live ${q.price}`
+        : (sig?.entryHint ?? null),
       riskReward: sig?.riskReward ?? null,
-      closeSuggestion: sig?.closeSuggestion ?? null,
+      closeSuggestion: frozen ? null : (sig?.closeSuggestion ?? null),
       invalidation: sig?.invalidation ?? null,
       certainty: sig?.certainty ?? null,
       tfSummary: sig?.tfSummary ?? null,
       crowdWr: sig?.crowdWr ?? null,
       alignment: sig?.alignment ?? null,
-      blurb: sig?.aiText || sig?.reason || "Analyse en cours…",
+      blurb: frozen
+        ? `Trade figé ${frozen.side.toUpperCase()} · marge ${frozen.marginEur.toFixed(0)} € · lev ${frozen.leverage}×`
+        : sig?.aiText || sig?.reason || "Analyse en cours…",
     };
   });
 
@@ -155,6 +172,8 @@ export async function getHomeSnapshot(): Promise<HomePayload> {
     paperOpen: paper.filter(
       (p) => p.status === "open" || p.status === "pending",
     ),
+    paperAll: paper.slice(0, 40),
+    book: signals?.book ?? (await loadBook().catch(() => [])),
     storage,
     maxSafetyMode: signals?.maxSafetyMode ?? prefs?.maxSafetyMode !== false,
     fetchedAt: Date.now(),

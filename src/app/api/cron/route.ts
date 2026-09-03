@@ -2,6 +2,7 @@ import { runMacroT30Alerts } from "@/lib/macro-alerts";
 import { getTradeSignals } from "@/lib/trade-signal";
 import { runPriceWatch } from "@/lib/price-watch";
 import { getBtcAnalysis } from "@/lib/btc-analysis";
+import { bindCronRequest } from "@/lib/bind-request";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -25,6 +26,7 @@ export async function GET(request: Request) {
   if (!authorized(request)) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
+  bindCronRequest();
 
   const results: Record<string, unknown> = { at: Date.now(), tick: "15m" };
 

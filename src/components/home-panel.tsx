@@ -9,13 +9,32 @@ import type { HomePayload } from "@/lib/home";
 import type { PaperAccount, PaperTrade } from "@/lib/user-types";
 import { syncPaperFromBrowser, writeLocalPaper } from "@/lib/paper-local";
 
+type SessionUser = {
+  id: string;
+  name: string;
+  guest: boolean;
+  bankrollEur: number;
+};
+
 export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) {
   const [data, setData] = useState<HomePayload | null>(null);
   const [account, setAccount] = useState<PaperAccount | null>(null);
   const [paperLive, setPaperLive] = useState<PaperTrade[]>([]);
+  const [user, setUser] = useState<SessionUser | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [liveAt, setLiveAt] = useState<number | null>(null);
+
+  function mergePaper(next: PaperTrade[] | undefined) {
+    if (!next?.length) return;
+    setPaperLive((prev) => {
+      const byId = new Map(prev.map((t) => [t.id, t]));
+      for (const t of next) byId.set(t.id, t);
+      const merged = [...byId.values()].sort((a, b) => b.openedAt - a.openedAt);
+      writeLocalPaper(merged);
+      return merged;
+    });
+  }
 
   useEffect(() => {
     let alive = true;
@@ -27,8 +46,7 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
         if (alive) {
           setData(json);
           setAccount(json.account);
-          setPaperLive(json.paperOpen ?? []);
-          if (json.paperOpen?.length) writeLocalPaper(json.paperOpen);
+          mergePaper(json.paperAll ?? json.paperOpen);
           setError(null);
           setLiveAt(json.fetchedAt);
         }
@@ -44,10 +62,7 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
         const json = await res.json();
         if (!res.ok || !alive) return;
         setAccount(json.account);
-        if (Array.isArray(json.paper)) {
-          setPaperLive(json.paper);
-          writeLocalPaper(json.paper);
-        }
+        if (Array.isArray(json.paper)) mergePaper(json.paper);
         setLiveAt(json.fetchedAt);
         setData((prev) => {
           if (!prev) return prev;
@@ -82,8 +97,14 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
         // ignore
       }
     }
+    void fetch("/api/account", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((j) => {
+        if (alive && j.user) setUser(j.user);
+      })
+      .catch(() => undefined);
     void syncPaperFromBrowser().then((trades) => {
-      if (trades && alive) setPaperLive(trades.filter((t) => t.status === "open" || t.status === "pending"));
+      if (trades && alive) mergePaper(trades);
     });
     void loadFull();
     const fullId = window.setInterval(() => void loadFull(), 60_000);
@@ -115,6 +136,10 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
   if (!data) return null;
 
   const acc = account ?? data.account;
+  const openTrades = paperLive.filter(
+    (t) => t.status === "open" || t.status === "pending",
+  );
+  const heroTrade = openTrades[0] ?? null;
   const bestAlign = data.best?.alignment;
 
   return (
@@ -131,7 +156,7 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
           </h1>
           <p className="mt-4 max-w-lg text-sm leading-relaxed text-muted-foreground sm:text-base">
             Score unique TF × crowd × Nansen × IA. Watchlist multi-TF. Sureté max
-            Telegram. Paper {acc?.bankrollStartEur ?? 1000} €
+            Telegram. Compte {user?.name ?? "invité"} · {acc?.bankrollStartEur ?? 1000} €
             {liveAt
               ? ` · maj ${new Date(liveAt).toLocaleTimeString("fr-FR")}`
               : ""}
@@ -152,60 +177,111 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
           className="bb-reveal rounded-[1.5rem] border border-primary/25 bg-primary/5 px-4 py-5 sm:px-6"
           style={{ animationDelay: "80ms" }}
         >
-          <p className="text-[0.65rem] tracking-[0.28em] text-primary uppercase">
-            Simulation 1000 € · live ~4 s
-          </p>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Chaque alerte ouvre un trade virtuel sur ce compte. La variation =
-            ce que tu aurais gagné ou perdu. Pas d’argent réel.
-          </p>
-          <div className="mt-4 grid gap-3 sm:grid-cols-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-[0.65rem] tracking-[0.28em] text-primary uppercase">
+                Compte simu 1000 € · {user?.guest === false ? user.name : user?.name ?? "invité"}
+              </p>
+              <p className="mt-1 max-w-xl text-sm text-muted-foreground">
+                Plusieurs trades en même temps sur le même capital. Un trade reste
+                figé (entrée / TP / SL / côté) jusqu’au TP ou SL — il ne change
+                plus de stratégie. Refresh = tout reste.
+              </p>
+            </div>
+            <AccountBox user={user} onUser={setUser} />
+          </div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-5">
             <Stat label="Départ" value={`${acc.bankrollStartEur.toFixed(0)} €`} />
             <Stat
-              label="Equity maintenant"
+              label="Cash libre"
+              value={`${acc.cashEur.toFixed(2)} €`}
+            />
+            <Stat
+              label="Marge sortie"
+              value={`${acc.marginUsedEur.toFixed(2)} €`}
+            />
+            <Stat
+              label="Equity"
               value={`${acc.equityEur.toFixed(2)} €`}
               className={signedClass(acc.equityEur - acc.bankrollStartEur)}
             />
             <Stat
-              label="Si tu avais suivi"
+              label="Total si suivi"
               value={`${acc.equityEur - acc.bankrollStartEur >= 0 ? "+" : ""}${(acc.equityEur - acc.bankrollStartEur).toFixed(2)} €`}
               className={signedClass(acc.equityEur - acc.bankrollStartEur)}
             />
-            <Stat
-              label="Latent / réalisé"
-              value={`${acc.unrealizedPnlEur >= 0 ? "+" : ""}${acc.unrealizedPnlEur.toFixed(2)} / ${acc.realizedPnlEur >= 0 ? "+" : ""}${acc.realizedPnlEur.toFixed(2)} €`}
-              className={signedClass(acc.unrealizedPnlEur + acc.realizedPnlEur)}
-            />
           </div>
+
+          <p className="mt-5 text-[0.65rem] tracking-[0.22em] text-muted-foreground uppercase">
+            Carnet — trades proposés / ouverts / clos
+          </p>
           {paperLive.length > 0 ? (
-            <ul className="mt-4 space-y-2">
-              {paperLive.map((t) => (
-                <li
-                  key={t.id}
-                  className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/8 bg-background/35 px-3 py-2 text-sm"
-                >
-                  <span>
-                    {t.status === "pending" ? "Limite" : "Open"} {t.side.toUpperCase()}{" "}
-                    {t.coin} · entrée {formatPx(t.entry)}
-                  </span>
-                  <span className={`numeric font-semibold ${signedClass(t.pnlEur ?? 0)}`}>
-                    {t.status === "pending"
-                      ? "en attente"
-                      : `${(t.pnlEur ?? 0) >= 0 ? "+" : ""}${(t.pnlEur ?? 0).toFixed(2)} €`}
-                  </span>
-                </li>
-              ))}
-            </ul>
+            <div className="mt-2 overflow-x-auto">
+              <table className="w-full min-w-[44rem] text-left text-sm">
+                <thead className="text-[10px] tracking-wide text-muted-foreground uppercase">
+                  <tr>
+                    <th className="py-2 pr-2">Coin</th>
+                    <th className="py-2 pr-2">Côté</th>
+                    <th className="py-2 pr-2">Lev.</th>
+                    <th className="py-2 pr-2">Marge</th>
+                    <th className="py-2 pr-2">Entrée</th>
+                    <th className="py-2 pr-2">Spot</th>
+                    <th className="py-2 pr-2">TP</th>
+                    <th className="py-2 pr-2">SL</th>
+                    <th className="py-2 pr-2">PnL</th>
+                    <th className="py-2">Statut</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {paperLive.map((t) => (
+                    <tr key={t.id} className="border-t border-white/8">
+                      <td className="py-2.5 pr-2">
+                        <span className="inline-flex items-center gap-2 font-medium">
+                          <CryptoLogo symbol={t.coin} size={22} />
+                          {t.coin}
+                        </span>
+                      </td>
+                      <td
+                        className={`py-2.5 pr-2 font-semibold ${
+                          t.side === "long" ? "text-long" : "text-short"
+                        }`}
+                      >
+                        {t.side.toUpperCase()}
+                      </td>
+                      <td className="numeric py-2.5 pr-2">{t.leverage}×</td>
+                      <td className="numeric py-2.5 pr-2">
+                        {t.marginEur.toFixed(0)} €
+                      </td>
+                      <td className="numeric py-2.5 pr-2">{formatPx(t.entry)}</td>
+                      <td className="numeric py-2.5 pr-2">
+                        {t.markPx != null ? formatPx(t.markPx) : "—"}
+                      </td>
+                      <td className="numeric py-2.5 pr-2 text-long">
+                        {formatPx(t.tp)}
+                      </td>
+                      <td className="numeric py-2.5 pr-2 text-short">
+                        {formatPx(t.sl)}
+                      </td>
+                      <td
+                        className={`numeric py-2.5 pr-2 font-semibold ${signedClass(t.pnlEur ?? 0)}`}
+                      >
+                        {t.status === "pending"
+                          ? "—"
+                          : `${(t.pnlEur ?? 0) >= 0 ? "+" : ""}${(t.pnlEur ?? 0).toFixed(2)} €`}
+                      </td>
+                      <td className="py-2.5 text-xs uppercase text-muted-foreground">
+                        {t.status}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           ) : (
             <p className="mt-3 text-xs text-muted-foreground">
-              Aucune position simu ouverte — la prochaine alerte en créera une.
+              Aucun trade encore — le prochain signal figera une ligne ici.
             </p>
           )}
-          <p className="mt-3 text-[11px] text-muted-foreground">
-            {data.storage.backend === "upstash"
-              ? "Compte sauvé (Upstash) — survit aux redémarrages."
-              : "Sans Upstash le serveur peut oublier le compte : on le recopie aussi dans ton navigateur."}
-          </p>
         </section>
       ) : null}
 
@@ -222,7 +298,46 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
         </section>
       ) : null}
 
-      {data.best && data.best.action !== "wait" && data.best.confidence >= 55 ? (
+      {heroTrade ? (
+        <section
+          className={`bb-reveal relative overflow-hidden rounded-[1.5rem] border px-4 py-5 sm:px-6 ${
+            heroTrade.side === "short"
+              ? "border-short/35 bg-short/8"
+              : "border-long/35 bg-long/8"
+          }`}
+        >
+          <p className="text-[0.65rem] tracking-[0.28em] text-muted-foreground uppercase">
+            Trade figé · ne change plus avant TP/SL
+          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <CryptoLogo symbol={heroTrade.coin} size={44} />
+            <div>
+              <p className="font-heading text-2xl font-semibold tracking-tight">
+                {heroTrade.side.toUpperCase()} {heroTrade.coin}
+              </p>
+              <p className="text-sm text-muted-foreground">
+                Marge {heroTrade.marginEur.toFixed(0)} € sortie du solde · levier{" "}
+                {heroTrade.leverage}× · notionnel {heroTrade.notionalEur.toFixed(0)} €
+              </p>
+            </div>
+          </div>
+          <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-5">
+            <Level label="Spot live" value={heroTrade.markPx != null ? formatPx(heroTrade.markPx) : "—"} />
+            <Level label="Entrée figée" value={formatPx(heroTrade.entry)} />
+            <Level label="TP" value={formatPx(heroTrade.tp)} className="text-long" />
+            <Level label="SL" value={formatPx(heroTrade.sl)} className="text-short" />
+            <Level
+              label="PnL"
+              value={
+                heroTrade.status === "pending"
+                  ? "en attente"
+                  : `${(heroTrade.pnlEur ?? 0) >= 0 ? "+" : ""}${(heroTrade.pnlEur ?? 0).toFixed(2)} €`
+              }
+              className={signedClass(heroTrade.pnlEur ?? 0)}
+            />
+          </div>
+        </section>
+      ) : data.best && data.best.action !== "wait" && data.best.confidence >= 55 ? (
         <section
           className={`bb-reveal relative overflow-hidden rounded-[1.5rem] border px-4 py-5 sm:px-6 ${
             data.best.action === "short"
@@ -457,6 +572,66 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
 
       <p className="text-xs text-muted-foreground">{data.storage.note}</p>
       <p className="text-xs text-muted-foreground">{data.disclaimer}</p>
+    </div>
+  );
+}
+
+function AccountBox({
+  user,
+  onUser,
+}: {
+  user: SessionUser | null;
+  onUser: (u: SessionUser) => void;
+}) {
+  const [name, setName] = useState("");
+  const [pin, setPin] = useState("");
+  const [msg, setMsg] = useState<string | null>(null);
+
+  async function submit(action: "register" | "login") {
+    setMsg(null);
+    const res = await fetch("/api/account", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, name, pin }),
+    });
+    const json = await res.json();
+    if (!res.ok) {
+      setMsg(json.error || "Échec");
+      return;
+    }
+    onUser(json.user);
+    setMsg(action === "register" ? "Compte créé — tes trades restent." : "Connecté.");
+  }
+
+  return (
+    <div className="min-w-[14rem] rounded-xl border border-white/10 bg-background/40 p-3">
+      <p className="text-[10px] tracking-wide text-muted-foreground uppercase">
+        {user?.guest === false ? `Connecté · ${user.name}` : "Créer / retrouver mon compte"}
+      </p>
+      <div className="mt-2 flex flex-col gap-1.5">
+        <input
+          className="h-8 rounded-md border border-white/10 bg-background px-2 text-sm"
+          placeholder="Pseudo"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+        <input
+          className="h-8 rounded-md border border-white/10 bg-background px-2 text-sm"
+          placeholder="Code 4 chiffres"
+          inputMode="numeric"
+          value={pin}
+          onChange={(e) => setPin(e.target.value)}
+        />
+        <div className="flex gap-1.5">
+          <Button size="sm" onClick={() => void submit("register")}>
+            Créer
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => void submit("login")}>
+            Entrer
+          </Button>
+        </div>
+        {msg ? <p className="text-[11px] text-primary">{msg}</p> : null}
+      </div>
     </div>
   );
 }

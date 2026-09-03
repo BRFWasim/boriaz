@@ -8,6 +8,8 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const notify = url.searchParams.get("notify") === "1";
     const force = url.searchParams.get("force") === "1";
+    const { bindUserRequest } = await import("@/lib/bind-request");
+    await bindUserRequest();
     const payload = await getTradeSignals({ notify, force });
     return Response.json(payload);
   } catch (error) {

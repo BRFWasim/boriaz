@@ -21,12 +21,12 @@ export const CRYPTO_META: Record<
   },
   UNI: {
     label: "Uniswap",
-    logo: "https://assets.coingecko.com/coins/images/12504/small/uniswap-uni.png",
+    logo: "https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/128/color/uni.png",
     color: "#FF007A",
   },
   UNISWAP: {
     label: "Uniswap",
-    logo: "https://assets.coingecko.com/coins/images/12504/small/uniswap-uni.png",
+    logo: "https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/128/color/uni.png",
     color: "#FF007A",
   },
   RENDER: {
@@ -99,4 +99,19 @@ export function cryptoMeta(symbol: string) {
 
 export function logoFor(symbol: string): string {
   return cryptoMeta(symbol).logo;
+}
+
+const FALLBACKS: Record<string, string[]> = {
+  UNI: [
+    "https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/128/color/uni.png",
+    "https://cryptologos.cc/logos/uniswap-uni-logo.png",
+    "https://assets.coincap.io/assets/icons/uni@2x.png",
+  ],
+};
+
+export function logoFallbacks(symbol: string): string[] {
+  const key = symbol.toUpperCase();
+  const primary = cryptoMeta(symbol).logo;
+  const extra = FALLBACKS[key] ?? FALLBACKS[key.replace(/^U/, "")] ?? [];
+  return [primary, ...extra].filter((u, i, a) => u && a.indexOf(u) === i);
 }

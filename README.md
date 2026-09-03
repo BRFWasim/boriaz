@@ -4,6 +4,8 @@ Dashboard **BoriazBot** : score **Alignement** (TF × crowd × Nansen × IA), si
 
 **URL unique (ne change plus) :** [https://boriazbot-v4.vercel.app](https://boriazbot-v4.vercel.app)
 
+Redéploie toi-même sur Vercel (projet **boriazbot-v4** uniquement). Pas besoin de GitHub : le remote actuel suffit. GitHub n’est utile que si tu veux un historique public + deploy auto à chaque push.
+
 Ce n’est **pas un conseil financier**.
 
 ## Lancer en local

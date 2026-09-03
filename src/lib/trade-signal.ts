@@ -8,17 +8,20 @@ import { sendTelegramMessage } from "./telegram";
 import { correlateSetup } from "./signal-score";
 import { computeAlignment, type AlignmentScore } from "./alignment";
 import {
+  appendBook,
   appendJournal,
   computePaperAccount,
   inHushHours,
   loadPrefs,
   openPaperTrade,
   loadPaperTrades,
+  loadBook,
   savePaperTrades,
   storageInfo,
   type PaperAccount,
   type PaperTrade,
 } from "./persist";
+import type { BookTrade } from "./user-types";
 import type { EntryMode } from "./user-types";
 import type { BuyTimingAction, SignalBias } from "./types";
 
@@ -64,6 +67,7 @@ export interface TradeSignalPayload {
   telegramError: string | null;
   storage: { backend: "upstash" | "tmp"; note: string };
   maxSafetyMode: boolean;
+  book: BookTrade[];
   fetchedAt: number;
   disclaimer: string;
 }
@@ -253,8 +257,6 @@ async function refreshPaperTrades(
       if (px <= t.tp) hit = "tp";
       else if (px >= t.sl) hit = "sl";
     }
-    if (!hit && pnlPct <= -8) hit = "invalidated";
-
     if (hit) {
       t.status = hit;
       t.closedAt = now;
@@ -702,7 +704,7 @@ export async function getTradeSignals(options?: {
       Number(String(best!.sizePct).match(/[\d.]+/)?.[0] || 10),
     );
     const side = best!.action === "short" ? "short" : "long";
-    await openPaperTrade({
+    const opened = await openPaperTrade({
       openedAt: Date.now(),
       coin: best!.coin,
       side,
@@ -716,6 +718,23 @@ export async function getTradeSignals(options?: {
       bankrollEur: bankroll,
       markPx: best!.price,
     });
+    if (opened && !opened.note.includes("Cash insuffisant")) {
+      await appendBook({
+        id: opened.id,
+        at: opened.openedAt,
+        coin: opened.coin,
+        side: opened.side,
+        entry: opened.entry,
+        tp: opened.tp,
+        sl: opened.sl,
+        leverage: opened.leverage,
+        marginEur: opened.marginEur,
+        notionalEur: opened.notionalEur,
+        sizePct: opened.sizePct,
+        alignment: best!.alignment.score,
+        reason: best!.reason,
+      });
+    }
     await appendJournal({
       at: Date.now(),
       coin: best!.coin,
@@ -797,6 +816,7 @@ export async function getTradeSignals(options?: {
     telegramError,
     storage: storageInfo(),
     maxSafetyMode: maxSafety,
+    book: await loadBook(),
     fetchedAt: Date.now(),
     disclaimer:
       "Suggestions éducatives (Alignement TF×crowd×Nansen×IA). Paper = simulation 1000 €. Pas un conseil financier.",
