@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { CheckIcon, CopyIcon } from "lucide-react";
+import { useEffect, useState } from "react";
+import { CheckIcon, CopyIcon, StarIcon } from "lucide-react";
 import { CryptoLogo } from "@/components/crypto-logo";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -34,15 +34,25 @@ export function WhaleCard({
   whale,
   coinFilter,
   mode,
+  followed = false,
+  onFollowChange,
 }: {
   whale: Whale;
   coinFilter: string;
   mode: UiMode;
+  followed?: boolean;
+  onFollowChange?: (address: string, followed: boolean) => void;
 }) {
   const [copied, setCopied] = useState(false);
   const [showAllPos, setShowAllPos] = useState(false);
   const [closedOpen, setClosedOpen] = useState(false);
   const [showAllClosed, setShowAllClosed] = useState(false);
+  const [tracking, setTracking] = useState(followed);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setTracking(followed);
+  }, [followed]);
 
   const positions =
     coinFilter === "all"
@@ -67,6 +77,29 @@ export function WhaleCard({
       window.setTimeout(() => setCopied(false), 1600);
     } catch {
       setCopied(false);
+    }
+  }
+
+  async function toggleFollow() {
+    if (busy) return;
+    setBusy(true);
+    const next = !tracking;
+    try {
+      const res = await fetch("/api/wallets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          address: whale.address,
+          alias: whale.alias,
+          action: next ? "follow" : "unfollow",
+        }),
+      });
+      if (res.ok) {
+        setTracking(next);
+        onFollowChange?.(whale.address, next);
+      }
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -123,6 +156,17 @@ export function WhaleCard({
               >
                 {copied ? <CheckIcon /> : <CopyIcon />}
                 {copied ? "Copiée" : "Copier"}
+              </Button>
+              <Button
+                type="button"
+                size="xs"
+                variant={tracking ? "default" : "outline"}
+                disabled={busy}
+                onClick={toggleFollow}
+                aria-label={tracking ? "Ne plus suivre" : "Suivre ce wallet"}
+              >
+                <StarIcon className={tracking ? "fill-current" : undefined} />
+                {tracking ? "Suivi" : "Suivre"}
               </Button>
               <a
                 href={`https://app.hyperliquid.xyz/explorer/address/${whale.address}`}

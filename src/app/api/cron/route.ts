@@ -103,5 +103,15 @@ export async function GET(request: Request) {
     results.macroError = e instanceof Error ? e.message : "macro";
   }
 
+  try {
+    const { trackFollowedWallets } = await import("@/lib/wallet-track");
+    results.walletTrack = await trackFollowedWallets({
+      notify: true,
+      autoFollow: true,
+    });
+  } catch (e) {
+    results.walletTrackError = e instanceof Error ? e.message : "wallets";
+  }
+
   return Response.json({ ok: true, ...results });
 }

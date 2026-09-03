@@ -57,6 +57,7 @@ export function WhalesDashboard() {
   const [mode, setModeState] = useUiMode();
   const [tab, setTab] = useState<AppTab>("home");
   const [now, setNow] = useState(() => Date.now());
+  const [followed, setFollowed] = useState<Set<string>>(new Set());
 
   const goTab = useCallback((next: AppTab) => {
     setTab(next);
@@ -94,6 +95,17 @@ export function WhalesDashboard() {
       setLoading(false);
       setRefreshing(false);
     }
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/wallets", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((json: { wallets?: { address: string }[] }) => {
+        setFollowed(
+          new Set((json.wallets ?? []).map((w) => w.address.toLowerCase())),
+        );
+      })
+      .catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -314,12 +326,30 @@ export function WhalesDashboard() {
           </p>
         ) : null}
 
+        {followed.size > 0 ? (
+          <p className="rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-xs text-primary">
+            {followed.size} wallet{followed.size > 1 ? "s" : ""} suivi
+            {followed.size > 1 ? "s" : ""} — alertes TG à chaque ouverture /
+            fermeture (cron 15 min + auto-follow wallets qualité).
+          </p>
+        ) : null}
+
         {whales.map((whale) => (
           <WhaleCard
             key={whale.address}
             whale={whale}
             coinFilter={coinFilter}
             mode={mode}
+            followed={followed.has(whale.address.toLowerCase())}
+            onFollowChange={(address, next) => {
+              setFollowed((prev) => {
+                const copy = new Set(prev);
+                const key = address.toLowerCase();
+                if (next) copy.add(key);
+                else copy.delete(key);
+                return copy;
+              });
+            }}
           />
         ))}
 

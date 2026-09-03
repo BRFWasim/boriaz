@@ -34,6 +34,8 @@ function storeKeys() {
     paper: `boriazbot:${u}:paper`,
     book: "boriazbot:global:book",
     macro: "boriazbot:macro-alerts",
+    wallets: "boriazbot:global:followed-wallets",
+    walletSnap: "boriazbot:global:wallet-snap",
     legacyPaper: "boriazbot:paper",
     legacyJournal: "boriazbot:journal",
     legacyPrefs: "boriazbot:prefs",
@@ -405,4 +407,82 @@ export async function appendBook(
   list.unshift(entry);
   await writeText(storeKeys().book, JSON.stringify(list.slice(0, 80)));
   return list.slice(0, 80);
+}
+
+export interface FollowedWallet {
+  address: string;
+  alias: string;
+  followedAt: number;
+  source: "manual" | "auto-quality";
+}
+
+export async function loadFollowedWallets(): Promise<FollowedWallet[]> {
+  try {
+    const raw = await readText(storeKeys().wallets);
+    if (!raw) return [];
+    return (JSON.parse(raw) as FollowedWallet[]).filter((w) => w.address);
+  } catch {
+    return [];
+  }
+}
+
+export async function saveFollowedWallets(
+  list: FollowedWallet[],
+): Promise<FollowedWallet[]> {
+  const dedup = new Map<string, FollowedWallet>();
+  for (const w of list) {
+    const addr = w.address.toLowerCase();
+    if (!addr) continue;
+    dedup.set(addr, { ...w, address: addr });
+  }
+  const next = [...dedup.values()].slice(0, 80);
+  await writeText(storeKeys().wallets, JSON.stringify(next));
+  return next;
+}
+
+export async function followWallet(
+  address: string,
+  alias: string,
+  source: FollowedWallet["source"] = "manual",
+): Promise<FollowedWallet[]> {
+  const list = await loadFollowedWallets();
+  const addr = address.toLowerCase();
+  if (!list.some((w) => w.address === addr)) {
+    list.unshift({
+      address: addr,
+      alias: alias || truncateAddr(addr),
+      followedAt: Date.now(),
+      source,
+    });
+  }
+  return saveFollowedWallets(list);
+}
+
+export async function unfollowWallet(address: string): Promise<FollowedWallet[]> {
+  const addr = address.toLowerCase();
+  const list = (await loadFollowedWallets()).filter((w) => w.address !== addr);
+  return saveFollowedWallets(list);
+}
+
+function truncateAddr(a: string): string {
+  return a.length > 12 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a;
+}
+
+export type WalletPosSnap = Record<
+  string,
+  { alias: string; positions: string[]; at: number }
+>;
+
+export async function loadWalletSnap(): Promise<WalletPosSnap> {
+  try {
+    const raw = await readText(storeKeys().walletSnap);
+    if (!raw) return {};
+    return JSON.parse(raw) as WalletPosSnap;
+  } catch {
+    return {};
+  }
+}
+
+export async function saveWalletSnap(snap: WalletPosSnap): Promise<void> {
+  await writeText(storeKeys().walletSnap, JSON.stringify(snap));
 }

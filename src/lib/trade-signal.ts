@@ -44,6 +44,9 @@ export interface DirectionSignal {
   riskReward: number | null;
   reason: string;
   aiText: string | null;
+  /** true seulement si l’IA a confirmé ce trade (gate obligatoire). */
+  aiVerified: boolean;
+  aiVerifyNote: string | null;
   invalidation: string;
   closeSuggestion: string | null;
   /** Ex. "1h haussier · 4h neutre · 1d haussier" */
@@ -197,6 +200,118 @@ function parseAiJson(text: string | null) {
     };
   } catch {
     return null;
+  }
+}
+
+/** 2ᵉ passage IA : confirmer ou refuser le trade proposé avant paper/TG. */
+async function verifyTradeWithAi(candidate: {
+  coin: string;
+  action: "long" | "short";
+  confidence: number;
+  alignment: number;
+  tfSummary: string;
+  crowdWr: number | null;
+  entry: number | null;
+  tp: number | null;
+  sl: number | null;
+  reason: string;
+}): Promise<{
+  approved: boolean;
+  confidence: number;
+  note: string;
+}> {
+  const prompt = `Tu es le GATE final avant un paper trade. FR. PAS un conseil financier.
+Règles STRICTES :
+- approve=true UNIQUEMENT si TF 1h+4h (ou 1d) + crowd WR + niveaux TP/SL sont cohérents.
+- Si doute, divergence, R:R faible, ou manque de confirmation → approve=false.
+- confidence = ta note 0-100 après relecture.
+JSON strict:
+{"approve":true|false,"confidence":0-100,"note":"1-2 phrases"}
+Trade proposé: ${JSON.stringify(candidate)}`;
+
+  const anthropic = process.env.ANTHROPIC_API_KEY?.trim();
+  let text: string | null = null;
+  if (anthropic) {
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "x-api-key": anthropic,
+          "anthropic-version": "2023-06-01",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model:
+            process.env.ANTHROPIC_MODEL?.trim() || "claude-haiku-4-5-20251001",
+          max_tokens: 220,
+          messages: [{ role: "user", content: prompt }],
+        }),
+      });
+      const json = (await res.json()) as {
+        content?: { type: string; text?: string }[];
+      };
+      if (res.ok) {
+        text = json.content?.find((c) => c.type === "text")?.text?.trim() || null;
+      }
+    } catch {
+      /* fallthrough */
+    }
+  }
+  if (!text) {
+    const openai = process.env.OPENAI_API_KEY?.trim();
+    if (openai) {
+      try {
+        const res = await fetch("https://api.openai.com/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${openai}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini",
+            temperature: 0.1,
+            max_tokens: 220,
+            messages: [
+              { role: "system", content: "JSON uniquement." },
+              { role: "user", content: prompt },
+            ],
+          }),
+        });
+        const json = (await res.json()) as {
+          choices?: { message?: { content?: string } }[];
+        };
+        text = json.choices?.[0]?.message?.content?.trim() || null;
+      } catch {
+        text = null;
+      }
+    }
+  }
+  if (!text) {
+    return {
+      approved: false,
+      confidence: 0,
+      note: "IA indisponible — trade bloqué (vérif obligatoire).",
+    };
+  }
+  const match = text.match(/\{[\s\S]*\}/);
+  if (!match) {
+    return { approved: false, confidence: 0, note: "Réponse IA illisible — bloqué." };
+  }
+  try {
+    const obj = JSON.parse(match[0]) as Record<string, unknown>;
+    const approved = Boolean(obj.approve);
+    const confidence = Number(obj.confidence ?? 0);
+    const note = String(obj.note || "");
+    if (!approved || confidence < 62) {
+      return {
+        approved: false,
+        confidence,
+        note: note || "IA refuse ou confiance < 62.",
+      };
+    }
+    return { approved: true, confidence, note: note || "IA confirme le setup." };
+  } catch {
+    return { approved: false, confidence: 0, note: "JSON IA invalide — bloqué." };
   }
 }
 
@@ -437,6 +552,8 @@ export async function getTradeSignals(options?: {
       riskReward,
       reason: corr.reason,
       aiText: null,
+      aiVerified: false,
+      aiVerifyNote: null,
       invalidation: main.buyZone.summary,
       closeSuggestion,
       tfSummary,
@@ -637,6 +754,45 @@ export async function getTradeSignals(options?: {
           b.alignment.score - a.alignment.score || b.confidence - a.confidence,
       )[0] ?? best;
 
+  // Gate IA obligatoire avant paper / TG signal
+  if (
+    best &&
+    best.action !== "wait" &&
+    best.entry &&
+    best.tp &&
+    best.sl
+  ) {
+    const gate = await verifyTradeWithAi({
+      coin: best.coin,
+      action: best.action,
+      confidence: best.confidence,
+      alignment: best.alignment.score,
+      tfSummary: best.tfSummary,
+      crowdWr: best.crowdWr,
+      entry: best.entry,
+      tp: best.tp,
+      sl: best.sl,
+      reason: best.reason.slice(0, 220),
+    });
+    best.aiVerified = gate.approved;
+    best.aiVerifyNote = gate.note;
+    if (gate.approved) {
+      best.confidence = Math.max(best.confidence, gate.confidence);
+      best.aiText = [best.aiText, `Vérif IA ✓ ${gate.note}`]
+        .filter(Boolean)
+        .join(" · ");
+    } else {
+      best.aiText = [best.aiText, `Vérif IA ✗ ${gate.note}`]
+        .filter(Boolean)
+        .join(" · ");
+      // Bloque le paper : on garde le signal visible mais sans exécution
+      best.certainty = best.certainty === "haute" ? "moyenne" : best.certainty;
+    }
+  } else if (best) {
+    best.aiVerified = false;
+    best.aiVerifyNote = "Pas de niveaux complets — vérif IA non lancée.";
+  }
+
   const divergences = signals
     .map((s) => s.alignment.divergence)
     .filter((d): d is string => Boolean(d));
@@ -716,6 +872,7 @@ export async function getTradeSignals(options?: {
   const shouldSim =
     best &&
     best.action !== "wait" &&
+    best.aiVerified === true &&
     best.confidence >= 62 &&
     best.certainty !== "basse" &&
     best.alignment.score >= 52 &&
@@ -746,7 +903,7 @@ export async function getTradeSignals(options?: {
       leverage: levNum,
       sizePct: sizeNum,
       entryMode: best!.entryMode ?? "market_now",
-      note: `Simu auto 1000€ · Align ${best!.alignment.score}`,
+      note: `Simu auto 1000€ · Align ${best!.alignment.score} · IA✓`,
       bankrollEur: bankroll,
       markPx: best!.price,
     });
@@ -816,6 +973,7 @@ export async function getTradeSignals(options?: {
         best.entryHint || "",
         best.reason,
         best.aiText ? `IA: ${best.aiText}` : "",
+        best.aiVerifyNote ? `Gate IA: ${best.aiVerifyNote}` : "",
         `Invalidation: ${best.invalidation}`,
         "",
         "Simulation paper — pas un ordre réel. Pas un conseil financier.",

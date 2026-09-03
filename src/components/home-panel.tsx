@@ -466,6 +466,16 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
             </p>
           ) : null}
           <p className="mt-2 text-sm">{data.best.aiText || data.best.reason}</p>
+          {data.best.aiVerifyNote ? (
+            <p
+              className={`mt-1 text-xs ${
+                data.best.aiVerified ? "text-long" : "text-amber-200"
+              }`}
+            >
+              {data.best.aiVerified ? "Gate IA ✓" : "Gate IA ✗"} ·{" "}
+              {data.best.aiVerifyNote}
+            </p>
+          ) : null}
           {data.best.tfSummary ? (
             <p className="mt-1 text-xs text-muted-foreground">
               TF {data.best.tfSummary}
