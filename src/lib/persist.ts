@@ -26,12 +26,17 @@ export type {
 export {
   DEFAULT_PREFS,
   DEFAULT_PORTFOLIO,
+  BORIAZ_PORTFOLIO,
   ensurePortfolios,
   makeCustomPortfolio,
   computePaperAccount,
   aggregatePaperAccount,
 } from "./user-types";
-export type { PortfolioProfile, TimeframeFocus } from "./user-types";
+export type {
+  PortfolioProfile,
+  PortfolioStrategy,
+  TimeframeFocus,
+} from "./user-types";
 
 /** Fallback mémoire si /tmp et Upstash échouent. */
 const mem = new Map<string, string>();
@@ -223,6 +228,13 @@ function normalizeTrade(raw: Partial<PaperTrade> & PaperTrade): PaperTrade {
     entry: raw.entry,
     tp: raw.tp,
     sl: raw.sl,
+    tp1: raw.tp1 ?? null,
+    tp2: raw.tp2 ?? null,
+    tp1Hit: raw.tp1Hit ?? false,
+    realizedPartialEur: raw.realizedPartialEur ?? 0,
+    remainingQtyPct: raw.remainingQtyPct ?? 1,
+    strategy: raw.strategy ?? "alignment",
+    riskPct: raw.riskPct,
     leverage,
     sizePct,
     marginEur,
@@ -290,6 +302,8 @@ export async function openPaperTrade(input: {
   entry: number;
   tp: number;
   sl: number;
+  tp1?: number | null;
+  tp2?: number | null;
   leverage: number;
   sizePct: number;
   entryMode: EntryMode;
@@ -299,6 +313,11 @@ export async function openPaperTrade(input: {
   portfolioId?: string;
   portfolioName?: string;
   justification?: TradeJustification | null;
+  strategy?: import("./user-types").PortfolioStrategy;
+  riskPct?: number;
+  /** Marge forcée (sizing risque SMC). */
+  marginEur?: number;
+  notionalEur?: number;
 }): Promise<PaperTrade> {
   const trades = await loadPaperTrades();
   const pfId = input.portfolioId || "default";
@@ -314,8 +333,15 @@ export async function openPaperTrade(input: {
   if (opposite) return opposite;
 
   const bankroll = input.bankrollEur ?? 1000;
-  const sizePct = Math.max(0.5, Math.min(15, input.sizePct || 10));
-  const marginEur = (bankroll * sizePct) / 100;
+  const sizePct = Math.max(0.5, Math.min(25, input.sizePct || 10));
+  const marginEur =
+    input.marginEur != null && input.marginEur > 0
+      ? input.marginEur
+      : (bankroll * sizePct) / 100;
+  const notionalEur =
+    input.notionalEur != null && input.notionalEur > 0
+      ? input.notionalEur
+      : marginEur * input.leverage;
   const acc = computePaperAccount(trades, bankroll, pfId);
   if (acc.cashEur < marginEur) {
     return (
@@ -328,10 +354,17 @@ export async function openPaperTrade(input: {
         entry: input.entry,
         tp: input.tp,
         sl: input.sl,
+        tp1: input.tp1 ?? null,
+        tp2: input.tp2 ?? null,
+        tp1Hit: false,
+        realizedPartialEur: 0,
+        remainingQtyPct: 1,
+        strategy: input.strategy ?? "alignment",
+        riskPct: input.riskPct,
         leverage: input.leverage,
         sizePct,
         marginEur,
-        notionalEur: marginEur * input.leverage,
+        notionalEur,
         entryMode: input.entryMode,
         status: "pending",
         closedAt: null,
@@ -347,7 +380,6 @@ export async function openPaperTrade(input: {
     );
   }
   const marketNow = input.entryMode === "market_now";
-  const notionalEur = marginEur * input.leverage;
   const trade: PaperTrade = {
     id: `pt-${input.openedAt}-${pfId}-${input.coin}-${input.side}`,
     openedAt: input.openedAt,
@@ -358,6 +390,13 @@ export async function openPaperTrade(input: {
     entry: input.entry,
     tp: input.tp,
     sl: input.sl,
+    tp1: input.tp1 ?? null,
+    tp2: input.tp2 ?? null,
+    tp1Hit: false,
+    realizedPartialEur: 0,
+    remainingQtyPct: 1,
+    strategy: input.strategy ?? "alignment",
+    riskPct: input.riskPct,
     leverage: input.leverage,
     sizePct,
     marginEur,

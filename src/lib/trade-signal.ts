@@ -77,6 +77,8 @@ export interface TradeSignalPayload {
   book: BookTrade[];
   fetchedAt: number;
   disclaimer: string;
+  /** Scan SMC portefeuille Boriaz (Claude Haiku). */
+  smc: import("./smc-scan").SmcScanResult | null;
 }
 
 const CACHE_TTL = 3 * 60_000;
@@ -389,36 +391,80 @@ async function refreshPaperTrades(
 
     if (t.status !== "open") continue;
 
+    const qtyPct = t.remainingQtyPct ?? 1;
     const movePct =
       t.side === "long"
         ? ((px - t.entry) / t.entry) * 100
         : ((t.entry - px) / t.entry) * 100;
     const pnlPct = movePct * t.leverage;
     // PnL NET des frais estimés (aller-retour) → équité réaliste.
-    const pnlEur = t.marginEur * (pnlPct / 100) - (t.feesEur ?? 0);
+    // Après TP1 SMC : marge restante + partial déjà réalisé.
+    const unrealizedEur = t.marginEur * (pnlPct / 100) * qtyPct;
+    const feesShare = (t.feesEur ?? 0) * qtyPct;
+    const pnlEur =
+      unrealizedEur - feesShare + (t.realizedPartialEur ?? 0);
     t.pnlPct = pnlPct;
     t.pnlEur = pnlEur;
 
+    // SMC : TP1 (1R) → clôturer 50 % + Break-Even, puis TP2 sur le reste
+    const tp1 = t.tp1 != null && t.tp1 > 0 ? t.tp1 : null;
+    const tp2 = t.tp2 != null && t.tp2 > 0 ? t.tp2 : null;
+    const isSmc = t.strategy === "smc" || (tp1 != null && tp2 != null);
+
+    if (isSmc && tp1 != null && !t.tp1Hit) {
+      const hitTp1 =
+        t.side === "long" ? px >= tp1 : px <= tp1;
+      if (hitTp1) {
+        const halfMargin = t.marginEur * 0.5;
+        const halfMove =
+          t.side === "long"
+            ? ((tp1 - t.entry) / t.entry) * 100
+            : ((t.entry - tp1) / t.entry) * 100;
+        const halfPnl = halfMargin * ((halfMove * t.leverage) / 100);
+        const halfFees = (t.feesEur ?? 0) * 0.5;
+        t.realizedPartialEur = (t.realizedPartialEur ?? 0) + halfPnl - halfFees;
+        t.marginEur = halfMargin;
+        t.notionalEur = halfMargin * t.leverage;
+        t.remainingQtyPct = 0.5;
+        t.tp1Hit = true;
+        t.sl = t.entry; // Break-even absolu
+        t.tp = tp2 ?? t.tp;
+        t.feesEur = halfFees; // frais restants sur demi-position
+        t.note = `TP1 50% @ ${tp1} (+${(halfPnl - halfFees).toFixed(2)} €) · SL → BE · vise TP2`;
+        t.pnlEur =
+          t.realizedPartialEur +
+          t.marginEur * (pnlPct / 100) -
+          (t.feesEur ?? 0);
+        continue;
+      }
+    }
+
+    // SL / TP final (TP2 après BE, ou TP simple)
+    const activeTp = t.tp1Hit && tp2 != null ? tp2 : t.tp;
     let hit: PaperTrade["status"] | null = null;
     if (t.side === "long") {
-      if (px >= t.tp) hit = "tp";
+      if (px >= activeTp) hit = "tp";
       else if (px <= t.sl) hit = "sl";
     } else {
-      if (px <= t.tp) hit = "tp";
+      if (px <= activeTp) hit = "tp";
       else if (px >= t.sl) hit = "sl";
     }
     if (hit) {
       t.status = hit;
       t.closedAt = now;
       t.exitPx = px;
+      const finalUnreal = t.marginEur * (pnlPct / 100) - (t.feesEur ?? 0);
+      const totalEur = (t.realizedPartialEur ?? 0) + finalUnreal;
+      t.pnlEur = totalEur;
+      const beNote = t.tp1Hit && hit === "sl" ? " (BE après TP1)" : "";
       t.note =
         hit === "tp"
-          ? `TP touché — +${pnlEur.toFixed(2)} €`
+          ? `${t.tp1Hit ? "TP2" : "TP"} touché — +${totalEur.toFixed(2)} €`
           : hit === "sl"
-            ? `SL touché — ${pnlEur.toFixed(2)} €`
-            : `Invalidation — fermeture ${pnlEur.toFixed(2)} €`;
+            ? `SL touché${beNote} — ${totalEur.toFixed(2)} €`
+            : `Invalidation — fermeture ${totalEur.toFixed(2)} €`;
       closes.push({ ...t });
-    } else if (pnlPct <= -4) {
+    } else if (pnlPct <= -4 && !t.tp1Hit) {
       t.note = `Fermeture suggérée (paper ${pnlEur.toFixed(2)} € / ${pnlPct.toFixed(1)} %)`;
     }
   }
@@ -898,6 +944,8 @@ export async function getTradeSignals(options?: {
   const portfolios = ensurePortfolios(prefs.portfolios).filter(
     (p) => p.enabled && p.paperTradeEnabled && prefs.paperTradeEnabled,
   );
+  const alignmentPortfolios = portfolios.filter((p) => p.strategy !== "smc");
+  const smcPortfolios = portfolios.filter((p) => p.strategy === "smc");
   const paperForCheck = await loadPaperTrades();
 
   function rrFor(
@@ -1084,10 +1132,10 @@ export async function getTradeSignals(options?: {
   let anyOpened = false;
   if (
     prefs.paperTradeEnabled !== false &&
-    portfolios.length &&
+    alignmentPortfolios.length &&
     candidates.length
   ) {
-    for (const pf of portfolios) {
+    for (const pf of alignmentPortfolios) {
       let chosen: DirectionSignal | null = null;
       for (const cand of candidates) {
         if (pf.requireAiGate) await ensureAiGate(cand);
@@ -1120,6 +1168,7 @@ export async function getTradeSignals(options?: {
         portfolioId: pf.id,
         portfolioName: pf.name,
         justification,
+        strategy: "alignment",
       });
       if (opened && !opened.note.includes("Cash insuffisant")) {
         anyOpened = true;
@@ -1157,6 +1206,169 @@ export async function getTradeSignals(options?: {
           justification: justification.bullets.join(" · "),
         });
       }
+    }
+  }
+
+  // --- Portefeuille(x) SMC Boriaz ---
+  let smcScan: import("./smc-scan").SmcScanResult | null = null;
+  if (prefs.paperTradeEnabled !== false && smcPortfolios.length) {
+    try {
+      const { scanSmcWatchlist } = await import("./smc-scan");
+      const primary = smcPortfolios[0]!;
+      smcScan = await scanSmcWatchlist({
+        coins: prefs.watchCoins.slice(0, 8),
+        walletEur: primary.bankrollEur,
+        maxLeverage: primary.maxLeverage,
+        prices: priceMap,
+      });
+
+      for (const pf of smcPortfolios) {
+        const setup = smcScan.best;
+        if (
+          !setup ||
+          !setup.order ||
+          !setup.risk ||
+          !setup.checklist.allPass ||
+          !smcScan.aiApproved
+        ) {
+          continue;
+        }
+        if (setup.status === "ANNULÉ") continue;
+
+        const acc = computePaperAccount(paperForCheck, pf.bankrollEur, pf.id);
+        if (
+          Number.isFinite(pf.maxLossEur) &&
+          pf.maxLossEur > 0 &&
+          pf.bankrollEur - acc.equityEur >= pf.maxLossEur
+        ) {
+          continue;
+        }
+        if (pf.tradesPerDay > 0) {
+          const today = paperForCheck.filter(
+            (t) =>
+              (t.portfolioId || "default") === pf.id &&
+              Date.now() - t.openedAt < 24 * 3600_000,
+          ).length;
+          if (today >= pf.tradesPerDay) continue;
+        }
+
+        const justification: TradeJustification = {
+          summary: `SMC Boriaz ${setup.order.side.toUpperCase()} ${setup.coin} · checklist 6/6 · risque ${setup.risk.riskPct}% · Claude ${smcScan.aiApproved ? "OK" : "KO"}`,
+          bullets: [
+            `Stratégie SMC top-down D1→H4→H1→M15`,
+            `MTF ${setup.bias.d1}/${setup.bias.h4}/${setup.bias.h1}`,
+            setup.liquidityLevel != null
+              ? `Liquidity sweep @ ${setup.liquidityLevel}`
+              : "Liquidity sweep validé",
+            "CHoCH + BOS (clôture corps)",
+            setup.fvg
+              ? `FVG ${setup.fvg.low}–${setup.fvg.high}`
+              : "FVG",
+            setup.ote
+              ? `ÔTE ${setup.ote.low}–${setup.ote.high} (idéal ${setup.ote.ideal})`
+              : "ÔTE",
+            `Risque ${setup.risk.riskEur.toFixed(2)} € (2%) · notionnel ${setup.risk.notionalEur} €`,
+            `TP1 1R 50%+BE · TP2 2R`,
+            smcScan.aiNote || "Gate Claude Haiku",
+          ],
+          alignmentScore: setup.confidence,
+          aiVerified: smcScan.aiApproved,
+          aiNote: smcScan.aiNote,
+          portfolioId: pf.id,
+          portfolioName: pf.name,
+          timeframe: pf.timeframe,
+          triggeredAt: Date.now(),
+          smcReport: smcScan.aiReport || setup.report,
+        };
+
+        const opened = await openPaperTrade({
+          openedAt: Date.now(),
+          coin: setup.coin,
+          side: setup.order.side,
+          entry: setup.order.entry,
+          tp: setup.order.tp2,
+          sl: setup.order.sl,
+          tp1: setup.order.tp1,
+          tp2: setup.order.tp2,
+          leverage: setup.risk.leverage,
+          sizePct: setup.risk.sizePct,
+          marginEur: setup.risk.marginEur,
+          notionalEur: setup.risk.notionalEur,
+          entryMode: setup.order.entryMode,
+          note: justification.summary,
+          bankrollEur: pf.bankrollEur,
+          markPx: setup.price,
+          portfolioId: pf.id,
+          portfolioName: pf.name,
+          justification,
+          strategy: "smc",
+          riskPct: 2,
+        });
+
+        if (opened && !opened.note.includes("Cash insuffisant")) {
+          anyOpened = true;
+          await appendBook({
+            id: opened.id,
+            at: opened.openedAt,
+            coin: opened.coin,
+            side: opened.side,
+            entry: opened.entry,
+            tp: opened.tp,
+            sl: opened.sl,
+            leverage: opened.leverage,
+            marginEur: opened.marginEur,
+            notionalEur: opened.notionalEur,
+            sizePct: opened.sizePct,
+            alignment: setup.confidence,
+            reason: justification.summary,
+            portfolioId: pf.id,
+            portfolioName: pf.name,
+            justification,
+          });
+          await appendJournal({
+            at: Date.now(),
+            coin: setup.coin,
+            action: setup.order.side,
+            confidence: setup.confidence,
+            entry: setup.order.entry,
+            tp: setup.order.tp2,
+            sl: setup.order.sl,
+            leverage: `${setup.risk.leverage}×`,
+            sizePct: `risque 2%`,
+            reason: justification.summary,
+            source: `smc-boriaz:${pf.id}`,
+            portfolioId: pf.id,
+            justification: (smcScan.aiReport || setup.report).slice(0, 500),
+          });
+
+          if (notify && !hush) {
+            const tgKey = `smc:${setup.coin}:${setup.order.side}:${Math.round(setup.order.entry)}`;
+            if (tgKey !== lastTgKey || Date.now() - lastTgAt > TG_COOLDOWN) {
+              const res = await sendTelegramMessage(
+                [
+                  `SMC BORIAZ · ${setup.order.side.toUpperCase()} ${setup.coin}`,
+                  setup.status,
+                  `E ${setup.order.entry} · SL ${setup.order.sl}`,
+                  `TP1 ${setup.order.tp1} (50%+BE) · TP2 ${setup.order.tp2}`,
+                  `Risque 2% = ${setup.risk.riskEur.toFixed(2)} €`,
+                  smcScan.aiNote || "",
+                  "",
+                  "Simulation paper SMC — pas un conseil financier.",
+                ]
+                  .filter(Boolean)
+                  .join("\n"),
+              );
+              if (res.ok) {
+                telegramSent = true;
+                lastTgKey = tgKey;
+                lastTgAt = Date.now();
+              } else telegramError = res.error ?? telegramError;
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.error("SMC Boriaz scan failed", e);
     }
   }
 
@@ -1220,7 +1432,8 @@ export async function getTradeSignals(options?: {
     book: await loadBook(),
     fetchedAt: Date.now(),
     disclaimer:
-      "Suggestions éducatives (Alignement TF×crowd×Nansen×IA). Paper = simulation 1000 €. Pas un conseil financier.",
+      "Suggestions éducatives (Alignement TF×crowd×Nansen×IA + SMC Boriaz). Paper = simulation. Pas un conseil financier.",
+    smc: smcScan,
   };
   cache = { at: Date.now(), value };
   return value;

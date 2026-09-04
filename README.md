@@ -25,6 +25,7 @@ Ouvrir [http://127.0.0.1:4317](http://127.0.0.1:4317).
 ## Fonctionnalités
 
 - **Alignement** — TF × crowd × Nansen × IA
+- **Portefeuille Boriaz (SMC)** — top-down D1→H4→H1→M15, checklist 6/6, risque exact 2 %, TP1 50 %+BE / TP2 2R, gate Claude Haiku
 - **Gate IA** — 2ᵉ passage obligatoire avant paper / signal TG
 - **Sureté max** — TG si 1h+4h alignés + crowd WR
 - **Tracking wallets** — bouton Suivre + auto-follow qualité + alertes TG

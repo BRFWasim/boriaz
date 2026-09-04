@@ -1,5 +1,7 @@
 export type TimeframeFocus = "15m" | "1h" | "4h" | "1d";
 
+export type PortfolioStrategy = "alignment" | "smc";
+
 export interface PortfolioProfile {
   id: string;
   name: string;
@@ -21,6 +23,14 @@ export interface PortfolioProfile {
   riskLevel: number;
   requireAiGate: boolean;
   maxSafetyMode: boolean;
+  /**
+   * Stratégie du portefeuille.
+   * - alignment : score TF×crowd×Nansen×IA (défaut)
+   * - smc : Smart Money Concepts (portefeuille Boriaz)
+   */
+  strategy: PortfolioStrategy;
+  /** Risque max par trade en % du wallet (SMC = 2). */
+  riskPct: number;
 }
 
 export interface TradeJustification {
@@ -33,6 +43,8 @@ export interface TradeJustification {
   portfolioName: string;
   timeframe: TimeframeFocus;
   triggeredAt: number;
+  /** Rapport SMC texte (portefeuille Boriaz). */
+  smcReport?: string | null;
 }
 
 export interface UserPrefs {
@@ -76,6 +88,30 @@ export const DEFAULT_PORTFOLIO: PortfolioProfile = {
   riskLevel: 2,
   requireAiGate: true,
   maxSafetyMode: true,
+  strategy: "alignment",
+  riskPct: 2,
+};
+
+/** Portefeuille SMC Boriaz — toujours présent dans le Lab. */
+export const BORIAZ_PORTFOLIO: PortfolioProfile = {
+  id: "boriaz",
+  name: "Boriaz",
+  isDefault: false,
+  enabled: true,
+  paperTradeEnabled: true,
+  bankrollEur: 1000,
+  maxLeverage: 3,
+  sizePct: 8,
+  minRR: 2,
+  targetEur: 300,
+  maxLossEur: 100,
+  tradesPerDay: 4,
+  timeframe: "15m",
+  riskLevel: 2,
+  requireAiGate: true,
+  maxSafetyMode: true,
+  strategy: "smc",
+  riskPct: 2,
 };
 
 export function ensurePortfolios(
@@ -85,11 +121,24 @@ export function ensurePortfolios(
   const byId = new Map<string, PortfolioProfile>();
   for (const p of incoming) {
     if (!p?.id) continue;
+    const base = p.id === "boriaz" ? BORIAZ_PORTFOLIO : DEFAULT_PORTFOLIO;
     byId.set(p.id, {
-      ...DEFAULT_PORTFOLIO,
+      ...base,
       ...p,
       id: p.id,
       isDefault: p.id === "default" || p.isDefault === true,
+      strategy:
+        p.id === "boriaz"
+          ? "smc"
+          : p.strategy === "smc"
+            ? "smc"
+            : "alignment",
+      riskPct:
+        p.id === "boriaz"
+          ? 2
+          : Number.isFinite(p.riskPct)
+            ? Math.min(5, Math.max(0.5, Number(p.riskPct)))
+            : base.riskPct,
     });
   }
   if (!byId.has("default")) {
@@ -98,7 +147,30 @@ export function ensurePortfolios(
     const d = byId.get("default")!;
     byId.set("default", { ...d, isDefault: true, enabled: true });
   }
-  return [...byId.values()];
+  // Boriaz toujours présent (SMC)
+  if (!byId.has("boriaz")) {
+    byId.set("boriaz", { ...BORIAZ_PORTFOLIO });
+  } else {
+    const b = byId.get("boriaz")!;
+    byId.set("boriaz", {
+      ...BORIAZ_PORTFOLIO,
+      ...b,
+      id: "boriaz",
+      name: b.name?.trim() || "Boriaz",
+      strategy: "smc",
+      riskPct: 2,
+      isDefault: false,
+    });
+  }
+  // Ordre : défaut, boriaz, puis les autres
+  const rest = [...byId.values()].filter(
+    (p) => p.id !== "default" && p.id !== "boriaz",
+  );
+  return [
+    byId.get("default")!,
+    byId.get("boriaz")!,
+    ...rest,
+  ];
 }
 
 export function makeCustomPortfolio(
@@ -122,6 +194,8 @@ export function makeCustomPortfolio(
     riskLevel: partial?.riskLevel ?? 3,
     requireAiGate: partial?.requireAiGate ?? true,
     maxSafetyMode: partial?.maxSafetyMode ?? false,
+    strategy: partial?.strategy ?? "alignment",
+    riskPct: partial?.riskPct ?? 2,
   };
 }
 
@@ -152,7 +226,7 @@ export const DEFAULT_PREFS: UserPrefs = {
   customTargetEur: 200,
   customMaxLossEur: 100,
   customTradesPerDay: 3,
-  portfolios: [{ ...DEFAULT_PORTFOLIO }],
+  portfolios: [{ ...DEFAULT_PORTFOLIO }, { ...BORIAZ_PORTFOLIO }],
 };
 
 export interface JournalEntry {
@@ -197,6 +271,20 @@ export interface PaperTrade {
   entry: number;
   tp: number;
   sl: number;
+  /** TP1 (1R) — SMC : clôture 50 % + BE. */
+  tp1?: number | null;
+  /** TP2 (2R) — SMC : solde restant. */
+  tp2?: number | null;
+  /** true après TP1 : 50 % déjà pris, SL au break-even. */
+  tp1Hit?: boolean;
+  /** PnL déjà réalisé sur la demi-position TP1. */
+  realizedPartialEur?: number;
+  /** Fraction restante 0–1 (1 = pleine, 0.5 après TP1). */
+  remainingQtyPct?: number;
+  /** Stratégie à l’ouverture. */
+  strategy?: PortfolioStrategy;
+  /** % du wallet risqué (SMC = 2). */
+  riskPct?: number;
   leverage: number;
   /** % du capital paper engagé en marge (ex: 2 = 2 %). */
   sizePct: number;
@@ -293,7 +381,12 @@ export function computePaperAccount(
     if (t.status === "open") {
       openCount += 1;
       marginUsed += t.marginEur;
+      // Après TP1 SMC : partial déjà encaissé + latent sur le reste
       unrealized += t.pnlEur ?? 0;
+      // pnlEur open inclut déjà realizedPartial — on sépare pour equity :
+      // cash = bankroll - margin + realized(closed only)
+      // Pour open avec partial : le partial est dans pnlEur mais pas encore
+      // "realized" au sens closed. On l'ajoute au unrealized via pnlEur.
       continue;
     }
     closedCount += 1;

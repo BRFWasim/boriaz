@@ -23,7 +23,13 @@ import type {
   TimeframeFrame,
 } from "./types";
 
-export type CandleInterval = "1h" | "4h" | "1d" | "1w";
+export type CandleInterval =
+  | "15m"
+  | "30m"
+  | "1h"
+  | "4h"
+  | "1d"
+  | "1w";
 
 function fmtPx(px: number): string {
   if (px >= 1000) return px.toFixed(0);
@@ -33,6 +39,8 @@ function fmtPx(px: number): string {
 }
 
 const INTERVAL_MS: Record<CandleInterval, number> = {
+  "15m": 15 * 60_000,
+  "30m": 30 * 60_000,
   "1h": 3600_000,
   "4h": 4 * 3600_000,
   "1d": 24 * 3600_000,
@@ -41,6 +49,8 @@ const INTERVAL_MS: Record<CandleInterval, number> = {
 
 /** Combien de bougies charger par TF (≥220 pour EMA200, 1w plus court). */
 const LOOKBACK: Record<CandleInterval, number> = {
+  "15m": 200,
+  "30m": 200,
   "1h": 260,
   "4h": 260,
   "1d": 260,

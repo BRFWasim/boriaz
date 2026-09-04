@@ -668,10 +668,19 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
                           défaut
                         </span>
                       ) : null}
+                      {pf.profile.strategy === "smc" ||
+                      pf.profile.id === "boriaz" ? (
+                        <span className="ml-2 text-[10px] tracking-wide text-amber-400 uppercase">
+                          SMC 2%
+                        </span>
+                      ) : null}
                     </p>
                     <p className="mt-0.5 text-xs text-muted-foreground">
-                      TF {pf.profile.timeframe} · risque {pf.profile.riskLevel}/5
-                      · lev max {pf.profile.maxLeverage}× · R:R ≥ {pf.profile.minRR}
+                      {pf.profile.strategy === "smc"
+                        ? `SMC top-down · risque ${pf.profile.riskPct ?? 2}% · TP1 50%+BE`
+                        : `TF ${pf.profile.timeframe} · risque ${pf.profile.riskLevel}/5`}
+                      {" · "}lev max {pf.profile.maxLeverage}× · R:R ≥{" "}
+                      {pf.profile.minRR}
                       · {trades.filter((t) => t.status === "open" || t.status === "pending").length}{" "}
                       ouvert
                       {trades.filter((t) => t.status === "open" || t.status === "pending").length > 1

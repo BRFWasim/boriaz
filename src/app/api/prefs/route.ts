@@ -1,6 +1,7 @@
 import {
   DEFAULT_PORTFOLIO,
   DEFAULT_PREFS,
+  BORIAZ_PORTFOLIO,
   ensurePortfolios,
   loadPrefs,
   makeCustomPortfolio,
@@ -17,19 +18,27 @@ function sanitizePortfolio(raw: Record<string, unknown>): PortfolioProfile | nul
   const base =
     id === "default"
       ? { ...DEFAULT_PORTFOLIO }
-      : makeCustomPortfolio({ id });
+      : id === "boriaz"
+        ? { ...BORIAZ_PORTFOLIO }
+        : makeCustomPortfolio({ id });
   const tf = String(raw.timeframe || base.timeframe);
   const timeframe =
     tf === "15m" || tf === "1h" || tf === "4h" || tf === "1d" ? tf : base.timeframe;
+  const strategy =
+    id === "boriaz"
+      ? "smc"
+      : String(raw.strategy || base.strategy) === "smc"
+        ? "smc"
+        : "alignment";
   return {
     ...base,
     name: String(raw.name || base.name).slice(0, 48),
     isDefault: id === "default",
-    enabled: id === "default" ? true : Boolean(raw.enabled ?? true),
+    enabled: id === "default" || id === "boriaz" ? true : Boolean(raw.enabled ?? true),
     paperTradeEnabled: Boolean(raw.paperTradeEnabled ?? true),
     bankrollEur: Math.min(100000, Math.max(100, Number(raw.bankrollEur) || 1000)),
     maxLeverage: Math.min(10, Math.max(1, Number(raw.maxLeverage) || 3)),
-    sizePct: Math.min(15, Math.max(1, Number(raw.sizePct) || 10)),
+    sizePct: Math.min(25, Math.max(1, Number(raw.sizePct) || 10)),
     minRR: Math.min(10, Math.max(0.5, Number(raw.minRR) || 1.5)),
     targetEur: Math.max(10, Number(raw.targetEur) || 200),
     maxLossEur: Math.max(10, Number(raw.maxLossEur) || 150),
@@ -37,7 +46,11 @@ function sanitizePortfolio(raw: Record<string, unknown>): PortfolioProfile | nul
     timeframe,
     riskLevel: Math.min(5, Math.max(1, Math.floor(Number(raw.riskLevel) || 2))),
     requireAiGate: Boolean(raw.requireAiGate ?? true),
-    maxSafetyMode: Boolean(raw.maxSafetyMode ?? id === "default"),
+    maxSafetyMode: Boolean(
+      raw.maxSafetyMode ?? (id === "default" || id === "boriaz"),
+    ),
+    strategy,
+    riskPct: id === "boriaz" ? 2 : Math.min(5, Math.max(0.5, Number(raw.riskPct) || 2)),
   };
 }
 

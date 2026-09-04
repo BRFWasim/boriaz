@@ -48,6 +48,22 @@ export function LabPanel() {
   const [tgBusy, setTgBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [smcBusy, setSmcBusy] = useState(false);
+  const [smc, setSmc] = useState<{
+    best: {
+      coin: string;
+      status: string;
+      confidence: number;
+      report: string;
+      checklist: Record<string, boolean>;
+      side: string | null;
+    } | null;
+    aiApproved: boolean;
+    aiNote: string | null;
+    aiReport: string | null;
+    model: string;
+    setups?: { coin: string; status: string; confidence: number }[];
+  } | null>(null);
   const [saving, setSaving] = useState(false);
   const dirtyRef = useRef(false);
 
@@ -205,13 +221,39 @@ export function LabPanel() {
   }
 
   function removePortfolio(id: string) {
-    if (!prefs || id === "default") return;
+    if (!prefs || id === "default" || id === "boriaz") return;
     patchPrefs({
       ...prefs,
       portfolios: ensurePortfolios(
         prefs.portfolios.filter((p) => p.id !== id),
       ),
     });
+  }
+
+  async function runSmcScan(force = false) {
+    setSmcBusy(true);
+    setMsg("Scan SMC Boriaz (Claude Haiku)…");
+    try {
+      const res = await fetch(`/api/smc${force ? "?force=1" : ""}`, {
+        cache: "no-store",
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setMsg(json.error || "Scan SMC échoué");
+        return;
+      }
+      setSmc(json);
+      const best = json.best;
+      setMsg(
+        best
+          ? `SMC ${best.coin} · ${best.status} · conf ${best.confidence}${json.aiApproved ? " · Claude ✓" : " · Claude ✗"}`
+          : "Aucun setup SMC sur la watchlist",
+      );
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Scan SMC impossible");
+    } finally {
+      setSmcBusy(false);
+    }
   }
 
   async function callTelegram(action: "link" | "test" | "digest") {
@@ -554,10 +596,10 @@ export function LabPanel() {
             <div>
               <h3 className="font-medium">Portefeuilles paper</h3>
               <p className="mt-1 text-sm text-muted-foreground">
-                <strong className="text-foreground">Défaut</strong> toujours
-                présent. Ajoute un perso (scalp 1h, risqué, swing…) — chaque
-                portefeuille a son capital, TF, R:R, risque. Visible à
-                l’Accueil.
+                <strong className="text-foreground">Défaut</strong> (Alignement)
+                et <strong className="text-foreground">Boriaz</strong> (SMC
+                top-down, risque 2 %, TP1 50 %+BE) toujours présents. Ajoute un
+                perso (scalp, risqué, swing…).
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -584,7 +626,7 @@ export function LabPanel() {
                     <Input
                       className="h-8 max-w-[12rem]"
                       value={pf.name}
-                      disabled={pf.isDefault}
+                      disabled={pf.isDefault || pf.id === "boriaz"}
                       onChange={(e) =>
                         updatePortfolio(pf.id, { name: e.target.value })
                       }
@@ -592,11 +634,16 @@ export function LabPanel() {
                     {pf.isDefault ? (
                       <Badge variant="outline">Obligatoire</Badge>
                     ) : null}
+                    {pf.id === "boriaz" || pf.strategy === "smc" ? (
+                      <Badge className="border-primary/40 bg-primary/15 text-primary">
+                        SMC · risque {pf.riskPct ?? 2}%
+                      </Badge>
+                    ) : null}
                     <label className="flex items-center gap-1.5 text-xs">
                       <input
                         type="checkbox"
                         checked={pf.enabled}
-                        disabled={pf.isDefault}
+                        disabled={pf.isDefault || pf.id === "boriaz"}
                         onChange={(e) =>
                           updatePortfolio(pf.id, { enabled: e.target.checked })
                         }
@@ -616,7 +663,7 @@ export function LabPanel() {
                       Paper auto
                     </label>
                   </div>
-                  {!pf.isDefault ? (
+                  {!pf.isDefault && pf.id !== "boriaz" ? (
                     <Button
                       size="xs"
                       variant="ghost"
@@ -626,6 +673,12 @@ export function LabPanel() {
                     </Button>
                   ) : null}
                 </div>
+                {pf.strategy === "smc" ? (
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Bot SMC : D1→H4→H1→M15 · checklist 6/6 · sizing exact 2 % ·
+                    TP1 1R (50 %+BE) · TP2 2R · Claude Haiku gate.
+                  </p>
+                ) : null}
                 <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
                   <div>
                     <Label>Capital (€)</Label>
@@ -793,6 +846,80 @@ export function LabPanel() {
         </section>
       ) : null}
 
+      <section className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="font-medium">Boriaz · Smart Money Concepts</h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Analyse top-down D1→H4→H1→M15. Entrée uniquement si checklist 6/6
+              (alignement, liquidity sweep, CHoCH+BOS, FVG, ÔTE). Risque exact
+              2 %. TP1 1R (50 %+ break-even) puis TP2 2R. Gate{" "}
+              <code className="text-xs">claude-haiku-4-5-20251001</code>.
+            </p>
+          </div>
+          <Button
+            size="sm"
+            disabled={smcBusy}
+            onClick={() => void runSmcScan(true)}
+          >
+            {smcBusy ? "Scan…" : "Scanner SMC"}
+          </Button>
+        </div>
+        {smc ? (
+          <div className="mt-3 space-y-3">
+            <div className="flex flex-wrap gap-2 text-xs">
+              <Badge variant="outline">modèle {smc.model}</Badge>
+              <Badge variant="outline">
+                Claude {smc.aiApproved ? "✓" : "✗"}
+              </Badge>
+              {smc.best ? (
+                <>
+                  <Badge variant="outline">
+                    {smc.best.coin} · {smc.best.side?.toUpperCase() ?? "—"}
+                  </Badge>
+                  <Badge variant="outline">conf {smc.best.confidence}</Badge>
+                  <Badge
+                    variant="outline"
+                    className={
+                      smc.best.status.includes("PRÊT")
+                        ? "border-long/40 text-long"
+                        : smc.best.status.includes("ATTENTE")
+                          ? "border-primary/40 text-primary"
+                          : "border-short/40 text-short"
+                    }
+                  >
+                    {smc.best.status}
+                  </Badge>
+                </>
+              ) : null}
+            </div>
+            {smc.aiNote ? (
+              <p className="text-xs text-muted-foreground">{smc.aiNote}</p>
+            ) : null}
+            {smc.setups && smc.setups.length > 0 ? (
+              <ul className="flex flex-wrap gap-2 text-[11px] text-muted-foreground">
+                {smc.setups.slice(0, 8).map((s) => (
+                  <li
+                    key={s.coin}
+                    className="rounded-md border border-border/60 px-2 py-1"
+                  >
+                    {s.coin} · {s.confidence} · {s.status.slice(0, 18)}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            <pre className="max-h-80 overflow-auto rounded-xl border border-border/60 bg-background/80 p-3 text-[11px] leading-relaxed whitespace-pre-wrap">
+              {smc.aiReport || smc.best?.report || "Lance un scan pour voir le rapport SMC."}
+            </pre>
+          </div>
+        ) : (
+          <p className="mt-3 text-sm text-muted-foreground">
+            Clique « Scanner SMC » pour analyser la watchlist avec le bot
+            Boriaz (Claude Haiku).
+          </p>
+        )}
+      </section>
+
       <section className="rounded-2xl border border-border/80 bg-card/60 p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
@@ -958,8 +1085,11 @@ export function LabPanel() {
                 </div>
                 <div className="numeric text-xs text-right">
                   <div>
-                    E {formatPx(t.entry)} · TP {formatPx(t.tp)} · SL{" "}
+                    E {formatPx(t.entry)} · TP {formatPx(t.tp)}
+                    {t.tp1 ? ` · TP1 ${formatPx(t.tp1)}` : ""} · SL{" "}
                     {formatPx(t.sl)}
+                    {t.tp1Hit ? " · BE" : ""}
+                    {t.strategy === "smc" ? " · SMC" : ""}
                   </div>
                   <div>
                     Marge {t.marginEur?.toFixed?.(2) ?? "—"} € · frais{" "}
