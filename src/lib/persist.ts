@@ -4,6 +4,7 @@ import {
   ensurePortfolios,
   makeCustomPortfolio,
   computePaperAccount,
+  estimateRoundTripFeesEur,
   type EntryMode,
   type JournalEntry,
   type PaperAccount,
@@ -210,9 +211,11 @@ function normalizeTrade(raw: Partial<PaperTrade> & PaperTrade): PaperTrade {
   const leverage = raw.leverage || 1;
   const bankroll = 1000;
   const marginEur = raw.marginEur ?? (bankroll * sizePct) / 100;
+  const notionalEur = raw.notionalEur ?? marginEur * leverage;
   return {
     id: raw.id,
     closeNotified: raw.closeNotified ?? false,
+    feesEur: raw.feesEur ?? estimateRoundTripFeesEur(notionalEur),
     openedAt: raw.openedAt,
     filledAt: raw.filledAt ?? (raw.status === "pending" ? null : raw.openedAt),
     coin: raw.coin,
@@ -344,9 +347,11 @@ export async function openPaperTrade(input: {
     );
   }
   const marketNow = input.entryMode === "market_now";
+  const notionalEur = marginEur * input.leverage;
   const trade: PaperTrade = {
     id: `pt-${input.openedAt}-${pfId}-${input.coin}-${input.side}`,
     openedAt: input.openedAt,
+    feesEur: estimateRoundTripFeesEur(notionalEur),
     filledAt: marketNow ? input.openedAt : null,
     coin: input.coin,
     side: input.side,
@@ -356,7 +361,7 @@ export async function openPaperTrade(input: {
     leverage: input.leverage,
     sizePct,
     marginEur,
-    notionalEur: marginEur * input.leverage,
+    notionalEur,
     entryMode: input.entryMode,
     status: marketNow ? "open" : "pending",
     closedAt: null,
@@ -372,6 +377,47 @@ export async function openPaperTrade(input: {
   trades.unshift(trade);
   await savePaperTrades(trades);
   return trade;
+}
+
+/** Clôture manuelle (ou annulation d'une limite) au prix `markPx`. PnL net des frais. */
+export async function closePaperTrade(
+  id: string,
+  markPx: number,
+  reason = "Clôture manuelle",
+): Promise<PaperTrade | null> {
+  const trades = await loadPaperTrades();
+  const t = trades.find((x) => x.id === id);
+  if (!t) return null;
+  if (t.status !== "open" && t.status !== "pending") return t;
+  const now = Date.now();
+  if (t.status === "pending") {
+    t.status = "expired";
+    t.closedAt = now;
+    t.exitPx = null;
+    t.pnlPct = 0;
+    t.pnlEur = 0;
+    t.closeNotified = false;
+    t.note = `${reason} — limite annulée avant remplissage`;
+  } else {
+    const px = markPx > 0 ? markPx : (t.markPx ?? t.entry);
+    const movePct =
+      t.side === "long"
+        ? ((px - t.entry) / t.entry) * 100
+        : ((t.entry - px) / t.entry) * 100;
+    const pnlPct = movePct * t.leverage;
+    const grossEur = t.marginEur * (pnlPct / 100);
+    const netEur = grossEur - (t.feesEur ?? 0);
+    t.status = "closed_manual";
+    t.closedAt = now;
+    t.exitPx = px;
+    t.markPx = px;
+    t.pnlPct = pnlPct;
+    t.pnlEur = netEur;
+    t.closeNotified = false;
+    t.note = `${reason} @ ${px} — net ${netEur.toFixed(2)} € (frais ${(t.feesEur ?? 0).toFixed(2)} €)`;
+  }
+  await savePaperTrades(trades);
+  return t;
 }
 
 export async function loadMacroAlertKeys(): Promise<Set<string>> {

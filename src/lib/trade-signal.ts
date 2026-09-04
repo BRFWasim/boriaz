@@ -394,7 +394,8 @@ async function refreshPaperTrades(
         ? ((px - t.entry) / t.entry) * 100
         : ((t.entry - px) / t.entry) * 100;
     const pnlPct = movePct * t.leverage;
-    const pnlEur = t.marginEur * (pnlPct / 100);
+    // PnL NET des frais estimés (aller-retour) → équité réaliste.
+    const pnlEur = t.marginEur * (pnlPct / 100) - (t.feesEur ?? 0);
     t.pnlPct = pnlPct;
     t.pnlEur = pnlEur;
 

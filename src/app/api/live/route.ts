@@ -79,7 +79,7 @@ export async function GET() {
           ? ((px - t.entry) / t.entry) * 100
           : ((t.entry - px) / t.entry) * 100;
       t.pnlPct = movePct * t.leverage;
-      t.pnlEur = t.marginEur * (t.pnlPct / 100);
+      t.pnlEur = t.marginEur * (t.pnlPct / 100) - (t.feesEur ?? 0);
     }
 
     const account = aggregatePaperAccount(

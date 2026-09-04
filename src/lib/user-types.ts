@@ -174,10 +174,21 @@ export interface JournalEntry {
 
 export type EntryMode = "market_now" | "limit_wait";
 
+/** Frais estimés type Hyperliquid : ~0.045 % taker par côté. */
+export const FEE_RATE = 0.00045;
+
+/** Frais aller-retour estimés (ouverture + clôture) sur le notionnel. */
+export function estimateRoundTripFeesEur(notionalEur: number): number {
+  if (!Number.isFinite(notionalEur) || notionalEur <= 0) return 0;
+  return notionalEur * FEE_RATE * 2;
+}
+
 export interface PaperTrade {
   id: string;
   /** true une fois la notif Telegram de clôture (TP/SL) envoyée. */
   closeNotified?: boolean;
+  /** Frais aller-retour estimés en € (ouverture + clôture). */
+  feesEur?: number;
   openedAt: number;
   /** Moment où le prix a touché l’entrée (limit) ou = openedAt (market). */
   filledAt: number | null;
