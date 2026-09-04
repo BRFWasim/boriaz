@@ -113,5 +113,26 @@ export async function GET(request: Request) {
     results.walletTrackError = e instanceof Error ? e.message : "wallets";
   }
 
+  // Relecture IA de chaque trade ouvert (fermer / basculer / attendre / laisser),
+  // pour le bot par défaut ET chaque utilisateur ayant des positions.
+  try {
+    const { manageOpenTrades } = await import("@/lib/manage-trades");
+    const { listUserIds } = await import("@/lib/accounts");
+    const { setPersistUser } = await import("@/lib/persist");
+    const manage: Record<string, unknown> = {};
+    setPersistUser("default");
+    manage.default = await manageOpenTrades({ notify: true });
+    const ids = await listUserIds(40);
+    for (const id of ids) {
+      setPersistUser(id);
+      const r = await manageOpenTrades({ notify: true });
+      if (r.reviewed > 0) manage[id] = r;
+    }
+    setPersistUser("default");
+    results.manage = manage;
+  } catch (e) {
+    results.manageError = e instanceof Error ? e.message : "manage";
+  }
+
   return Response.json({ ok: true, ...results });
 }

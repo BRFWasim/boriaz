@@ -60,6 +60,14 @@ export async function getUser(id: string): Promise<SimUser | null> {
   return users[id] ?? memUsers.get(id) ?? null;
 }
 
+/** IDs des comptes connus (pour la passe de gestion cron multi-utilisateurs). */
+export async function listUserIds(limit = 50): Promise<string[]> {
+  const users = await readUsers();
+  const ids = Object.keys(users);
+  for (const id of memUsers.keys()) if (!ids.includes(id)) ids.push(id);
+  return ids.slice(0, limit);
+}
+
 export async function createGuest(): Promise<SimUser> {
   const id = `u_${randomBytes(8).toString("hex")}`;
   const user: SimUser = {
