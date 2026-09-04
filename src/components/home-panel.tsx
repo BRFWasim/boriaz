@@ -53,6 +53,23 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
     });
   }
 
+  async function closeTrade(id: string) {
+    try {
+      const res = await fetch("/api/paper", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "close", id }),
+      });
+      const json = await res.json();
+      if (res.ok) {
+        if (Array.isArray(json.trades)) mergePaper(json.trades);
+        if (json.account) setAccount(json.account);
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
   useEffect(() => {
     let alive = true;
     async function loadFull() {
@@ -361,7 +378,19 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
                 return risk > 0 ? (reward / risk).toFixed(1) : "∞";
               })()}
             </span>
+            <span className="text-muted-foreground">
+              frais {(heroTrade.feesEur ?? 0).toFixed(2)} €
+            </span>
           </div>
+          {heroTrade.status === "open" || heroTrade.status === "pending" ? (
+            <button
+              type="button"
+              onClick={() => void closeTrade(heroTrade.id)}
+              className="mt-3 rounded-lg border border-short/40 px-3 py-1.5 text-xs text-short transition-colors hover:bg-short/10"
+            >
+              Fermer maintenant (marché)
+            </button>
+          ) : null}
         </section>
       ) : data.best && data.best.action !== "wait" && data.best.confidence >= 55 ? (
         <section
@@ -707,7 +736,11 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
                     ) : (
                       <div className="space-y-2">
                         {trades.map((t) => (
-                          <PortfolioTradeRow key={t.id} trade={t} />
+                          <PortfolioTradeRow
+                            key={t.id}
+                            trade={t}
+                            onClose={closeTrade}
+                          />
                         ))}
                       </div>
                     )}
@@ -740,8 +773,16 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
   );
 }
 
-function PortfolioTradeRow({ trade: t }: { trade: PaperTrade }) {
+function PortfolioTradeRow({
+  trade: t,
+  onClose,
+}: {
+  trade: PaperTrade;
+  onClose?: (id: string) => void;
+}) {
   const [openWhy, setOpenWhy] = useState(false);
+  const [closing, setClosing] = useState(false);
+  const canClose = t.status === "open" || t.status === "pending";
   const tpEur = (() => {
     const move =
       t.side === "long"
@@ -795,14 +836,27 @@ function PortfolioTradeRow({ trade: t }: { trade: PaperTrade }) {
               : `${(t.pnlEur ?? 0) >= 0 ? "+" : ""}${(t.pnlEur ?? 0).toFixed(2)} €`}
           </p>
           <p className="text-muted-foreground">
-            {t.leverage}× · marge {t.marginEur.toFixed(0)} € · R:R{" "}
-            {rr.toFixed(1)}
+            {t.leverage}× · marge {t.marginEur.toFixed(0)} € · frais{" "}
+            {(t.feesEur ?? 0).toFixed(2)} € · R:R {rr.toFixed(1)}
           </p>
           <p>
             <span className="text-long">Si TP +{tpEur.toFixed(2)} €</span>
             {" · "}
             <span className="text-short">Si SL {slEur.toFixed(2)} €</span>
           </p>
+          {canClose && onClose ? (
+            <button
+              type="button"
+              disabled={closing}
+              onClick={() => {
+                setClosing(true);
+                onClose(t.id);
+              }}
+              className="mt-1 rounded-md border border-short/40 px-2 py-0.5 text-[11px] text-short transition-colors hover:bg-short/10 disabled:opacity-50"
+            >
+              {closing ? "Clôture…" : "Fermer maintenant"}
+            </button>
+          ) : null}
         </div>
       </div>
       {(t.justification?.summary || t.note) && (

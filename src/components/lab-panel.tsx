@@ -262,6 +262,59 @@ export function LabPanel() {
     }
   }
 
+  async function runManage() {
+    setTgBusy("manage");
+    setMsg("Relecture IA des trades ouverts…");
+    try {
+      const res = await fetch("/api/manage", { method: "POST" });
+      const json = await res.json();
+      if (!res.ok) {
+        setMsg(json.error || "Gestion échouée");
+      } else {
+        const acts = (json.decisions ?? [])
+          .map(
+            (d: { coin: string; side: string; action: string }) =>
+              `${d.coin} ${d.side}→${d.action}`,
+          )
+          .join(", ");
+        setMsg(
+          `Relecture ${json.reviewed ?? 0} trade(s)${json.aiUsed ? " (IA)" : " (règles)"}${acts ? " · " + acts : " · rien à faire"}`,
+        );
+        if (json.trades) {
+          setPaper(json.trades);
+          writeLocalPaper(json.trades);
+        }
+      }
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Gestion impossible");
+    } finally {
+      setTgBusy(null);
+    }
+  }
+
+  async function closeLabTrade(id: string) {
+    setMsg("Clôture…");
+    try {
+      const res = await fetch("/api/paper", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "close", id }),
+      });
+      const json = await res.json();
+      if (res.ok) {
+        if (json.trades) {
+          setPaper(json.trades);
+          writeLocalPaper(json.trades);
+        }
+        setMsg("Trade clôturé ✓");
+      } else {
+        setMsg(json.error || "Clôture échouée");
+      }
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Clôture impossible");
+    }
+  }
+
   async function runBacktest(days: number) {
     setMsg("Backtest en cours…");
     const res = await fetch(`/api/backtest?days=${days}`, { cache: "no-store" });
@@ -857,12 +910,23 @@ export function LabPanel() {
       </section>
 
       <section className="rounded-2xl border border-border/80 bg-card/60 p-4">
-        <h3 className="font-medium">Positions paper (live)</h3>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="font-medium">Positions paper (live)</h3>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={tgBusy !== null}
+            onClick={() => void runManage()}
+          >
+            {tgBusy === "manage" ? "Relecture…" : "Forcer la relecture IA"}
+          </Button>
+        </div>
         <p className="mt-1 text-sm text-muted-foreground">
           <strong className="font-medium text-foreground">pending</strong> =
           limite pas encore touchée. <strong className="font-medium text-foreground">open</strong> =
-          position simulée ouverte, PnL € mis à jour au prix live. TP/SL
-          ferment automatiquement.
+          position simulée ouverte, PnL € (net de frais) mis à jour au prix live.
+          TP/SL ferment automatiquement. « Relecture IA » = les 2 IA décident
+          fermer / basculer / attendre / laisser (auto toutes les 15 min).
         </p>
         {paper.length === 0 ? (
           <p className="mt-2 text-sm text-muted-foreground">
@@ -898,7 +962,8 @@ export function LabPanel() {
                     {formatPx(t.sl)}
                   </div>
                   <div>
-                    Marge {t.marginEur?.toFixed?.(2) ?? "—"} € ·{" "}
+                    Marge {t.marginEur?.toFixed?.(2) ?? "—"} € · frais{" "}
+                    {(t.feesEur ?? 0).toFixed(2)} € ·{" "}
                     {t.pnlEur != null ? (
                       <span className={signedClass(t.pnlEur)}>
                         {t.pnlEur >= 0 ? "+" : ""}
@@ -913,6 +978,15 @@ export function LabPanel() {
                       </span>
                     ) : null}
                   </div>
+                  {t.status === "open" || t.status === "pending" ? (
+                    <button
+                      type="button"
+                      onClick={() => void closeLabTrade(t.id)}
+                      className="mt-1 rounded-md border border-short/40 px-2 py-0.5 text-[11px] text-short transition-colors hover:bg-short/10"
+                    >
+                      Fermer
+                    </button>
+                  ) : null}
                 </div>
               </li>
             ))}
