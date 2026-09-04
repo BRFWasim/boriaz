@@ -1,7 +1,7 @@
 import { getBtcAnalysis } from "@/lib/btc-analysis";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 90;
+export const maxDuration = 120;
 
 export async function GET(request: Request) {
   try {

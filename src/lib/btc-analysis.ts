@@ -56,26 +56,65 @@ export async function getBtcAnalysis(options?: {
     }
 
     const watchCoins = WATCHLIST.map((w) => w.coin);
+    const frameSpecs: { interval: "1h" | "4h" | "1d" | "1w"; horizon: string }[] = [
+      { interval: "1h", horizon: "court (1h)" },
+      { interval: "4h", horizon: "moyen (4h)" },
+      { interval: "1d", horizon: "long (1d)" },
+      { interval: "1w", horizon: "très long (1w)" },
+    ];
 
-    const frameJobs = watchCoins.map((coin) =>
-      analyzeCoinFrames(coin, [
-        { interval: "1h", horizon: `court ${coin} (1h)` },
-        { interval: "4h", horizon: `moyen ${coin} (4h)` },
-        { interval: "1d", horizon: `long ${coin} (1d)` },
-        { interval: "1w", horizon: `très long ${coin} (1w)` },
-      ]),
+    // 1) BTC d’abord (critique pour l’UI) — isolé du rate-limit watchlist
+    const btcFramesFirst = await analyzeCoinFrames(
+      "BTC",
+      frameSpecs.map((f) => ({
+        ...f,
+        horizon: `BTC ${f.horizon}`,
+      })),
     );
+    if (!btcFramesFirst.length) {
+      // Un seul retry BTC après pause (souvent rate-limit HL)
+      await new Promise((r) => setTimeout(r, 800));
+      const retry = await analyzeCoinFrames(
+        "BTC",
+        frameSpecs.map((f) => ({
+          ...f,
+          horizon: `BTC ${f.horizon}`,
+        })),
+      );
+      if (!retry.length) {
+        throw new Error("Impossible de charger les bougies BTC Hyperliquid.");
+      }
+      btcFramesFirst.push(...retry);
+    }
 
-    const [allFrames, watchBuyZones, nansen] = await Promise.all([
-      Promise.all(frameJobs),
+    // 2) Autres coins par lots de 3 (pas 12×4 en parallèle)
+    const otherCoins = watchCoins.filter((c) => c !== "BTC");
+    const byCoin = new Map<string, TimeframeFrame[]>();
+    byCoin.set("BTC", btcFramesFirst);
+
+    for (let i = 0; i < otherCoins.length; i += 3) {
+      const batch = otherCoins.slice(i, i + 3);
+      const batchFrames = await Promise.all(
+        batch.map((coin) =>
+          analyzeCoinFrames(
+            coin,
+            frameSpecs.map((f) => ({
+              ...f,
+              horizon: `${coin} ${f.horizon}`,
+            })),
+          ),
+        ),
+      );
+      batch.forEach((coin, idx) => {
+        byCoin.set(coin, batchFrames[idx] ?? []);
+      });
+    }
+
+    // Zones d’achat : réutilise le cache bougies déjà rempli
+    const [watchBuyZones, nansen] = await Promise.all([
       analyzeWatchlistBuyZones(),
       fetchNansenSnapshot(),
     ]);
-
-    const byCoin = new Map<string, TimeframeFrame[]>();
-    watchCoins.forEach((coin, i) => {
-      byCoin.set(coin, allFrames[i] ?? []);
-    });
 
     const btcFrames = byCoin.get("BTC") ?? [];
     const solFrames = byCoin.get("SOL") ?? [];

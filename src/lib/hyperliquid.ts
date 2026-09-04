@@ -204,18 +204,75 @@ export async function fetchCandleSnapshot(params: {
 }): Promise<
   { t: number; o: string; h: string; l: string; c: string; v: string }[]
 > {
-  const data = await postInfo<
-    { t: number; o: string; h: string; l: string; c: string; v: string }[]
-  >({
-    type: "candleSnapshot",
-    req: {
-      coin: params.coin,
-      interval: params.interval,
-      startTime: params.startTime,
-      endTime: params.endTime,
-    },
+  return candleQueue(() => fetchCandleSnapshotOnce(params));
+}
+
+async function fetchCandleSnapshotOnce(params: {
+  coin: string;
+  interval: string;
+  startTime: number;
+  endTime: number;
+}): Promise<
+  { t: number; o: string; h: string; l: string; c: string; v: string }[]
+> {
+  const maxAttempts = 4;
+  let lastErr: unknown = null;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const data = await postInfo<
+        { t: number; o: string; h: string; l: string; c: string; v: string }[]
+      >({
+        type: "candleSnapshot",
+        req: {
+          coin: params.coin,
+          interval: params.interval,
+          startTime: params.startTime,
+          endTime: params.endTime,
+        },
+      });
+      if (Array.isArray(data) && data.length > 0) return data;
+      // Réponse vide = souvent rate-limit / fenêtre invalide → retry
+      lastErr = new HyperliquidError(
+        `candleSnapshot vide (${params.coin} ${params.interval})`,
+      );
+    } catch (e) {
+      lastErr = e;
+      const status = e instanceof HyperliquidError ? e.status : undefined;
+      // 429 / 5xx → backoff ; autres erreurs aussi retried une fois
+      if (status && status >= 400 && status < 500 && status !== 429) {
+        break;
+      }
+    }
+    const delay = 250 * Math.pow(2, attempt) + Math.floor(Math.random() * 200);
+    await new Promise((r) => setTimeout(r, delay));
+  }
+  if (lastErr instanceof Error) {
+    // Dernier recours : tableau vide (l’appelant décide)
+    return [];
+  }
+  return [];
+}
+
+/** File d’attente globale — HL rate-limit dès ~20–40 req parallèles. */
+const CANDLE_CONCURRENCY = 4;
+let candleActive = 0;
+const candleWaiters: Array<() => void> = [];
+
+function candleQueue<T>(fn: () => Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const run = () => {
+      candleActive += 1;
+      fn()
+        .then(resolve, reject)
+        .finally(() => {
+          candleActive -= 1;
+          const next = candleWaiters.shift();
+          if (next) next();
+        });
+    };
+    if (candleActive < CANDLE_CONCURRENCY) run();
+    else candleWaiters.push(run);
   });
-  return Array.isArray(data) ? data : [];
 }
 
 export async function mapPool<T, R>(

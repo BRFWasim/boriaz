@@ -22,13 +22,17 @@ export function BtcAnalysisPanel() {
   const [tgMsg, setTgMsg] = useState<string | null>(null);
   const [tgBusy, setTgBusy] = useState(false);
 
-  const load = useCallback(async (opts?: { silent?: boolean; ai?: boolean }) => {
+  const load = useCallback(async (opts?: { silent?: boolean; ai?: boolean; force?: boolean }) => {
     const silent = opts?.silent === true;
     const ai = opts?.ai === true;
+    const force = opts?.force === true;
     if (!silent) setLoading(true);
     if (ai) setAiLoading(true);
     try {
-      const qs = ai ? "?ai=1&force=1" : "";
+      const params = new URLSearchParams();
+      if (ai) params.set("ai", "1");
+      if (force) params.set("force", "1");
+      const qs = params.toString() ? `?${params}` : "";
       const res = await fetch(`/api/btc-analysis${qs}`, { cache: "no-store" });
       const json = (await res.json()) as BtcAnalysisPayload & { error?: string };
       if (!res.ok) throw new Error(json.error || "Analyse impossible");
@@ -43,8 +47,11 @@ export function BtcAnalysisPanel() {
   }, []);
 
   useEffect(() => {
-    // Premier chargement avec IA batch (cache 45 min ensuite)
-    void load({ ai: true });
+    // 1) Tech rapide (sans force) → 2) IA en second (réutilise cache bougies)
+    void (async () => {
+      await load();
+      await load({ silent: true, ai: true });
+    })();
     const id = window.setInterval(() => void load({ silent: true }), 90_000);
     return () => window.clearInterval(id);
   }, [load]);
@@ -125,7 +132,7 @@ export function BtcAnalysisPanel() {
       <div className="rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-6">
         <p className="font-medium">Analyse marché indisponible</p>
         <p className="mt-1 text-sm text-muted-foreground">{error}</p>
-        <Button className="mt-4" onClick={() => void load({ ai: true })}>
+        <Button className="mt-4" onClick={() => void load({ force: true })}>
           Réessayer
         </Button>
       </div>
@@ -141,11 +148,11 @@ export function BtcAnalysisPanel() {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-lg font-semibold">Analyses par crypto</h2>
         <div className="flex flex-wrap gap-2">
-          <Button size="sm" variant="outline" onClick={() => void load()} disabled={loading}>
+          <Button size="sm" variant="outline" onClick={() => void load({ force: true })} disabled={loading}>
             <RefreshCwIcon className={loading ? "animate-spin" : ""} />
             Tech
           </Button>
-          <Button size="sm" onClick={() => void load({ ai: true })} disabled={aiLoading}>
+          <Button size="sm" onClick={() => void load({ ai: true, force: true })} disabled={aiLoading}>
             {aiLoading ? "IA…" : "Rafraîchir IA (cache 45 min)"}
           </Button>
           {data.watchAi?.cached ? <Badge variant="outline">IA en cache</Badge> : null}

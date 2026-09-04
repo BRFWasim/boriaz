@@ -57,10 +57,23 @@ const LOOKBACK: Record<CandleInterval, number> = {
   "1w": 120,
 };
 
+/** Cache mémoire court — évite de re-frapper HL à chaque onglet / force AI. */
+const CANDLE_CACHE_TTL_MS = 90_000;
+const candleCache = new Map<
+  string,
+  { at: number; candles: Candle[] }
+>();
+
 export async function loadCandles(
   coin: string,
   interval: CandleInterval,
 ): Promise<Candle[]> {
+  const key = `${coin}:${interval}`;
+  const hit = candleCache.get(key);
+  if (hit && Date.now() - hit.at < CANDLE_CACHE_TTL_MS && hit.candles.length >= 20) {
+    return hit.candles;
+  }
+
   const endTime = Date.now();
   const startTime = endTime - LOOKBACK[interval] * INTERVAL_MS[interval];
   const raw = await fetchCandleSnapshot({
@@ -69,7 +82,7 @@ export async function loadCandles(
     startTime,
     endTime,
   });
-  return raw.map((c) => ({
+  const candles = raw.map((c) => ({
     t: c.t,
     o: parseNum(c.o),
     h: parseNum(c.h),
@@ -77,6 +90,10 @@ export async function loadCandles(
     c: parseNum(c.c),
     v: parseNum(c.v),
   }));
+  if (candles.length >= 20) {
+    candleCache.set(key, { at: Date.now(), candles });
+  }
+  return candles;
 }
 
 export function buildIndicators(candles: Candle[]): IndicatorSnapshot {
@@ -200,37 +217,47 @@ export async function analyzeCoinFrames(
   coin: string,
   frames: { interval: CandleInterval; horizon: string }[],
 ): Promise<TimeframeFrame[]> {
-  const settled = await Promise.all(
-    frames.map(async (frame) => {
-      try {
-        const candles = await loadCandles(coin, frame.interval);
-        if (candles.length < 20) return null;
-        return analyzeTimeframe(coin, frame.interval, candles, frame.horizon);
-      } catch {
-        return null;
-      }
-    }),
-  );
-  return settled.filter((f): f is TimeframeFrame => Boolean(f));
+  // Séquentiel par coin (la file HL globale limite déjà le parallélisme).
+  const out: TimeframeFrame[] = [];
+  for (const frame of frames) {
+    try {
+      const candles = await loadCandles(coin, frame.interval);
+      if (candles.length < 20) continue;
+      out.push(
+        analyzeTimeframe(coin, frame.interval, candles, frame.horizon),
+      );
+    } catch {
+      // skip TF
+    }
+  }
+  return out;
 }
 
 /** Watchlist : 1 TF 4h → zone d’achat (pas d’IA). */
 export async function analyzeWatchlistBuyZones(): Promise<BuyZone[]> {
   const zones: BuyZone[] = [];
-  for (const { coin } of WATCHLIST) {
-    try {
-      const candles = await loadCandles(coin, "4h");
-      if (candles.length < 30) continue;
-      const frame = analyzeTimeframe(
-        coin,
-        "4h",
-        candles,
-        "moyen terme (4h)",
-      );
-      zones.push(frame.buyZone);
-    } catch {
-      // skip coin
-    }
+  // Par lots pour ne pas saturer HL
+  const coins = WATCHLIST.map((w) => w.coin);
+  for (let i = 0; i < coins.length; i += 3) {
+    const batch = coins.slice(i, i + 3);
+    const part = await Promise.all(
+      batch.map(async (coin) => {
+        try {
+          const candles = await loadCandles(coin, "4h");
+          if (candles.length < 30) return null;
+          const frame = analyzeTimeframe(
+            coin,
+            "4h",
+            candles,
+            "moyen terme (4h)",
+          );
+          return frame.buyZone;
+        } catch {
+          return null;
+        }
+      }),
+    );
+    for (const z of part) if (z) zones.push(z);
   }
   return zones;
 }

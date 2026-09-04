@@ -146,41 +146,46 @@ export async function scanSmcWatchlist(input: {
 
   const setups: SmcSetup[] = [];
 
-  for (const coin of coins) {
-    try {
-      const [d1, h4, h1, m15, m30] = await Promise.all([
-        loadCandles(coin, "1d"),
-        loadCandles(coin, "4h"),
-        loadCandles(coin, "1h"),
-        loadCandles(coin, "15m"),
-        loadCandles(coin, "30m"),
-      ]);
-      // Exécution : privilégie M15, fallback M30 si trop court
-      const exec =
-        m15.length >= 40 ? m15 : m30.length >= 30 ? m30 : m15;
-      if (d1.length < 30 || h4.length < 30 || h1.length < 30 || exec.length < 25) {
-        continue;
-      }
-      const price =
-        input.prices?.[coin] ??
-        exec.at(-1)?.c ??
-        h1.at(-1)?.c ??
-        0;
-      if (!(price > 0)) continue;
-      const setup = analyzeSmcSetup({
-        coin,
-        price,
-        candlesD1: d1,
-        candlesH4: h4,
-        candlesH1: h1,
-        candlesExec: exec,
-        walletEur: input.walletEur,
-        maxLeverage: input.maxLeverage ?? 3,
-      });
-      setups.push(setup);
-    } catch {
-      // skip coin
-    }
+  for (let i = 0; i < coins.length; i += 2) {
+    const batch = coins.slice(i, i + 2);
+    const part = await Promise.all(
+      batch.map(async (coin) => {
+        try {
+          const [d1, h4, h1, m15, m30] = await Promise.all([
+            loadCandles(coin, "1d"),
+            loadCandles(coin, "4h"),
+            loadCandles(coin, "1h"),
+            loadCandles(coin, "15m"),
+            loadCandles(coin, "30m"),
+          ]);
+          // Exécution : privilégie M15, fallback M30 si trop court
+          const exec =
+            m15.length >= 40 ? m15 : m30.length >= 30 ? m30 : m15;
+          if (d1.length < 30 || h4.length < 30 || h1.length < 30 || exec.length < 25) {
+            return null;
+          }
+          const price =
+            input.prices?.[coin] ??
+            exec.at(-1)?.c ??
+            h1.at(-1)?.c ??
+            0;
+          if (!(price > 0)) return null;
+          return analyzeSmcSetup({
+            coin,
+            price,
+            candlesD1: d1,
+            candlesH4: h4,
+            candlesH1: h1,
+            candlesExec: exec,
+            walletEur: input.walletEur,
+            maxLeverage: input.maxLeverage ?? 3,
+          });
+        } catch {
+          return null;
+        }
+      }),
+    );
+    for (const s of part) if (s) setups.push(s);
   }
 
   const actionable = setups
