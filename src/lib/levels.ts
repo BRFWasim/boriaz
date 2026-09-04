@@ -157,8 +157,19 @@ export function computeTradeLevels(
     }
     slDist = Math.min(Math.max(slDist, atr * 0.8), maxStop);
     const sl = entry - slDist;
-    // TP = au moins 2 ATR et au moins 1.9× le risque → R:R garanti ≥ 1.9.
-    const reward = Math.max(atr * 2.0, slDist * 1.9);
+    // TP PRÉCIS : on vise la résistance proche (au lieu de « viser trop loin »).
+    // Cible = plus proche résistance / haut de Bollinger au-dessus, bornée
+    // entre 1.3× et 2.2× le risque pour garder un R:R sain.
+    const rewMin = slDist * 1.3;
+    const rewMax = slDist * 2.2;
+    const resAbove = [ind.resistance, ind.bbUpper, ind.ema200]
+      .filter((v): v is number => v !== null && Number.isFinite(v) && v > entry)
+      .map((v) => v - entry - atr * 0.1);
+    const nearRes = resAbove.length ? Math.min(...resAbove) : null;
+    const reward =
+      nearRes !== null
+        ? Math.min(rewMax, Math.max(rewMin, nearRes))
+        : Math.max(atr * 2.0, rewMin);
     const tp = entry + reward;
     const risk = slDist;
     return {
@@ -197,7 +208,18 @@ export function computeTradeLevels(
   }
   slDist = Math.min(Math.max(slDist, atr * 0.8), maxStop);
   const sl = entry + slDist;
-  const reward = Math.max(atr * 2.0, slDist * 1.9);
+  // TP PRÉCIS (short) : vise le support proche (bas de Bollinger / support),
+  // borné entre 1.3× et 2.2× le risque.
+  const rewMin = slDist * 1.3;
+  const rewMax = slDist * 2.2;
+  const supBelow = [ind.support, ind.bbLower, ind.ema200]
+    .filter((v): v is number => v !== null && Number.isFinite(v) && v < entry)
+    .map((v) => entry - v - atr * 0.1);
+  const nearSup = supBelow.length ? Math.min(...supBelow) : null;
+  const reward =
+    nearSup !== null
+      ? Math.min(rewMax, Math.max(rewMin, nearSup))
+      : Math.max(atr * 2.0, rewMin);
   const tp = entry - reward;
   const risk = slDist;
   return {
