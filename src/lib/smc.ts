@@ -88,8 +88,8 @@ export interface SmcSetup {
   price: number;
 }
 
-const EQUAL_TOL = 0.0015; // 0.15 % pour equal highs/lows
-const SWEEP_WICK_RATIO = 0.35;
+const EQUAL_TOL = 0.002; // 0.20 % equal highs/lows
+const SWEEP_WICK_RATIO = 0.28;
 
 function trendFromStructure(candles: Candle[], lookback = 40): SmcTrend {
   if (candles.length < 10) return "neutre";
@@ -143,43 +143,41 @@ export function detectLiquiditySweep(
 ): { ok: boolean; level: number | null } {
   if (candles.length < 20) return { ok: false, level: null };
   const swings = findSwings(candles, 2);
-  const recent = candles.slice(-12);
+  // Fenêtre élargie (~6–8 h sur M15) — trop court = presque jamais de sweep
+  const recent = candles.slice(-32);
   if (side === "long") {
-    const lows = swings.filter((s) => s.kind === "low").slice(-6);
+    const lows = swings.filter((s) => s.kind === "low").slice(-8);
     for (const sw of lows) {
       for (const c of recent) {
-        const equal =
-          Math.abs(c.l - sw.price) / sw.price <= EQUAL_TOL || c.l < sw.price;
-        if (!equal) continue;
+        const sweptBelow = c.l < sw.price * (1 - EQUAL_TOL * 0.25);
+        const closedBack = c.c > sw.price * 0.998;
         const body = Math.abs(c.c - c.o);
         const range = c.h - c.l || 1e-9;
-        const sweptBelow = c.l < sw.price * (1 - EQUAL_TOL * 0.3);
-        const closedBack = c.c > sw.price;
-        if (sweptBelow && closedBack && body / range >= SWEEP_WICK_RATIO * 0.5) {
+        if (sweptBelow && closedBack && body / range >= SWEEP_WICK_RATIO * 0.35) {
           return { ok: true, level: sw.price };
         }
       }
     }
-    // Equal lows cluster
     for (let i = 0; i < lows.length - 1; i++) {
       const a = lows[i]!;
       const b = lows[i + 1]!;
       if (Math.abs(a.price - b.price) / a.price <= EQUAL_TOL) {
         const last = recent.at(-1)!;
-        if (last.l < Math.min(a.price, b.price) && last.c > Math.min(a.price, b.price)) {
-          return { ok: true, level: Math.min(a.price, b.price) };
+        const lvl = Math.min(a.price, b.price);
+        if (last.l < lvl && last.c > lvl * 0.997) {
+          return { ok: true, level: lvl };
         }
       }
     }
   } else {
-    const highs = swings.filter((s) => s.kind === "high").slice(-6);
+    const highs = swings.filter((s) => s.kind === "high").slice(-8);
     for (const sw of highs) {
       for (const c of recent) {
-        const sweptAbove = c.h > sw.price * (1 + EQUAL_TOL * 0.3);
-        const closedBack = c.c < sw.price;
+        const sweptAbove = c.h > sw.price * (1 + EQUAL_TOL * 0.25);
+        const closedBack = c.c < sw.price * 1.002;
         const body = Math.abs(c.c - c.o);
         const range = c.h - c.l || 1e-9;
-        if (sweptAbove && closedBack && body / range >= SWEEP_WICK_RATIO * 0.5) {
+        if (sweptAbove && closedBack && body / range >= SWEEP_WICK_RATIO * 0.35) {
           return { ok: true, level: sw.price };
         }
       }
@@ -189,8 +187,9 @@ export function detectLiquiditySweep(
       const b = highs[i + 1]!;
       if (Math.abs(a.price - b.price) / a.price <= EQUAL_TOL) {
         const last = recent.at(-1)!;
-        if (last.h > Math.max(a.price, b.price) && last.c < Math.max(a.price, b.price)) {
-          return { ok: true, level: Math.max(a.price, b.price) };
+        const lvl = Math.max(a.price, b.price);
+        if (last.h > lvl && last.c < lvl * 1.003) {
+          return { ok: true, level: lvl };
         }
       }
     }
@@ -212,11 +211,11 @@ export function detectChochBos(
     return { ok: false, bosLevel: null, impulseHigh: 0, impulseLow: 0 };
   }
   const last = candles.at(-1)!;
-  const window = candles.slice(-18);
+  const window = candles.slice(-24);
 
   if (side === "long") {
-    const highs = swings.filter((s) => s.kind === "high").slice(-5);
-    const lows = swings.filter((s) => s.kind === "low").slice(-5);
+    const highs = swings.filter((s) => s.kind === "high").slice(-6);
+    const lows = swings.filter((s) => s.kind === "low").slice(-6);
     const bosTarget = highs.at(-2) ?? highs.at(-1);
     const swingLow = lows.at(-1);
     if (!bosTarget || !swingLow) {
@@ -224,8 +223,12 @@ export function detectChochBos(
     }
     const broke = window.some((c) => c.c > bosTarget.price);
     const impulseHigh = Math.max(...window.map((c) => c.h));
-    const impulseLow = swingLow.price;
-    const ok = broke && last.c > bosTarget.price * 0.998;
+    const impulseLow = Math.min(swingLow.price, Math.min(...window.slice(-8).map((c) => c.l)));
+    // Clôture récente encore au-dessus OU break clair dans la fenêtre
+    const ok =
+      broke &&
+      (last.c > bosTarget.price * 0.997 ||
+        window.slice(-4).some((c) => c.c > bosTarget.price * 1.001));
     return {
       ok,
       bosLevel: bosTarget.price,
@@ -234,8 +237,8 @@ export function detectChochBos(
     };
   }
 
-  const highs = swings.filter((s) => s.kind === "high").slice(-5);
-  const lows = swings.filter((s) => s.kind === "low").slice(-5);
+  const highs = swings.filter((s) => s.kind === "high").slice(-6);
+  const lows = swings.filter((s) => s.kind === "low").slice(-6);
   const bosTarget = lows.at(-2) ?? lows.at(-1);
   const swingHigh = highs.at(-1);
   if (!bosTarget || !swingHigh) {
@@ -243,8 +246,11 @@ export function detectChochBos(
   }
   const broke = window.some((c) => c.c < bosTarget.price);
   const impulseLow = Math.min(...window.map((c) => c.l));
-  const impulseHigh = swingHigh.price;
-  const ok = broke && last.c < bosTarget.price * 1.002;
+  const impulseHigh = Math.max(swingHigh.price, Math.max(...window.slice(-8).map((c) => c.h)));
+  const ok =
+    broke &&
+    (last.c < bosTarget.price * 1.003 ||
+      window.slice(-4).some((c) => c.c < bosTarget.price * 0.999));
   return {
     ok,
     bosLevel: bosTarget.price,
@@ -380,7 +386,7 @@ export function buildSmcOrder(input: {
 
   const distPct = Math.abs(price - entry) / price;
   const entryMode: SmcOrderParams["entryMode"] =
-    distPct < 0.0025 ? "market_now" : "limit_wait";
+    distPct < 0.005 ? "market_now" : "limit_wait";
   if (entryMode === "market_now") {
     // Recalcule TP/SL depuis le prix marché en gardant le même R
     const risk =
@@ -484,8 +490,9 @@ export function analyzeSmcSetup(input: {
   const h1 = trendFromStructure(input.candlesH1, 40);
   const exec = trendFromStructure(input.candlesExec, 30);
 
+  // MTF : D1 mène ; H4 aligné OU neutre (pas contraire)
   const mtfAligned =
-    d1 !== "neutre" && h4 !== "neutre" && d1 === h4;
+    d1 !== "neutre" && (h4 === d1 || h4 === "neutre");
   const side: SmcSide | null = mtfAligned
     ? d1 === "haussier"
       ? "long"
@@ -494,7 +501,7 @@ export function analyzeSmcSetup(input: {
 
   const h1Aligned =
     side != null &&
-    (h1 === (side === "long" ? "haussier" : "baissier") || h1 === "neutre");
+    h1 !== (side === "long" ? "baissier" : "haussier");
 
   let liquiditySweep = false;
   let liquidityLevel: number | null = null;
@@ -517,11 +524,18 @@ export function analyzeSmcSetup(input: {
     impulseLow = bos.impulseLow;
 
     fvg = detectFvg(input.candlesExec, side);
-    if (chochBos && impulseHigh > impulseLow) {
+    if ((!chochBos || impulseHigh <= impulseLow) && liquiditySweep) {
+      const win = input.candlesExec.slice(-20);
+      impulseHigh = Math.max(...win.map((c) => c.h));
+      impulseLow = Math.min(...win.map((c) => c.l));
+    }
+    if (impulseHigh > impulseLow) {
       ote = computeOte(side, impulseHigh, impulseLow);
     }
 
-    if (chochBos && ote && fvg) {
+    // Ordre si OTE + (BOS ou sweep) — FVG recommandé, pas toujours obligatoire
+    const structureOk = chochBos || liquiditySweep;
+    if (ote && structureOk && (fvg || (liquiditySweep && chochBos))) {
       order = buildSmcOrder({
         side,
         price: input.price,
@@ -549,34 +563,33 @@ export function analyzeSmcSetup(input: {
     ote: Boolean(ote),
     allPass: false,
   };
+  // Structure = sweep OU BOS ; FVG optionnel si les deux structure sont OK
+  const structureOk = checklist.liquiditySweep || checklist.chochBos;
   checklist.allPass =
     checklist.mtfAligned &&
     checklist.h1Aligned &&
-    checklist.liquiditySweep &&
-    checklist.chochBos &&
-    checklist.fvg &&
+    structureOk &&
     checklist.ote &&
+    (checklist.fvg || (checklist.liquiditySweep && checklist.chochBos)) &&
     order != null &&
     risk != null;
 
   let status: SmcStatus = "ANNULÉ";
   let cancelReason: string | null = null;
   if (!mtfAligned) {
-    cancelReason = "D1/H4 non alignés";
+    cancelReason = "D1/H4 non alignés (H4 contraire)";
   } else if (!checklist.h1Aligned) {
-    cancelReason = "H1 non aligné avec D1/H4";
-  } else if (!liquiditySweep) {
-    cancelReason = "Pas de prise de liquidité M15/M30";
-  } else if (!chochBos) {
-    cancelReason = "CHoCH/BOS non confirmé (clôture corps)";
-  } else if (!fvg) {
-    cancelReason = "Aucun FVG sur l’impulsion";
+    cancelReason = "H1 contraire au biais D1";
+  } else if (!structureOk) {
+    cancelReason = "Pas de sweep / CHoCH-BOS M15";
   } else if (!ote) {
     cancelReason = "Zone ÔTE introuvable";
+  } else if (!checklist.fvg && !(checklist.liquiditySweep && checklist.chochBos)) {
+    cancelReason = "FVG manquant sans double confirmation structure";
   } else if (checklist.allPass && order) {
     const inOte =
       order.entryMode === "market_now" ||
-      (input.price >= ote!.low * 0.998 && input.price <= ote!.high * 1.002);
+      (input.price >= ote!.low * 0.995 && input.price <= ote!.high * 1.005);
     status = inOte
       ? "ORDRE PRÊT À ÊTRE EXÉCUTÉ"
       : "EN ATTENTE DE RETRACEMENT";

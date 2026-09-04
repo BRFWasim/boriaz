@@ -7,6 +7,7 @@ import { getWhaleDashboard } from "./dashboard";
 import { sendTelegramMessage } from "./telegram";
 import { correlateSetup } from "./signal-score";
 import { computeAlignment, type AlignmentScore } from "./alignment";
+import { stabilizeDirection } from "./signal-sticky";
 import {
   aggregatePaperAccount,
   appendBook,
@@ -81,7 +82,7 @@ export interface TradeSignalPayload {
   smc: import("./smc-scan").SmcScanResult | null;
 }
 
-const CACHE_TTL = 3 * 60_000;
+const CACHE_TTL = 5 * 60_000;
 const TG_COOLDOWN = 25 * 60_000;
 let cache: { at: number; value: TradeSignalPayload } | null = null;
 let lastTgKey = "";
@@ -113,39 +114,40 @@ function spotPhaseFrom(
 async function askSignalAi(compact: unknown[]): Promise<string | null> {
   const prompt = `Analyste crypto PRUDENT et CORRÉLÉ. FR. PAS un conseil financier.
 Tu DOIS croiser : multi-TF (1h/4h/1d), crowd wallets à bon WR, Nansen.
-Règle stricte : si 1h est HAUSSIER fort sur UNI/SOL/BTC et 4h n’est pas baissier fort → favorise LONG (sauf crowd short qualité contraire).
-Ne propose un trade QUE si certainty haute ou confiance ≥70 avec alignement.
+Favorise aussi les SHORT quand 4h+1d baissiers. Pas de flip 1h seul.
+Ne propose un trade QUE si certainty haute ou confiance ≥70 avec alignement 1h+4h.
 JSON strict:
 {"action":"long"|"short"|"wait","coin":"UNI","confidence":0-100,"certainty":"haute"|"moyenne"|"basse","leverage":"2x","sizePct":"1% capital","entry":123.4,"tp":130,"sl":118,"entryMode":"market_now"|"limit_wait","reason":"...","invalidation":"...","detail":"3 phrases corrélant TF+wallets"}
 Données: ${JSON.stringify(compact)}`;
 
-  const anthropic = process.env.ANTHROPIC_API_KEY?.trim();
-  if (anthropic) {
-    try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "x-api-key": anthropic,
-          "anthropic-version": "2023-06-01",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model:
-            process.env.ANTHROPIC_MODEL?.trim() || "claude-haiku-4-5-20251001",
-          max_tokens: 500,
-          messages: [{ role: "user", content: prompt }],
-        }),
-      });
-      const json = (await res.json()) as {
-        content?: { type: string; text?: string }[];
-      };
-      if (res.ok) {
-        return json.content?.find((c) => c.type === "text")?.text?.trim() || null;
-      }
-    } catch {
-      // fallthrough
-    }
-  }
+  // --- Claude Haiku désactivé (commenté) ---
+  // const anthropic = process.env.ANTHROPIC_API_KEY?.trim();
+  // if (anthropic) {
+  //   try {
+  //     const res = await fetch("https://api.anthropic.com/v1/messages", {
+  //       method: "POST",
+  //       headers: {
+  //         "x-api-key": anthropic,
+  //         "anthropic-version": "2023-06-01",
+  //         "Content-Type": "application/json",
+  //       },
+  //       body: JSON.stringify({
+  //         model:
+  //           process.env.ANTHROPIC_MODEL?.trim() || "claude-haiku-4-5-20251001",
+  //         max_tokens: 500,
+  //         messages: [{ role: "user", content: prompt }],
+  //       }),
+  //     });
+  //     const json = (await res.json()) as {
+  //       content?: { type: string; text?: string }[];
+  //     };
+  //     if (res.ok) {
+  //       return json.content?.find((c) => c.type === "text")?.text?.trim() || null;
+  //     }
+  //   } catch {
+  //     // fallthrough
+  //   }
+  // }
 
   const openai = process.env.OPENAI_API_KEY?.trim();
   if (!openai) return null;
@@ -226,112 +228,80 @@ async function verifyTradeWithAi(candidate: {
   confidence: number;
   note: string;
 }> {
-  // Repli déterministe si aucune clé IA n'est configurée : au lieu de bloquer
-  // tous les trades (ce qui gèle scalp/risqué/défaut), on valide sur des
-  // critères objectifs (Alignement + R:R). Le gate IA strict reste actif dès
-  // qu'une clé ANTHROPIC/OPENAI est présente.
-  const hasAiProvider = Boolean(
-    process.env.ANTHROPIC_API_KEY?.trim() || process.env.OPENAI_API_KEY?.trim(),
-  );
-  if (!hasAiProvider) {
-    const reward =
-      candidate.action === "long"
-        ? (candidate.tp ?? 0) - (candidate.entry ?? 0)
-        : (candidate.entry ?? 0) - (candidate.tp ?? 0);
-    const risk =
-      candidate.action === "long"
-        ? (candidate.entry ?? 0) - (candidate.sl ?? 0)
-        : (candidate.sl ?? 0) - (candidate.entry ?? 0);
-    const rr = risk > 0 ? reward / risk : 0;
-    const ok =
-      candidate.alignment >= 55 && candidate.confidence >= 60 && rr >= 1.2;
-    return {
-      approved: ok,
-      confidence: ok
-        ? Math.max(candidate.confidence, 62)
-        : Math.min(candidate.confidence, 55),
-      note: ok
-        ? `Gate déterministe ✓ (IA non configurée) — Align ${candidate.alignment} · R:R ${rr.toFixed(2)}`
-        : `Gate déterministe ✗ (IA non configurée) — Align ${candidate.alignment} · R:R ${rr.toFixed(2)}`,
-    };
-  }
+  // Gate déterministe (Claude commenté). OpenAI optionnel en second.
+  // --- Claude Haiku désactivé ---
+  // const anthropic = process.env.ANTHROPIC_API_KEY?.trim();
+  // ...
 
-  const prompt = `Tu es le GATE final avant un paper trade. FR. PAS un conseil financier.
+  const reward =
+    candidate.action === "long"
+      ? (candidate.tp ?? 0) - (candidate.entry ?? 0)
+      : (candidate.entry ?? 0) - (candidate.tp ?? 0);
+  const riskAmt =
+    candidate.action === "long"
+      ? (candidate.entry ?? 0) - (candidate.sl ?? 0)
+      : (candidate.sl ?? 0) - (candidate.entry ?? 0);
+  const rr = riskAmt > 0 ? reward / riskAmt : 0;
+  const mechOk =
+    candidate.alignment >= 55 && candidate.confidence >= 60 && rr >= 1.2;
+
+  const openai = process.env.OPENAI_API_KEY?.trim();
+  let text: string | null = null;
+  if (openai) {
+    const prompt = `Tu es le GATE final avant un paper trade. FR. PAS un conseil financier.
 Règles STRICTES :
-- approve=true UNIQUEMENT si TF 1h+4h (ou 1d) + crowd WR + niveaux TP/SL sont cohérents.
-- Si doute, divergence, R:R faible, ou manque de confirmation → approve=false.
-- confidence = ta note 0-100 après relecture.
+- approve=true UNIQUEMENT si TF 1h+4h (ou 1d) + niveaux TP/SL cohérents.
+- Favorise SHORT si 4h+1d baissiers. Refuse les flips 1h seuls.
+- Si doute → approve=false.
 JSON strict:
 {"approve":true|false,"confidence":0-100,"note":"1-2 phrases"}
 Trade proposé: ${JSON.stringify(candidate)}`;
-
-  const anthropic = process.env.ANTHROPIC_API_KEY?.trim();
-  let text: string | null = null;
-  if (anthropic) {
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
+      const res = await fetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",
         headers: {
-          "x-api-key": anthropic,
-          "anthropic-version": "2023-06-01",
+          Authorization: `Bearer ${openai}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model:
-            process.env.ANTHROPIC_MODEL?.trim() || "claude-haiku-4-5-20251001",
+          model: process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini",
+          temperature: 0.1,
           max_tokens: 220,
-          messages: [{ role: "user", content: prompt }],
+          messages: [
+            { role: "system", content: "JSON uniquement." },
+            { role: "user", content: prompt },
+          ],
         }),
       });
       const json = (await res.json()) as {
-        content?: { type: string; text?: string }[];
+        choices?: { message?: { content?: string } }[];
       };
-      if (res.ok) {
-        text = json.content?.find((c) => c.type === "text")?.text?.trim() || null;
-      }
+      text = json.choices?.[0]?.message?.content?.trim() || null;
     } catch {
-      /* fallthrough */
+      text = null;
     }
   }
-  if (!text) {
-    const openai = process.env.OPENAI_API_KEY?.trim();
-    if (openai) {
-      try {
-        const res = await fetch("https://api.openai.com/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${openai}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model: process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini",
-            temperature: 0.1,
-            max_tokens: 220,
-            messages: [
-              { role: "system", content: "JSON uniquement." },
-              { role: "user", content: prompt },
-            ],
-          }),
-        });
-        const json = (await res.json()) as {
-          choices?: { message?: { content?: string } }[];
-        };
-        text = json.choices?.[0]?.message?.content?.trim() || null;
-      } catch {
-        text = null;
-      }
-    }
-  }
+
   if (!text) {
     return {
-      approved: false,
-      confidence: 0,
-      note: "IA indisponible — trade bloqué (vérif obligatoire).",
+      approved: mechOk,
+      confidence: mechOk
+        ? Math.max(candidate.confidence, 62)
+        : Math.min(candidate.confidence, 55),
+      note: mechOk
+        ? `Gate mécanique ✓ Align ${candidate.alignment} · R:R ${rr.toFixed(2)} (Claude off)`
+        : `Gate mécanique ✗ Align ${candidate.alignment} · R:R ${rr.toFixed(2)}`,
     };
   }
   const match = text.match(/\{[\s\S]*\}/);
   if (!match) {
-    return { approved: false, confidence: 0, note: "Réponse IA illisible — bloqué." };
+    return {
+      approved: mechOk,
+      confidence: mechOk ? candidate.confidence : 0,
+      note: mechOk
+        ? "OpenAI illisible — repli mécanique ✓"
+        : "OpenAI illisible — repli mécanique ✗",
+    };
   }
   try {
     const obj = JSON.parse(match[0]) as Record<string, unknown>;
@@ -339,6 +309,14 @@ Trade proposé: ${JSON.stringify(candidate)}`;
     const confidence = Number(obj.confidence ?? 0);
     const note = String(obj.note || "");
     if (!approved || confidence < 62) {
+      // Si OpenAI refuse mais mécanique solide + alignement fort → laisse passer
+      if (mechOk && candidate.alignment >= 62) {
+        return {
+          approved: true,
+          confidence: Math.max(candidate.confidence, 62),
+          note: `OpenAI prudent mais mécanique OK (Align ${candidate.alignment})`,
+        };
+      }
       return {
         approved: false,
         confidence,
@@ -347,7 +325,11 @@ Trade proposé: ${JSON.stringify(candidate)}`;
     }
     return { approved: true, confidence, note: note || "IA confirme le setup." };
   } catch {
-    return { approved: false, confidence: 0, note: "JSON IA invalide — bloqué." };
+    return {
+      approved: mechOk,
+      confidence: mechOk ? candidate.confidence : 0,
+      note: mechOk ? "JSON IA invalide — mécanique ✓" : "JSON IA invalide — bloqué.",
+    };
   }
 }
 
@@ -575,12 +557,13 @@ export async function getTradeSignals(options?: {
       nansenShort,
     });
 
-    const action = corr.action;
-    const confidence = corr.confidence;
+    let action = corr.action;
+    let confidence = corr.confidence;
     const main = corr.primary;
     const price = quote?.price ?? main.indicators.price;
 
     const vote1h = corr.tfVotes.find((v) => v.interval === "1h");
+    const vote4h = corr.tfVotes.find((v) => v.interval === "4h");
     const action1hHint: "long" | "short" | "wait" = vote1h
       ? vote1h.bias === "haussier" || vote1h.score >= 3
         ? "long"
@@ -588,6 +571,41 @@ export async function getTradeSignals(options?: {
           ? "short"
           : "wait"
       : "wait";
+
+    const side4h =
+      vote4h &&
+      (vote4h.bias === "haussier" || vote4h.score >= 3
+        ? "long"
+        : vote4h.bias === "baissier" || vote4h.score <= -3
+          ? "short"
+          : "wait");
+    const sticky = stabilizeDirection({
+      coin,
+      action,
+      confidence,
+      tf1h4hAligned: Boolean(
+        action !== "wait" && side4h && side4h === action,
+      ),
+      tf4hOpposed: Boolean(
+        action !== "wait" &&
+          side4h &&
+          side4h !== "wait" &&
+          side4h !== action,
+      ),
+    });
+    if (sticky.stickyNote) {
+      corr.reason = `${corr.reason} · ${sticky.stickyNote}`;
+    }
+    action = sticky.action;
+    confidence = sticky.confidence;
+
+    // Recalcule certainty si sticky a forcé WAIT
+    let certainty = corr.certainty;
+    if (action === "wait" && sticky.stickyNote?.includes("Anti-flip")) {
+      certainty = "moyenne";
+    } else if (action !== corr.action) {
+      certainty = confidence >= 72 ? "haute" : confidence >= 62 ? "moyenne" : "basse";
+    }
 
     const alignment = computeAlignment({
       action,
@@ -645,19 +663,22 @@ export async function getTradeSignals(options?: {
           : crowdHit.avgWinRate
         : null;
 
+    const bias =
+      action === "long" ? "haussier" : action === "short" ? "baissier" : "neutre";
+
     signals.push({
       coin,
       action,
       confidence: Math.min(92, confidence),
-      certainty: corr.certainty,
+      certainty,
       leverage: leverageFor(
         confidence,
         main.indicators.adx14,
         prefs.maxLeverage,
       ),
       sizePct: sizeFor(confidence),
-      spotPhase: spotPhaseFrom(main.buyTiming.action, corr.bias),
-      bias: corr.bias,
+      spotPhase: spotPhaseFrom(main.buyTiming.action, bias),
+      bias,
       price,
       entry,
       idealEntry,
@@ -667,7 +688,7 @@ export async function getTradeSignals(options?: {
       entryHint,
       riskReward,
       reason: corr.reason,
-      aiText: null,
+      aiText: sticky.stickyNote,
       aiVerified: false,
       aiVerifyNote: null,
       invalidation: main.buyZone.summary,
@@ -744,6 +765,34 @@ export async function getTradeSignals(options?: {
       if (ai.entry && ai.entry > 0) target.entry = ai.entry;
       if (ai.tp && ai.tp > 0) target.tp = ai.tp;
       if (ai.sl && ai.sl > 0) target.sl = ai.sl;
+
+      // Anti-flip : l'IA ne peut pas basculer sans 4h aligné
+      const v4 = target.tfVotes.find((v) => v.interval === "4h");
+      let side4: "long" | "short" | "wait" = "wait";
+      if (v4) {
+        if (v4.bias === "haussier" || v4.score >= 3) side4 = "long";
+        else if (v4.bias === "baissier" || v4.score <= -3) side4 = "short";
+      }
+      const act = target.action as "long" | "short" | "wait";
+      const stickyAi = stabilizeDirection({
+        coin: target.coin,
+        action: act,
+        confidence: target.confidence,
+        tf1h4hAligned: act !== "wait" && side4 === act,
+        tf4hOpposed: act !== "wait" && side4 !== "wait" && side4 !== act,
+      });
+      if (stickyAi.action !== target.action) {
+        target.action = stickyAi.action;
+        target.confidence = stickyAi.confidence;
+        target.aiText = [target.aiText, stickyAi.stickyNote]
+          .filter(Boolean)
+          .join(" · ");
+        if (target.action === "wait") {
+          target.entry = null;
+          target.tp = null;
+          target.sl = null;
+        }
+      }
 
       // Recalcule Alignement avec la partie IA
       const crowdHit = crowd.find((c) => c.coin === target.coin);
@@ -1220,6 +1269,7 @@ export async function getTradeSignals(options?: {
         walletEur: primary.bankrollEur,
         maxLeverage: primary.maxLeverage,
         prices: priceMap,
+        force: Boolean(options?.force),
       });
 
       for (const pf of smcPortfolios) {
@@ -1253,23 +1303,25 @@ export async function getTradeSignals(options?: {
         }
 
         const justification: TradeJustification = {
-          summary: `SMC Boriaz ${setup.order.side.toUpperCase()} ${setup.coin} · checklist 6/6 · risque ${setup.risk.riskPct}% · Claude ${smcScan.aiApproved ? "OK" : "KO"}`,
+          summary: `SMC Boriaz ${setup.order.side.toUpperCase()} ${setup.coin} · structure OK · risque ${setup.risk.riskPct}% · gate mécanique`,
           bullets: [
             `Stratégie SMC top-down D1→H4→H1→M15`,
             `MTF ${setup.bias.d1}/${setup.bias.h4}/${setup.bias.h1}`,
             setup.liquidityLevel != null
               ? `Liquidity sweep @ ${setup.liquidityLevel}`
-              : "Liquidity sweep validé",
-            "CHoCH + BOS (clôture corps)",
+              : setup.checklist.liquiditySweep
+                ? "Liquidity sweep validé"
+                : "Sweep soft / BOS",
+            setup.checklist.chochBos ? "CHoCH + BOS" : "Structure soft",
             setup.fvg
               ? `FVG ${setup.fvg.low}–${setup.fvg.high}`
-              : "FVG",
+              : "FVG optionnel",
             setup.ote
               ? `ÔTE ${setup.ote.low}–${setup.ote.high} (idéal ${setup.ote.ideal})`
               : "ÔTE",
             `Risque ${setup.risk.riskEur.toFixed(2)} € (2%) · notionnel ${setup.risk.notionalEur} €`,
             `TP1 1R 50%+BE · TP2 2R`,
-            smcScan.aiNote || "Gate Claude Haiku",
+            smcScan.aiNote || "Gate mécanique",
           ],
           alignmentScore: setup.confidence,
           aiVerified: smcScan.aiApproved,

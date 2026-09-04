@@ -204,14 +204,18 @@ export async function scanSmcWatchlist(input: {
   let aiReport: string | null = null;
 
   if (best && best.checklist.allPass && best.order) {
-    const gate = await askClaudeSmcGate(best);
-    aiApproved = gate.approved;
-    aiNote = gate.note;
-    aiReport = gate.report;
-    if (gate.report) best.report = gate.report;
-    if (gate.approved) {
-      best.confidence = Math.max(best.confidence, gate.confidence);
-    }
+    // --- Claude Haiku désactivé (commenté) : gate mécanique uniquement ---
+    // const gate = await askClaudeSmcGate(best);
+    // aiApproved = gate.approved;
+    // aiNote = gate.note;
+    // aiReport = gate.report;
+    // if (gate.report) best.report = gate.report;
+    // if (gate.approved) {
+    //   best.confidence = Math.max(best.confidence, gate.confidence);
+    // }
+    aiApproved = true;
+    aiNote = "Claude désactivé — validation mécanique SMC uniquement.";
+    aiReport = best.report;
   } else if (best) {
     aiNote = best.cancelReason || "Setup SMC non actionnable";
   }
@@ -222,7 +226,8 @@ export async function scanSmcWatchlist(input: {
     aiApproved,
     aiNote,
     aiReport,
-    model: process.env.ANTHROPIC_MODEL?.trim() || CLAUDE_MODEL,
+    // model: process.env.ANTHROPIC_MODEL?.trim() || CLAUDE_MODEL,
+    model: "mechanical-smc",
     fetchedAt: Date.now(),
   };
   scanCache = { key: cacheKey, at: Date.now(), value };

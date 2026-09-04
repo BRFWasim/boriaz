@@ -675,8 +675,8 @@ export function LabPanel() {
                 </div>
                 {pf.strategy === "smc" ? (
                   <p className="mt-2 text-xs text-muted-foreground">
-                    Bot SMC : D1→H4→H1→M15 · checklist 6/6 · sizing exact 2 % ·
-                    TP1 1R (50 %+BE) · TP2 2R · Claude Haiku gate.
+                    Bot SMC : D1→H4→H1→M15 · checklist structure · sizing exact 2 % ·
+                    TP1 1R (50 %+BE) · TP2 2R · gate mécanique (Claude off).
                   </p>
                 ) : null}
                 <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
@@ -851,10 +851,10 @@ export function LabPanel() {
           <div>
             <h3 className="font-medium">Boriaz · Smart Money Concepts</h3>
             <p className="mt-1 text-sm text-muted-foreground">
-              Analyse top-down D1→H4→H1→M15. Entrée uniquement si checklist 6/6
-              (alignement, liquidity sweep, CHoCH+BOS, FVG, ÔTE). Risque exact
-              2 %. TP1 1R (50 %+ break-even) puis TP2 2R. Gate{" "}
-              <code className="text-xs">claude-haiku-4-5-20251001</code>.
+              Analyse top-down D1→H4→H1→M15. Entrée si structure SMC (sweep /
+              BOS + ÔTE, FVG recommandé). Risque exact 2 %. TP1 1R (50 %+
+              break-even) puis TP2 2R. Gate mécanique —{" "}
+              <code className="text-xs">Claude commenté / off</code>.
             </p>
           </div>
           <Button

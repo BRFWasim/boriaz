@@ -80,7 +80,7 @@ export function correlateSetup(input: {
   let confidence = 38;
   const reasons: string[] = [];
 
-  // --- Crowd wallets qualité (WR) : fort poids ---
+  // --- Crowd wallets qualité (WR) : poids, mais 4h ne doit pas être contraire ---
   const crowd = input.crowd;
   if (crowd) {
     const wrPct =
@@ -89,36 +89,43 @@ export function correlateSetup(input: {
         : crowd.avgWinRate;
     const wrBoost = Math.min(18, Math.round(Math.max(0, wrPct - 52) * 0.7));
     const nBoost = Math.min(20, crowd.qualityWhaleCount * 5);
-    if (crowd.side === "long") {
+    if (crowd.side === "long" && bias4h !== "baissier") {
       action = "long";
       confidence = 55 + nBoost + wrBoost;
       reasons.push(
         `Crowd LONG ${crowd.qualityWhaleCount} wallets WR~${wrPct.toFixed(0)}%`,
       );
-    } else if (crowd.side === "short") {
+    } else if (crowd.side === "short" && bias4h !== "haussier") {
       action = "short";
       confidence = 55 + nBoost + wrBoost;
       reasons.push(
         `Crowd SHORT ${crowd.qualityWhaleCount} wallets WR~${wrPct.toFixed(0)}%`,
       );
+    } else if (crowd.side) {
+      reasons.push(
+        `Crowd ${crowd.side.toUpperCase()} ignoré (4h contraire)`,
+      );
     }
   }
 
-  // --- Multi-TF : 1h haussier ne doit PLUS être ignoré ---
+  // --- Multi-TF : 1h seul NE suffit plus (anti-flip) — besoin 4h non contraire ---
   if (bias1h === "haussier" && score1h >= 3) {
-    if (action === "wait" || action === "long") {
+    if (bias4h === "baissier" && score4h <= -3) {
+      reasons.push(`1h haussier vs 4h baissier → pas de LONG fragile`);
+    } else if (action === "wait" || action === "long") {
       action = "long";
       confidence = Math.max(confidence, 58 + Math.min(20, score1h * 4));
       reasons.push(`1h HAUSSIER (score ${score1h})`);
     } else if (action === "short" && score1h >= 5) {
-      // conflit fort 1h vs crowd short → attendre
       action = "wait";
       confidence = 45;
       reasons.push(`Conflit 1h haussier vs crowd short → WAIT`);
     }
   }
   if (bias1h === "baissier" && score1h <= -3) {
-    if (action === "wait" || action === "short") {
+    if (bias4h === "haussier" && score4h >= 3) {
+      reasons.push(`1h baissier vs 4h haussier → pas de SHORT fragile`);
+    } else if (action === "wait" || action === "short") {
       action = "short";
       confidence = Math.max(confidence, 58 + Math.min(20, Math.abs(score1h) * 4));
       reasons.push(`1h BAISSIER (score ${score1h})`);
@@ -129,7 +136,7 @@ export function correlateSetup(input: {
     }
   }
 
-  // 4h confirme
+  // 4h confirme (symétrique long/short)
   if (bias4h === "haussier" && score4h >= 3) {
     if (action === "long" || action === "wait") {
       action = "long";
@@ -143,6 +150,29 @@ export function correlateSetup(input: {
       confidence = Math.max(confidence, 52 + Math.abs(score4h) * 3);
       reasons.push(`4h baissier (${score4h})`);
     }
+  }
+
+  // Short structurel : 4h+1d baissiers même si 1h pause
+  if (
+    action === "wait" &&
+    (bias4h === "baissier" || score4h <= -3) &&
+    (bias1d === "baissier" || score1d <= -2) &&
+    bias1w !== "haussier"
+  ) {
+    action = "short";
+    confidence = Math.max(confidence, 62 + Math.min(14, Math.abs(score4h) * 2));
+    reasons.push(`SHORT structurel 4h+1d`);
+  }
+  // Long structurel symétrique
+  if (
+    action === "wait" &&
+    (bias4h === "haussier" || score4h >= 3) &&
+    (bias1d === "haussier" || score1d >= 2) &&
+    bias1w !== "baissier"
+  ) {
+    action = "long";
+    confidence = Math.max(confidence, 62 + Math.min(14, score4h * 2));
+    reasons.push(`LONG structurel 4h+1d`);
   }
 
   // Alignement multi-TF
@@ -192,6 +222,11 @@ export function correlateSetup(input: {
     reasons.push(`1d confirme SHORT`);
   }
 
+  if (action === "short" && (bias1w === "baissier" || score1w <= -3)) {
+    confidence += 6;
+    reasons.push(`1w confirme SHORT`);
+  }
+
   // Filtre 1d contraire fort
   if (action === "long" && score1d <= -4) {
     confidence -= 12;
@@ -202,11 +237,12 @@ export function correlateSetup(input: {
     reasons.push(`1d encore haussier (${score1d}) → prudence`);
   }
 
-  // Buy zone / RSI
+  // Buy zone / RSI — uniquement si 4h pas baissier
   if (
     action === "long" &&
     primary.buyTiming.action === "acheter_zone" &&
-    primary.bias !== "baissier"
+    primary.bias !== "baissier" &&
+    bias4h !== "baissier"
   ) {
     confidence = Math.max(confidence, primary.buyTiming.confidence);
     reasons.push(`zone d’achat ${primary.buyTiming.action}`);
@@ -221,21 +257,45 @@ export function correlateSetup(input: {
     confidence += 5;
     reasons.push(`Nansen shorts×${input.nansenShort}`);
   }
+  // Nansen short bias même sans action encore
+  if (
+    action === "wait" &&
+    input.nansenShort >= 3 &&
+    input.nansenShort > input.nansenLong &&
+    (bias4h === "baissier" || score4h <= -2 || bias1h === "baissier")
+  ) {
+    action = "short";
+    confidence = Math.max(confidence, 60);
+    reasons.push(`Nansen shorts×${input.nansenShort} + TF soft baissier`);
+  }
 
-  // Si seulement 4h neutre et pas de 1h/crowd → wait
+  // Si seulement zone d’achat 4h haussier
   if (
     action === "wait" &&
     primary.buyTiming.action === "acheter_zone" &&
-    primary.bias === "haussier"
+    primary.bias === "haussier" &&
+    bias4h !== "baissier"
   ) {
     action = "long";
     confidence = Math.min(72, primary.buyTiming.confidence);
     reasons.push(primary.summary);
   }
 
+  // Exige 4h non contraire pour publier un trade (anti-flip 1h)
+  if (action === "long" && bias4h === "baissier" && score4h <= -2) {
+    action = "wait";
+    confidence = Math.min(confidence, 48);
+    reasons.push("Bloqué : 4h baissier contre LONG 1h");
+  }
+  if (action === "short" && bias4h === "haussier" && score4h >= 2) {
+    action = "wait";
+    confidence = Math.min(confidence, 48);
+    reasons.push("Bloqué : 4h haussier contre SHORT 1h");
+  }
+
   confidence = Math.max(0, Math.min(92, Math.round(confidence)));
 
-  // Certitude
+  // Certitude — exige au moins 2 TF pour « haute »
   let certainty: CorrelatedSetup["certainty"] = "basse";
   if (
     confidence >= 72 &&
@@ -243,13 +303,19 @@ export function correlateSetup(input: {
     (crowd || (bias1h && voteSide(bias1h, score1h) === action))
   ) {
     certainty = "haute";
-  } else if (confidence >= 60 && (alignedCount >= 1 || crowd)) {
+  } else if (confidence >= 62 && alignedCount >= 2) {
+    certainty = "moyenne";
+  } else if (confidence >= 60 && alignedCount >= 1) {
     certainty = "moyenne";
   }
 
-  // Ne pas forcer un trade bas certainty
-  if (certainty === "basse" && confidence < 58) {
+  // Ne pas forcer un trade bas certainty / mono-TF
+  if (certainty === "basse" && confidence < 62) {
     action = "wait";
+  }
+  if (action !== "wait" && alignedCount < 1 && !crowd) {
+    action = "wait";
+    reasons.push("Pas assez de TF / crowd pour publier");
   }
 
   const bias: SignalBias =

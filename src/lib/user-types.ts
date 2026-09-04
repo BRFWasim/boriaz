@@ -108,7 +108,7 @@ export const BORIAZ_PORTFOLIO: PortfolioProfile = {
   tradesPerDay: 4,
   timeframe: "15m",
   riskLevel: 2,
-  requireAiGate: true,
+  requireAiGate: false,
   maxSafetyMode: true,
   strategy: "smc",
   riskPct: 2,
