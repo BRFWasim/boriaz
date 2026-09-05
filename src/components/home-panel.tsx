@@ -43,6 +43,8 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
   const [openPf, setOpenPf] = useState<Record<string, boolean>>({
     default: true,
   });
+  const [selectedCoin, setSelectedCoin] = useState<string | null>(null);
+  const [cryptoFilter, setCryptoFilter] = useState<"all" | "long" | "short" | "wait">("all");
 
   function mergePaper(next: PaperTrade[] | undefined) {
     if (!next?.length) return;
@@ -241,6 +243,23 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
     setOpenPf((prev) => ({ ...prev, [id]: !prev[id] }));
   }
 
+  const filteredCards =
+    cryptoFilter === "all"
+      ? data.cards
+      : cryptoFilter === "wait"
+        ? data.cards.filter((c) => c.direction === "wait")
+        : data.cards.filter((c) => c.direction === cryptoFilter);
+  const activeCoin = (() => {
+    const cards = filteredCards.length ? filteredCards : data.cards;
+    if (!cards.length) return null;
+    if (selectedCoin && cards.some((c) => c.coin === selectedCoin)) {
+      return selectedCoin;
+    }
+    return cards[0]?.coin ?? null;
+  })();
+  const selectedCard =
+    data.cards.find((c) => c.coin === activeCoin) ?? null;
+
   return (
     <div className="space-y-6">
       {data.warning ? (
@@ -248,34 +267,6 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
           {data.warning}
         </div>
       ) : null}
-      <section className="bb-reveal relative overflow-hidden rounded-[1.75rem] border border-white/10 px-5 py-8 sm:px-8 sm:py-10">
-        <div className="pointer-events-none absolute inset-0 bb-hero-glow" />
-        <div className="relative">
-          <p className="font-heading text-[0.7rem] tracking-[0.35em] text-primary uppercase">
-            BoriazBot
-          </p>
-          <h1 className="font-heading mt-3 max-w-xl text-4xl leading-[0.95] tracking-tight text-foreground sm:text-5xl">
-            Alignement
-            <span className="block text-primary">avant le trade</span>
-          </h1>
-          <p className="mt-4 max-w-lg text-sm leading-relaxed text-muted-foreground sm:text-base">
-            Score unique TF × crowd × Nansen × IA. Watchlist multi-TF. Sureté max
-            Telegram. Compte {user?.name ?? "invité"} · {acc?.bankrollStartEur ?? 1000} €
-            {liveAt
-              ? ` · maj ${new Date(liveAt).toLocaleTimeString("fr-FR")}`
-              : ""}
-          </p>
-          <div className="mt-5 flex flex-wrap gap-2 text-xs">
-            <span className="rounded-md border border-primary/30 bg-primary/10 px-2.5 py-1 text-primary">
-              Stockage {data.storage.backend === "upstash" ? "Upstash KV" : "/tmp"}
-            </span>
-            <span className="rounded-md border border-white/10 bg-white/5 px-2.5 py-1 text-muted-foreground">
-              {data.maxSafetyMode ? "Sureté max ON" : "Sureté max OFF"}
-            </span>
-          </div>
-        </div>
-      </section>
-
       {acc ? (
         <section
           className="bb-reveal rounded-[1.5rem] border border-primary/25 bg-primary/5 px-4 py-5 sm:px-6"
@@ -318,6 +309,220 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
           </div>
         </section>
       ) : null}
+
+      <section className="bb-reveal space-y-3">
+        <div>
+          <h2 className="font-heading text-lg font-semibold">Portefeuilles</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Défaut toujours actif. Déplie pour voir equity, paramètres et trades
+            de chaque profil (réglages dans le Lab).
+          </p>
+        </div>
+        {portfolioViews.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            Aucun portefeuille — ouvre le Lab pour en créer.
+          </p>
+        ) : (
+          portfolioViews.map((pf) => {
+            const expanded = openPf[pf.profile.id] ?? false;
+            const delta = pf.account.equityEur - pf.account.bankrollStartEur;
+            const trades = paperLive.filter(
+              (t) => (t.portfolioId || "default") === pf.profile.id,
+            );
+            const launched = trades.length;
+            const closed = trades.filter(
+              (t) =>
+                t.status === "tp" ||
+                t.status === "sl" ||
+                t.status === "closed_manual" ||
+                t.status === "expired" ||
+                t.status === "invalidated",
+            );
+            const wins = closed.filter(
+              (t) => t.status === "tp" || (t.pnlEur ?? 0) > 0,
+            );
+            const winRatePct =
+              closed.length > 0 ? (wins.length / closed.length) * 100 : null;
+            const pending = trades.filter((t) => t.status === "pending");
+            const running = trades.filter((t) => t.status === "open");
+            const tps = trades.filter((t) => t.status === "tp");
+            const sls = trades.filter((t) => t.status === "sl");
+            const otherClosed = trades.filter(
+              (t) =>
+                t.status === "closed_manual" ||
+                t.status === "expired" ||
+                t.status === "invalidated",
+            );
+            return (
+              <div
+                key={pf.profile.id}
+                className="rounded-2xl border border-white/10 bg-card/40"
+              >
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
+                  onClick={() => togglePf(pf.profile.id)}
+                  aria-expanded={expanded}
+                >
+                  <div className="min-w-0">
+                    <p className="font-medium">
+                      {pf.profile.name}
+                      {pf.profile.isDefault ? (
+                        <span className="ml-2 text-[10px] tracking-wide text-primary uppercase">
+                          défaut
+                        </span>
+                      ) : null}
+                      {pf.profile.strategy === "smc" ||
+                      pf.profile.id === "boriaz" ? (
+                        <span className="ml-2 text-[10px] tracking-wide text-amber-400 uppercase">
+                          SMC 2%
+                        </span>
+                      ) : null}
+                    </p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {pf.profile.strategy === "smc"
+                        ? `SMC top-down · risque ${pf.profile.riskPct ?? 2}% · TP1 50%+BE`
+                        : `TF ${pf.profile.timeframe} · risque ${pf.profile.riskLevel}/5`}
+                      {" · "}lev max {pf.profile.maxLeverage}× · R:R ≥{" "}
+                      {pf.profile.minRR}
+                      {" · "}
+                      <span className="text-foreground">
+                        WR{" "}
+                        {winRatePct == null
+                          ? "n/d"
+                          : `${winRatePct.toFixed(0)} %`}
+                      </span>
+                      {" · "}
+                      <span className="text-foreground">
+                        {launched} trade{launched > 1 ? "s" : ""} lancé
+                        {launched > 1 ? "s" : ""}
+                      </span>
+                      {" · "}
+                      {pending.length + running.length} ouvert
+                      {pending.length + running.length > 1 ? "s" : ""}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-3">
+                    <div className="text-right">
+                      <p
+                        className={`numeric text-sm font-semibold ${signedClass(delta)}`}
+                      >
+                        {pf.account.equityEur.toFixed(2)} €
+                      </p>
+                      <p className={`numeric text-[11px] ${signedClass(delta)}`}>
+                        {delta >= 0 ? "+" : ""}
+                        {delta.toFixed(2)} €
+                      </p>
+                    </div>
+                    <ChevronDownIcon
+                      className={`size-4 text-muted-foreground transition-transform ${
+                        expanded ? "rotate-180" : ""
+                      }`}
+                    />
+                  </div>
+                </button>
+
+                {expanded ? (
+                  <div className="space-y-3 border-t border-white/8 px-4 py-3">
+                    <div className="grid gap-2 sm:grid-cols-4 text-xs">
+                      <Stat
+                        label="Capital"
+                        value={`${pf.profile.bankrollEur} €`}
+                      />
+                      <Stat
+                        label="Marge / trade"
+                        value={`${pf.profile.sizePct} %`}
+                      />
+                      <Stat
+                        label="Winrate"
+                        value={
+                          winRatePct == null
+                            ? "n/d"
+                            : `${winRatePct.toFixed(0)} % (${wins.length}/${closed.length})`
+                        }
+                      />
+                      <Stat
+                        label="Trades lancés"
+                        value={`${launched}`}
+                      />
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">
+                      {pf.profile.requireAiGate ? "Gate IA ON" : "Gate IA OFF"}
+                      {" · "}
+                      {pf.profile.maxSafetyMode
+                        ? "Sureté max ON"
+                        : "Sureté max OFF"}
+                      {" · "}
+                      Objectif {pf.profile.targetEur} €
+                    </p>
+
+                    {trades.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">
+                        Aucun trade sur ce portefeuille pour l’instant.
+                      </p>
+                    ) : (
+                      <div className="space-y-4">
+                        <TradeCategory
+                          title="En attente d’entrée"
+                          trades={pending}
+                          onClose={closeTrade}
+                        />
+                        <TradeCategory
+                          title="En cours"
+                          trades={running}
+                          onClose={closeTrade}
+                        />
+                        <TradeCategory
+                          title="TP"
+                          trades={tps}
+                        />
+                        <TradeCategory
+                          title="SL"
+                          trades={sls}
+                        />
+                        {otherClosed.length > 0 ? (
+                          <TradeCategory
+                            title="Autres clôtures"
+                            trades={otherClosed}
+                          />
+                        ) : null}
+                      </div>
+                    )}
+                  </div>
+                ) : null}
+              </div>
+            );
+          })
+        )}
+      </section>
+
+      <section className="bb-reveal relative overflow-hidden rounded-[1.75rem] border border-white/10 px-5 py-8 sm:px-8 sm:py-10">
+        <div className="pointer-events-none absolute inset-0 bb-hero-glow" />
+        <div className="relative">
+          <p className="font-heading text-[0.7rem] tracking-[0.35em] text-primary uppercase">
+            BoriazBot
+          </p>
+          <h1 className="font-heading mt-3 max-w-xl text-4xl leading-[0.95] tracking-tight text-foreground sm:text-5xl">
+            Alignement
+            <span className="block text-primary">avant le trade</span>
+          </h1>
+          <p className="mt-4 max-w-lg text-sm leading-relaxed text-muted-foreground sm:text-base">
+            Score unique TF × crowd × Nansen × IA. Watchlist multi-TF. Sureté max
+            Telegram. Compte {user?.name ?? "invité"} · {acc?.bankrollStartEur ?? 1000} €
+            {liveAt
+              ? ` · maj ${new Date(liveAt).toLocaleTimeString("fr-FR")}`
+              : ""}
+          </p>
+          <div className="mt-5 flex flex-wrap gap-2 text-xs">
+            <span className="rounded-md border border-primary/30 bg-primary/10 px-2.5 py-1 text-primary">
+              Stockage {data.storage.backend === "upstash" ? "Upstash KV" : "/tmp"}
+            </span>
+            <span className="rounded-md border border-white/10 bg-white/5 px-2.5 py-1 text-muted-foreground">
+              {data.maxSafetyMode ? "Sureté max ON" : "Sureté max OFF"}
+            </span>
+          </div>
+        </div>
+      </section>
 
       {data.divergences.length > 0 ? (
         <section className="bb-reveal space-y-2 rounded-2xl border border-amber-500/35 bg-amber-500/8 px-4 py-3">
@@ -538,30 +743,106 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
         </section>
       ) : null}
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        {data.cards.map((card, i) => (
-          <article
-            key={card.coin}
-            className="bb-reveal group rounded-2xl border border-white/8 bg-card/50 p-4 backdrop-blur-sm transition-colors duration-300 hover:border-primary/25 hover:bg-card/80"
-            style={{ animationDelay: `${120 + i * 40}ms` }}
-          >
-            <div className="flex items-start justify-between gap-2">
+      <section className="bb-reveal space-y-3">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h2 className="font-heading text-lg font-semibold">Cryptos</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Choisis une crypto dans la barre — détail et graphique en dessous.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {(
+              [
+                ["all", "Toutes"],
+                ["long", "Long"],
+                ["short", "Short"],
+                ["wait", "Attendre"],
+              ] as const
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setCryptoFilter(id)}
+                className={`rounded-md border px-2.5 py-1 text-[11px] transition-colors ${
+                  cryptoFilter === id
+                    ? "border-primary/40 bg-primary/15 text-primary"
+                    : "border-white/10 bg-white/5 text-muted-foreground hover:border-white/20"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="-mx-1 overflow-x-auto pb-1 [scrollbar-width:thin]">
+          <div className="flex min-w-max gap-2 px-1">
+            {filteredCards.length === 0 ? (
+              <p className="px-2 py-3 text-sm text-muted-foreground">
+                Aucune crypto pour ce filtre.
+              </p>
+            ) : (
+              filteredCards.map((card) => {
+                const active = card.coin === activeCoin;
+                return (
+                  <button
+                    key={card.coin}
+                    type="button"
+                    onClick={() => setSelectedCoin(card.coin)}
+                    className={`flex min-w-[7.5rem] items-center gap-2 rounded-xl border px-3 py-2.5 text-left transition-colors ${
+                      active
+                        ? "border-primary/45 bg-primary/12"
+                        : "border-white/10 bg-card/40 hover:border-white/20 hover:bg-card/70"
+                    }`}
+                  >
+                    <CryptoLogo symbol={card.coin} size={28} />
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium leading-tight">
+                        {card.label}
+                      </p>
+                      <p
+                        className={`text-[10px] leading-tight ${
+                          card.direction === "long"
+                            ? "text-long"
+                            : card.direction === "short"
+                              ? "text-short"
+                              : "text-muted-foreground"
+                        }`}
+                      >
+                        {card.direction === "wait"
+                          ? "Attendre"
+                          : card.direction.toUpperCase()}
+                        {card.alignment
+                          ? ` · ${card.alignment.score}`
+                          : ""}
+                      </p>
+                    </div>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        {selectedCard ? (
+          <article className="rounded-2xl border border-white/10 bg-card/50 p-4 sm:p-5">
+            <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="flex items-center gap-3">
-                <CryptoLogo symbol={card.coin} size={44} />
+                <CryptoLogo symbol={selectedCard.coin} size={48} />
                 <div>
-                  <p className="font-heading text-lg font-semibold tracking-tight">
-                    {card.label}
+                  <p className="font-heading text-xl font-semibold tracking-tight sm:text-2xl">
+                    {selectedCard.label}
                   </p>
-                  <p className="numeric text-xl font-medium">
-                    {formatPx(card.price)}
+                  <p className="numeric text-2xl font-medium">
+                    {formatPx(selectedCard.price)}
                   </p>
                 </div>
               </div>
-              {card.alignment ? (
+              {selectedCard.alignment ? (
                 <AlignBadge
-                  score={card.alignment.score}
-                  label={card.alignment.label}
-                  compact
+                  score={selectedCard.alignment.score}
+                  label={selectedCard.alignment.label}
                 />
               ) : null}
             </div>
@@ -570,304 +851,158 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
               <Badge
                 variant="outline"
                 className={
-                  card.direction === "long"
+                  selectedCard.direction === "long"
                     ? "border-long/40 bg-long/10 text-long"
-                    : card.direction === "short"
+                    : selectedCard.direction === "short"
                       ? "border-short/40 bg-short/10 text-short"
                       : ""
                 }
               >
-                {card.direction === "wait"
+                {selectedCard.direction === "wait"
                   ? "Attendre"
-                  : card.direction.toUpperCase()}
+                  : selectedCard.direction.toUpperCase()}
               </Badge>
-              {card.entryMode ? (
+              {selectedCard.entryMode ? (
                 <Badge variant="outline" className="text-[10px]">
-                  {card.entryMode === "limit_wait" ? "Limite" : "Marché"}
+                  {selectedCard.entryMode === "limit_wait" ? "Limite" : "Marché"}
+                </Badge>
+              ) : null}
+              {selectedCard.confidence > 0 ? (
+                <Badge variant="outline" className="text-[10px]">
+                  Conf. {selectedCard.confidence}
                 </Badge>
               ) : null}
             </div>
 
-            {card.alignment ? (
-              <p className="mt-2 text-[10px] text-muted-foreground">
-                {card.alignment.breakdown}
+            {selectedCard.alignment ? (
+              <p className="mt-2 text-xs text-muted-foreground">
+                {selectedCard.alignment.breakdown}
               </p>
             ) : null}
 
-            {(card.direction === "long" || card.direction === "short") &&
-            (card.entry || card.tp || card.sl) ? (
-              <div className="mt-3 grid grid-cols-3 gap-1.5 text-[11px]">
-                <div className="rounded-md bg-muted/25 px-1.5 py-1">
-                  <p className="text-muted-foreground">Entrée</p>
+            {(selectedCard.direction === "long" ||
+              selectedCard.direction === "short") &&
+            (selectedCard.entry || selectedCard.tp || selectedCard.sl) ? (
+              <div className="mt-4 grid grid-cols-3 gap-2 text-sm sm:grid-cols-5">
+                <div className="rounded-lg bg-muted/25 px-2.5 py-2">
+                  <p className="text-[11px] text-muted-foreground">Entrée</p>
                   <p className="numeric font-medium">
-                    {card.entry != null ? formatPx(card.entry) : "—"}
+                    {selectedCard.entry != null
+                      ? formatPx(selectedCard.entry)
+                      : "—"}
                   </p>
                 </div>
-                <div className="rounded-md bg-muted/25 px-1.5 py-1">
-                  <p className="text-muted-foreground">TP</p>
+                <div className="rounded-lg bg-muted/25 px-2.5 py-2">
+                  <p className="text-[11px] text-muted-foreground">TP</p>
                   <p className="numeric font-medium text-long">
-                    {card.tp != null ? formatPx(card.tp) : "—"}
+                    {selectedCard.tp != null ? formatPx(selectedCard.tp) : "—"}
                   </p>
                 </div>
-                <div className="rounded-md bg-muted/25 px-1.5 py-1">
-                  <p className="text-muted-foreground">SL</p>
+                <div className="rounded-lg bg-muted/25 px-2.5 py-2">
+                  <p className="text-[11px] text-muted-foreground">SL</p>
                   <p className="numeric font-medium text-short">
-                    {card.sl != null ? formatPx(card.sl) : "—"}
+                    {selectedCard.sl != null ? formatPx(selectedCard.sl) : "—"}
+                  </p>
+                </div>
+                <div className="rounded-lg bg-muted/25 px-2.5 py-2">
+                  <p className="text-[11px] text-muted-foreground">15m</p>
+                  <p
+                    className={`numeric font-medium ${
+                      selectedCard.change15mPct === null
+                        ? ""
+                        : signedClass(selectedCard.change15mPct)
+                    }`}
+                  >
+                    {selectedCard.change15mPct === null
+                      ? "n/d"
+                      : formatPct(selectedCard.change15mPct, 2)}
+                  </p>
+                </div>
+                <div className="rounded-lg bg-muted/25 px-2.5 py-2">
+                  <p className="text-[11px] text-muted-foreground">2h</p>
+                  <p
+                    className={`numeric font-medium ${
+                      selectedCard.change2hPct === null
+                        ? ""
+                        : signedClass(selectedCard.change2hPct)
+                    }`}
+                  >
+                    {selectedCard.change2hPct === null
+                      ? "n/d"
+                      : formatPct(selectedCard.change2hPct, 2)}
                   </p>
                 </div>
               </div>
-            ) : null}
-
-            <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-              <div className="rounded-lg bg-muted/20 px-2 py-1.5">
-                <p className="text-muted-foreground">15m</p>
-                <p
-                  className={`numeric font-medium ${
-                    card.change15mPct === null
-                      ? ""
-                      : signedClass(card.change15mPct)
-                  }`}
-                >
-                  {card.change15mPct === null
-                    ? "n/d"
-                    : formatPct(card.change15mPct, 2)}
-                </p>
+            ) : (
+              <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
+                <div className="rounded-lg bg-muted/25 px-2.5 py-2">
+                  <p className="text-[11px] text-muted-foreground">15m</p>
+                  <p
+                    className={`numeric font-medium ${
+                      selectedCard.change15mPct === null
+                        ? ""
+                        : signedClass(selectedCard.change15mPct)
+                    }`}
+                  >
+                    {selectedCard.change15mPct === null
+                      ? "n/d"
+                      : formatPct(selectedCard.change15mPct, 2)}
+                  </p>
+                </div>
+                <div className="rounded-lg bg-muted/25 px-2.5 py-2">
+                  <p className="text-[11px] text-muted-foreground">2h</p>
+                  <p
+                    className={`numeric font-medium ${
+                      selectedCard.change2hPct === null
+                        ? ""
+                        : signedClass(selectedCard.change2hPct)
+                    }`}
+                  >
+                    {selectedCard.change2hPct === null
+                      ? "n/d"
+                      : formatPct(selectedCard.change2hPct, 2)}
+                  </p>
+                </div>
               </div>
-              <div className="rounded-lg bg-muted/20 px-2 py-1.5">
-                <p className="text-muted-foreground">2h</p>
-                <p
-                  className={`numeric font-medium ${
-                    card.change2hPct === null ? "" : signedClass(card.change2hPct)
-                  }`}
-                >
-                  {card.change2hPct === null
-                    ? "n/d"
-                    : formatPct(card.change2hPct, 2)}
-                </p>
-              </div>
-            </div>
+            )}
 
-            {card.alignment?.divergence ? (
-              <p className="mt-2 text-[11px] text-amber-200">
-                {card.alignment.divergence}
+            {selectedCard.alignment?.divergence ? (
+              <p className="mt-2 text-xs text-amber-200">
+                {selectedCard.alignment.divergence}
               </p>
             ) : null}
 
-            {card.tfSummary ? (
-              <p className="mt-2 line-clamp-2 text-[10px] text-muted-foreground">
-                TF {card.tfSummary}
+            {selectedCard.tfSummary ? (
+              <p className="mt-2 text-xs text-muted-foreground">
+                TF {selectedCard.tfSummary}
               </p>
             ) : null}
-            <div className="mt-3">
+
+            <div className="mt-4">
               <PriceChart
-                coin={card.coin}
+                coin={selectedCard.coin}
                 interval="15m"
                 allowToggle
-                height={140}
-                compact
+                height={220}
                 side={
-                  card.direction === "long" || card.direction === "short"
-                    ? card.direction
+                  selectedCard.direction === "long" ||
+                  selectedCard.direction === "short"
+                    ? selectedCard.direction
                     : null
                 }
-                entryPx={card.entry}
-                tp={card.tp}
-                sl={card.sl}
+                entryPx={selectedCard.entry}
+                tp={selectedCard.tp}
+                sl={selectedCard.sl}
               />
             </div>
 
-            <p className="mt-2 line-clamp-3 text-xs text-muted-foreground">
-              {card.blurb}
+            <p className="mt-3 text-sm text-muted-foreground">
+              {selectedCard.blurb}
             </p>
           </article>
-        ))}
-      </div>
-
-      <section className="bb-reveal space-y-3">
-        <div>
-          <h2 className="font-heading text-lg font-semibold">Portefeuilles</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Défaut toujours actif. Déplie pour voir equity, paramètres et trades
-            de chaque profil (réglages dans le Lab).
-          </p>
-        </div>
-        {portfolioViews.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            Aucun portefeuille — ouvre le Lab pour en créer.
-          </p>
-        ) : (
-          portfolioViews.map((pf) => {
-            const expanded = openPf[pf.profile.id] ?? false;
-            const delta = pf.account.equityEur - pf.account.bankrollStartEur;
-            const trades = paperLive.filter(
-              (t) => (t.portfolioId || "default") === pf.profile.id,
-            );
-            const launched = trades.length;
-            const closed = trades.filter(
-              (t) =>
-                t.status === "tp" ||
-                t.status === "sl" ||
-                t.status === "closed_manual" ||
-                t.status === "expired" ||
-                t.status === "invalidated",
-            );
-            const wins = closed.filter(
-              (t) => t.status === "tp" || (t.pnlEur ?? 0) > 0,
-            );
-            const winRatePct =
-              closed.length > 0 ? (wins.length / closed.length) * 100 : null;
-            const pending = trades.filter((t) => t.status === "pending");
-            const running = trades.filter((t) => t.status === "open");
-            const tps = trades.filter((t) => t.status === "tp");
-            const sls = trades.filter((t) => t.status === "sl");
-            const otherClosed = trades.filter(
-              (t) =>
-                t.status === "closed_manual" ||
-                t.status === "expired" ||
-                t.status === "invalidated",
-            );
-            return (
-              <div
-                key={pf.profile.id}
-                className="rounded-2xl border border-white/10 bg-card/40"
-              >
-                <button
-                  type="button"
-                  className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
-                  onClick={() => togglePf(pf.profile.id)}
-                  aria-expanded={expanded}
-                >
-                  <div className="min-w-0">
-                    <p className="font-medium">
-                      {pf.profile.name}
-                      {pf.profile.isDefault ? (
-                        <span className="ml-2 text-[10px] tracking-wide text-primary uppercase">
-                          défaut
-                        </span>
-                      ) : null}
-                      {pf.profile.strategy === "smc" ||
-                      pf.profile.id === "boriaz" ? (
-                        <span className="ml-2 text-[10px] tracking-wide text-amber-400 uppercase">
-                          SMC 2%
-                        </span>
-                      ) : null}
-                    </p>
-                    <p className="mt-0.5 text-xs text-muted-foreground">
-                      {pf.profile.strategy === "smc"
-                        ? `SMC top-down · risque ${pf.profile.riskPct ?? 2}% · TP1 50%+BE`
-                        : `TF ${pf.profile.timeframe} · risque ${pf.profile.riskLevel}/5`}
-                      {" · "}lev max {pf.profile.maxLeverage}× · R:R ≥{" "}
-                      {pf.profile.minRR}
-                      {" · "}
-                      <span className="text-foreground">
-                        WR{" "}
-                        {winRatePct == null
-                          ? "n/d"
-                          : `${winRatePct.toFixed(0)} %`}
-                      </span>
-                      {" · "}
-                      <span className="text-foreground">
-                        {launched} trade{launched > 1 ? "s" : ""} lancé
-                        {launched > 1 ? "s" : ""}
-                      </span>
-                      {" · "}
-                      {pending.length + running.length} ouvert
-                      {pending.length + running.length > 1 ? "s" : ""}
-                    </p>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-3">
-                    <div className="text-right">
-                      <p
-                        className={`numeric text-sm font-semibold ${signedClass(delta)}`}
-                      >
-                        {pf.account.equityEur.toFixed(2)} €
-                      </p>
-                      <p className={`numeric text-[11px] ${signedClass(delta)}`}>
-                        {delta >= 0 ? "+" : ""}
-                        {delta.toFixed(2)} €
-                      </p>
-                    </div>
-                    <ChevronDownIcon
-                      className={`size-4 text-muted-foreground transition-transform ${
-                        expanded ? "rotate-180" : ""
-                      }`}
-                    />
-                  </div>
-                </button>
-
-                {expanded ? (
-                  <div className="space-y-3 border-t border-white/8 px-4 py-3">
-                    <div className="grid gap-2 sm:grid-cols-4 text-xs">
-                      <Stat
-                        label="Capital"
-                        value={`${pf.profile.bankrollEur} €`}
-                      />
-                      <Stat
-                        label="Marge / trade"
-                        value={`${pf.profile.sizePct} %`}
-                      />
-                      <Stat
-                        label="Winrate"
-                        value={
-                          winRatePct == null
-                            ? "n/d"
-                            : `${winRatePct.toFixed(0)} % (${wins.length}/${closed.length})`
-                        }
-                      />
-                      <Stat
-                        label="Trades lancés"
-                        value={`${launched}`}
-                      />
-                    </div>
-                    <p className="text-[11px] text-muted-foreground">
-                      {pf.profile.requireAiGate ? "Gate IA ON" : "Gate IA OFF"}
-                      {" · "}
-                      {pf.profile.maxSafetyMode
-                        ? "Sureté max ON"
-                        : "Sureté max OFF"}
-                      {" · "}
-                      Objectif {pf.profile.targetEur} €
-                    </p>
-
-                    {trades.length === 0 ? (
-                      <p className="text-xs text-muted-foreground">
-                        Aucun trade sur ce portefeuille pour l’instant.
-                      </p>
-                    ) : (
-                      <div className="space-y-4">
-                        <TradeCategory
-                          title="En attente d’entrée"
-                          trades={pending}
-                          onClose={closeTrade}
-                        />
-                        <TradeCategory
-                          title="En cours"
-                          trades={running}
-                          onClose={closeTrade}
-                        />
-                        <TradeCategory
-                          title="TP"
-                          trades={tps}
-                        />
-                        <TradeCategory
-                          title="SL"
-                          trades={sls}
-                        />
-                        {otherClosed.length > 0 ? (
-                          <TradeCategory
-                            title="Autres clôtures"
-                            trades={otherClosed}
-                          />
-                        ) : null}
-                      </div>
-                    )}
-                  </div>
-                ) : null}
-              </div>
-            );
-          })
-        )}
+        ) : null}
       </section>
+
 
       <div className="flex flex-wrap gap-2">
         <Button variant="outline" size="sm" onClick={() => onOpenTab?.("lab")}>
