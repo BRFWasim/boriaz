@@ -402,6 +402,21 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
               frais {(heroTrade.feesEur ?? 0).toFixed(2)} €
             </span>
           </div>
+          <div className="mt-4">
+            <PriceChart
+              coin={heroTrade.coin}
+              interval="15m"
+              allowToggle
+              height={210}
+              side={heroTrade.side}
+              entryAt={heroTrade.filledAt ?? heroTrade.openedAt}
+              entryPx={heroTrade.entry}
+              exitAt={heroTrade.closedAt}
+              exitPx={heroTrade.exitPx}
+              tp={heroTrade.tp}
+              sl={heroTrade.sl}
+            />
+          </div>
           {heroTrade.status === "open" || heroTrade.status === "pending" ? (
             <button
               type="button"
@@ -648,8 +663,13 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
                 coin={card.coin}
                 interval="15m"
                 allowToggle
-                height={96}
+                height={140}
                 compact
+                side={
+                  card.direction === "long" || card.direction === "short"
+                    ? card.direction
+                    : null
+                }
                 entryPx={card.entry}
                 tp={card.tp}
                 sl={card.sl}
@@ -1024,7 +1044,8 @@ function PortfolioTradeRow({
           coin={t.coin}
           interval="15m"
           allowToggle
-          height={120}
+          height={190}
+          side={t.side}
           entryAt={takenAt}
           entryPx={t.entry}
           exitAt={t.closedAt}

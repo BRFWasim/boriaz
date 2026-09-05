@@ -1,7 +1,21 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import {
+  CandlestickSeries,
+  ColorType,
+  createChart,
+  createSeriesMarkers,
+  LineStyle,
+  type IChartApi,
+  type IPriceLine,
+  type ISeriesApi,
+  type ISeriesMarkersPluginApi,
+  type Time,
+  type UTCTimestamp,
+} from "lightweight-charts";
 import { readResponseJson } from "@/lib/safe-json";
+import { formatPx } from "@/lib/format";
 
 export type ChartCandle = {
   t: number;
@@ -11,20 +25,15 @@ export type ChartCandle = {
   c: number;
 };
 
-type Marker = {
-  at: number;
-  price: number;
-  label: string;
-  tone: "entry" | "exit" | "tp" | "sl";
-};
-
 type Props = {
   coin: string;
-  /** Défaut 15m */
+  /** Default 15m */
   interval?: "15m" | "1h";
-  /** Permettre le switch 15m / 1h */
+  /** Toggle 15m / 1h */
   allowToggle?: boolean;
   height?: number;
+  /** long => TP above / SL below (inverted for short) */
+  side?: "long" | "short" | null;
   entryAt?: number | null;
   entryPx?: number | null;
   exitAt?: number | null;
@@ -32,22 +41,50 @@ type Props = {
   tp?: number | null;
   sl?: number | null;
   className?: string;
-  /** Mode compact (cartes crypto) */
   compact?: boolean;
 };
 
-const TONE: Record<Marker["tone"], string> = {
-  entry: "#38bdf8",
-  exit: "#a78bfa",
-  tp: "#34d399",
-  sl: "#f87171",
+type ZoneBox = {
+  top: number;
+  height: number;
+  left: number;
+  width: number;
+  tone: "tp" | "sl";
 };
+
+type TradeSnapshot = {
+  side: "long" | "short" | null;
+  entryAt: number | null;
+  entryPx: number | null;
+  exitAt: number | null;
+  exitPx: number | null;
+  tp: number | null;
+  sl: number | null;
+};
+
+function toUtcSec(ms: number): UTCTimestamp {
+  return Math.floor(ms / 1000) as UTCTimestamp;
+}
+
+function isLongSide(
+  side: "long" | "short" | null | undefined,
+  entry: number,
+  tp: number | null | undefined,
+  sl: number | null | undefined,
+): boolean {
+  if (side === "long") return true;
+  if (side === "short") return false;
+  if (tp != null && tp > 0 && entry > 0) return tp > entry;
+  if (sl != null && sl > 0 && entry > 0) return sl < entry;
+  return true;
+}
 
 export function PriceChart({
   coin,
   interval: intervalProp = "15m",
   allowToggle = false,
-  height = 140,
+  height = 160,
+  side = null,
   entryAt = null,
   entryPx = null,
   exitAt = null,
@@ -61,6 +98,24 @@ export function PriceChart({
   const [candles, setCandles] = useState<ChartCandle[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [zones, setZones] = useState<ZoneBox[]>([]);
+
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const markersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
+  const linesRef = useRef<IPriceLine[]>([]);
+  const paintRef = useRef<(() => void) | null>(null);
+  const tradeRef = useRef<TradeSnapshot>({
+    side,
+    entryAt,
+    entryPx,
+    exitAt,
+    exitPx,
+    tp,
+    sl,
+  });
+  tradeRef.current = { side, entryAt, entryPx, exitAt, exitPx, tp, sl };
 
   useEffect(() => {
     setInterval(intervalProp);
@@ -72,12 +127,13 @@ export function PriceChart({
       setLoading(true);
       setError(null);
       try {
-        const pad =
-          interval === "1h" ? 48 * 3600_000 : 18 * 3600_000;
+        const pad = interval === "1h" ? 48 * 3600_000 : 18 * 3600_000;
         const fromBase = entryAt
           ? Math.min(entryAt - pad * 0.35, Date.now() - pad)
           : Date.now() - pad;
-        const to = exitAt ? Math.max(exitAt + pad * 0.15, Date.now()) : Date.now();
+        const to = exitAt
+          ? Math.max(exitAt + pad * 0.15, Date.now())
+          : Date.now();
         const qs = new URLSearchParams({
           coin,
           interval,
@@ -109,61 +165,275 @@ export function PriceChart({
     };
   }, [coin, interval, entryAt, exitAt]);
 
-  const markers = useMemo(() => {
-    const list: Marker[] = [];
-    if (entryAt != null && entryPx != null && entryPx > 0) {
-      list.push({ at: entryAt, price: entryPx, label: "Entrée", tone: "entry" });
-    }
-    if (exitAt != null && exitPx != null && exitPx > 0) {
-      list.push({ at: exitAt, price: exitPx, label: "Sortie", tone: "exit" });
-    }
-    return list;
-  }, [entryAt, entryPx, exitAt, exitPx]);
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
 
-  const chart = useMemo(() => {
-    if (candles.length < 2) return null;
-    const w = 100;
-    const h = 100;
-    const padY = 8;
-    const prices = candles.map((c) => c.c);
-    let min = Math.min(...prices);
-    let max = Math.max(...prices);
-    for (const m of markers) {
-      min = Math.min(min, m.price);
-      max = Math.max(max, m.price);
+    const chart = createChart(el, {
+      width: el.clientWidth || 320,
+      height,
+      layout: {
+        background: { type: ColorType.Solid, color: "transparent" },
+        textColor: "rgba(148, 163, 184, 0.9)",
+        fontSize: compact ? 9 : 10,
+        attributionLogo: false,
+      },
+      grid: {
+        vertLines: { color: "rgba(148, 163, 184, 0.12)" },
+        horzLines: { color: "rgba(148, 163, 184, 0.12)" },
+      },
+      rightPriceScale: {
+        borderVisible: false,
+        scaleMargins: { top: 0.1, bottom: 0.1 },
+      },
+      timeScale: {
+        borderVisible: false,
+        timeVisible: true,
+        secondsVisible: false,
+      },
+      crosshair: {
+        vertLine: { color: "rgba(148, 163, 184, 0.35)", width: 1 },
+        horzLine: { color: "rgba(148, 163, 184, 0.35)", width: 1 },
+      },
+      handleScroll: !compact,
+      handleScale: !compact,
+    });
+
+    const series = chart.addSeries(CandlestickSeries, {
+      // Style proche TradingView mobile : haussière bleue, baissière sombre
+      upColor: "#3b82f6",
+      downColor: "#0f172a",
+      borderVisible: true,
+      borderUpColor: "#60a5fa",
+      borderDownColor: "#cbd5e1",
+      wickUpColor: "#60a5fa",
+      wickDownColor: "#e2e8f0",
+    });
+
+    chartRef.current = chart;
+    seriesRef.current = series;
+    markersRef.current = createSeriesMarkers(series, []);
+
+    const paintZones = () => {
+      const c = chartRef.current;
+      const s = seriesRef.current;
+      const host = wrapRef.current;
+      const tr = tradeRef.current;
+      if (!c || !s || !host || tr.entryPx == null || tr.entryPx <= 0) {
+        setZones([]);
+        return;
+      }
+
+      const yEntry = s.priceToCoordinate(tr.entryPx);
+      if (yEntry == null) {
+        setZones([]);
+        return;
+      }
+
+      const long = isLongSide(tr.side, tr.entryPx, tr.tp, tr.sl);
+      const ts = c.timeScale();
+      const xStart =
+        tr.entryAt != null
+          ? (ts.timeToCoordinate(toUtcSec(tr.entryAt)) ?? 0)
+          : 0;
+      const xEnd =
+        tr.exitAt != null
+          ? (ts.timeToCoordinate(toUtcSec(tr.exitAt)) ?? host.clientWidth)
+          : host.clientWidth;
+      const left = Math.max(0, Math.min(xStart, xEnd));
+      const width = Math.max(10, Math.abs(xEnd - xStart));
+      const next: ZoneBox[] = [];
+
+      if (tr.tp != null && tr.tp > 0) {
+        const ok = long ? tr.tp > tr.entryPx : tr.tp < tr.entryPx;
+        const yTp = s.priceToCoordinate(tr.tp);
+        if (ok && yTp != null) {
+          next.push({
+            top: Math.min(yEntry, yTp),
+            height: Math.max(2, Math.abs(yTp - yEntry)),
+            left,
+            width,
+            tone: "tp",
+          });
+        }
+      }
+
+      if (tr.sl != null && tr.sl > 0) {
+        const ok = long ? tr.sl < tr.entryPx : tr.sl > tr.entryPx;
+        const ySl = s.priceToCoordinate(tr.sl);
+        if (ok && ySl != null) {
+          next.push({
+            top: Math.min(yEntry, ySl),
+            height: Math.max(2, Math.abs(ySl - yEntry)),
+            left,
+            width,
+            tone: "sl",
+          });
+        }
+      }
+
+      setZones(next);
+    };
+
+    paintRef.current = paintZones;
+
+    const ro = new ResizeObserver(() => {
+      if (!wrapRef.current || !chartRef.current) return;
+      chartRef.current.applyOptions({ width: wrapRef.current.clientWidth });
+      paintZones();
+    });
+    ro.observe(el);
+    chart.timeScale().subscribeVisibleLogicalRangeChange(paintZones);
+
+    return () => {
+      ro.disconnect();
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(paintZones);
+      paintRef.current = null;
+      chart.remove();
+      chartRef.current = null;
+      seriesRef.current = null;
+      markersRef.current = null;
+      linesRef.current = [];
+    };
+  }, [height, compact]);
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    const series = seriesRef.current;
+    if (!chart || !series) return;
+
+    const clearLines = () => {
+      for (const line of linesRef.current) {
+        try {
+          series.removePriceLine(line);
+        } catch {
+          /* ignore */
+        }
+      }
+      linesRef.current = [];
+    };
+
+    if (candles.length < 2) {
+      series.setData([]);
+      clearLines();
+      markersRef.current?.setMarkers([]);
+      setZones([]);
+      return;
+    }
+
+    // Trop de bougies sur un petit canvas = trait continu illisible.
+    // On garde les dernières pour voir clairement le corps des bougies.
+    const maxBars = compact ? 48 : 96;
+    const visible = candles.length > maxBars ? candles.slice(-maxBars) : candles;
+    series.setData(
+      visible.map((c) => ({
+        time: toUtcSec(c.t),
+        open: c.o,
+        high: c.h,
+        low: c.l,
+        close: c.c,
+      })),
+    );
+    chart.timeScale().applyOptions({
+      barSpacing: compact ? 5 : 7,
+      minBarSpacing: compact ? 3 : 4,
+    });
+    chart.timeScale().fitContent();
+
+    clearLines();
+    if (entryPx != null && entryPx > 0) {
+      linesRef.current.push(
+        series.createPriceLine({
+          price: entryPx,
+          color: "#94a3b8",
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: "Entrée",
+        }),
+      );
     }
     if (tp != null && tp > 0) {
-      min = Math.min(min, tp);
-      max = Math.max(max, tp);
+      linesRef.current.push(
+        series.createPriceLine({
+          price: tp,
+          color: "#22c55e",
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: "TP",
+        }),
+      );
     }
     if (sl != null && sl > 0) {
-      min = Math.min(min, sl);
-      max = Math.max(max, sl);
+      linesRef.current.push(
+        series.createPriceLine({
+          price: sl,
+          color: "#ef4444",
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: "SL",
+        }),
+      );
     }
-    const span = max - min || 1;
-    const t0 = candles[0]!.t;
-    const t1 = candles[candles.length - 1]!.t;
-    const tSpan = Math.max(1, t1 - t0);
-    const xOf = (t: number) => ((t - t0) / tSpan) * w;
-    const yOf = (p: number) =>
-      padY + (1 - (p - min) / span) * (h - padY * 2);
-    const line = candles
-      .map((c, i) => `${i === 0 ? "M" : "L"}${xOf(c.t).toFixed(2)},${yOf(c.c).toFixed(2)}`)
-      .join(" ");
-    const area =
-      line +
-      ` L${xOf(t1).toFixed(2)},${(h - 1).toFixed(2)} L${xOf(t0).toFixed(2)},${(h - 1).toFixed(2)} Z`;
-    const up = candles[candles.length - 1]!.c >= candles[0]!.c;
-    return { line, area, xOf, yOf, up, min, max };
-  }, [candles, markers, tp, sl]);
+    if (exitPx != null && exitPx > 0) {
+      linesRef.current.push(
+        series.createPriceLine({
+          price: exitPx,
+          color: "#a78bfa",
+          lineWidth: 1,
+          lineStyle: LineStyle.Solid,
+          axisLabelVisible: true,
+          title: "Sortie",
+        }),
+      );
+    }
+
+    const markers: {
+      time: UTCTimestamp;
+      position: "belowBar" | "aboveBar";
+      color: string;
+      shape: "arrowUp" | "arrowDown" | "circle";
+      text: string;
+    }[] = [];
+
+    if (entryAt != null && entryPx != null && entryPx > 0) {
+      const long = isLongSide(side, entryPx, tp, sl);
+      markers.push({
+        time: toUtcSec(entryAt),
+        position: long ? "belowBar" : "aboveBar",
+        color: "#38bdf8",
+        shape: long ? "arrowUp" : "arrowDown",
+        text: "Entrée",
+      });
+    }
+    if (exitAt != null && exitPx != null && exitPx > 0) {
+      markers.push({
+        time: toUtcSec(exitAt),
+        position: "aboveBar",
+        color: "#a78bfa",
+        shape: "circle",
+        text: "Sortie",
+      });
+    }
+    markersRef.current?.setMarkers(markers);
+
+    requestAnimationFrame(() => {
+      paintRef.current?.();
+    });
+  }, [candles, entryAt, entryPx, exitAt, exitPx, tp, sl, side, compact]);
+
+  const longHint =
+    entryPx != null ? isLongSide(side, entryPx, tp, sl) : true;
 
   return (
     <div className={`w-full ${className}`}>
       {!compact ? (
         <div className="mb-1 flex items-center justify-between gap-2">
           <p className="text-[10px] tracking-wide text-muted-foreground uppercase">
-            {coin} · {interval}
-            {entryPx != null ? " · point d’entrée bot" : ""}
+            {coin} · {interval} · bougies
+            {entryPx != null ? " · setup trade" : ""}
           </p>
           {allowToggle ? (
             <div className="flex gap-1">
@@ -187,129 +457,80 @@ export function PriceChart({
       ) : null}
 
       <div
-        className="relative overflow-hidden rounded-lg border border-white/8 bg-background/40"
+        className="relative overflow-hidden rounded-lg border border-white/8 bg-[#0b1220]/70"
         style={{ height }}
       >
+        <div ref={wrapRef} className="absolute inset-0" />
+
+        {zones.map((z, i) => (
+          <div
+            key={`${z.tone}-${i}`}
+            className="pointer-events-none absolute z-[1]"
+            style={{
+              top: z.top,
+              left: z.left,
+              width: z.width,
+              height: z.height,
+              background:
+                z.tone === "tp"
+                  ? "rgba(34, 197, 94, 0.22)"
+                  : "rgba(239, 68, 68, 0.22)",
+              borderTop:
+                z.tone === "tp"
+                  ? "1px solid rgba(34, 197, 94, 0.65)"
+                  : undefined,
+              borderBottom:
+                z.tone === "sl"
+                  ? "1px solid rgba(239, 68, 68, 0.65)"
+                  : undefined,
+            }}
+          />
+        ))}
+
         {loading ? (
-          <p className="absolute inset-0 flex items-center justify-center text-[11px] text-muted-foreground">
+          <p className="pointer-events-none absolute inset-0 z-[2] flex items-center justify-center text-[11px] text-muted-foreground">
             Chargement…
           </p>
-        ) : error ? (
-          <p className="absolute inset-0 flex items-center justify-center px-2 text-center text-[11px] text-muted-foreground">
+        ) : null}
+        {error ? (
+          <p className="pointer-events-none absolute inset-0 z-[2] flex items-center justify-center px-2 text-center text-[11px] text-muted-foreground">
             {error}
           </p>
-        ) : !chart ? (
-          <p className="absolute inset-0 flex items-center justify-center text-[11px] text-muted-foreground">
+        ) : null}
+        {!loading && !error && candles.length < 2 ? (
+          <p className="pointer-events-none absolute inset-0 z-[2] flex items-center justify-center text-[11px] text-muted-foreground">
             Pas assez de bougies
           </p>
-        ) : (
-          <svg
-            viewBox="0 0 100 100"
-            preserveAspectRatio="none"
-            className="h-full w-full"
-            role="img"
-            aria-label={`Graphique ${coin} ${interval}`}
-          >
-            <defs>
-              <linearGradient id={`g-${coin}-${interval}`} x1="0" y1="0" x2="0" y2="1">
-                <stop
-                  offset="0%"
-                  stopColor={chart.up ? "#34d399" : "#f87171"}
-                  stopOpacity="0.35"
-                />
-                <stop
-                  offset="100%"
-                  stopColor={chart.up ? "#34d399" : "#f87171"}
-                  stopOpacity="0"
-                />
-              </linearGradient>
-            </defs>
-            <path d={chart.area} fill={`url(#g-${coin}-${interval})`} />
-            <path
-              d={chart.line}
-              fill="none"
-              stroke={chart.up ? "#34d399" : "#f87171"}
-              strokeWidth="1.2"
-              vectorEffect="non-scaling-stroke"
-            />
-            {tp != null && tp > 0 ? (
-              <line
-                x1="0"
-                x2="100"
-                y1={chart.yOf(tp)}
-                y2={chart.yOf(tp)}
-                stroke={TONE.tp}
-                strokeWidth="0.6"
-                strokeDasharray="2 2"
-                vectorEffect="non-scaling-stroke"
-                opacity="0.8"
-              />
-            ) : null}
-            {sl != null && sl > 0 ? (
-              <line
-                x1="0"
-                x2="100"
-                y1={chart.yOf(sl)}
-                y2={chart.yOf(sl)}
-                stroke={TONE.sl}
-                strokeWidth="0.6"
-                strokeDasharray="2 2"
-                vectorEffect="non-scaling-stroke"
-                opacity="0.8"
-              />
-            ) : null}
-            {markers.map((m) => {
-              const x = chart.xOf(m.at);
-              const y = chart.yOf(m.price);
-              return (
-                <g key={`${m.tone}-${m.at}`}>
-                  <line
-                    x1={x}
-                    x2={x}
-                    y1="0"
-                    y2="100"
-                    stroke={TONE[m.tone]}
-                    strokeWidth="0.7"
-                    strokeDasharray="1.5 1.5"
-                    vectorEffect="non-scaling-stroke"
-                    opacity="0.7"
-                  />
-                  <circle
-                    cx={x}
-                    cy={y}
-                    r="1.8"
-                    fill={TONE[m.tone]}
-                    stroke="#0b1220"
-                    strokeWidth="0.5"
-                  />
-                </g>
-              );
-            })}
-          </svg>
-        )}
+        ) : null}
       </div>
 
-      {!compact && markers.length > 0 ? (
+      {!compact && entryPx != null && entryPx > 0 ? (
         <div className="mt-1 flex flex-wrap gap-2 text-[10px] text-muted-foreground">
-          {markers.map((m) => (
-            <span key={`${m.tone}-l`} className="inline-flex items-center gap-1">
-              <span
-                className="inline-block size-1.5 rounded-full"
-                style={{ background: TONE[m.tone] }}
-              />
-              {m.label}
-            </span>
-          ))}
-          {tp != null ? (
-            <span className="inline-flex items-center gap-1">
+          <span className="inline-flex items-center gap-1">
+            <span className="inline-block size-1.5 rounded-full bg-sky-400" />
+            Entrée {formatPx(entryPx)}
+            {side
+              ? ` · ${side.toUpperCase()}`
+              : longHint
+                ? " · LONG"
+                : " · SHORT"}
+          </span>
+          {tp != null && tp > 0 ? (
+            <span className="inline-flex items-center gap-1 text-long">
               <span className="inline-block size-1.5 rounded-full bg-long" />
-              TP
+              TP {formatPx(tp)}
             </span>
           ) : null}
-          {sl != null ? (
-            <span className="inline-flex items-center gap-1">
+          {sl != null && sl > 0 ? (
+            <span className="inline-flex items-center gap-1 text-short">
               <span className="inline-block size-1.5 rounded-full bg-short" />
-              SL
+              SL {formatPx(sl)}
+            </span>
+          ) : null}
+          {exitPx != null && exitPx > 0 ? (
+            <span className="inline-flex items-center gap-1">
+              <span className="inline-block size-1.5 rounded-full bg-violet-400" />
+              Sortie {formatPx(exitPx)}
             </span>
           ) : null}
         </div>

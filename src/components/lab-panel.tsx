@@ -1132,7 +1132,8 @@ export function LabPanel() {
                     coin={t.coin}
                     interval="15m"
                     allowToggle
-                    height={100}
+                    height={180}
+                    side={t.side}
                     entryAt={t.filledAt ?? t.openedAt}
                     entryPx={t.entry}
                     exitAt={t.closedAt}
