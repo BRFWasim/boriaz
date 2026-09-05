@@ -19,6 +19,8 @@ import {
   ensurePortfolios,
 } from "@/lib/user-types";
 import { syncPaperFromBrowser, writeLocalPaper } from "@/lib/paper-local";
+import { readResponseJson } from "@/lib/safe-json";
+import { PriceChart } from "@/components/price-chart";
 
 const PREFS_LS_KEY = "boriazbot-prefs-v1";
 
@@ -60,7 +62,10 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "close", id }),
       });
-      const json = await res.json();
+      const json = await readResponseJson<{
+        trades?: PaperTrade[];
+        account?: PaperAccount;
+      }>(res);
       if (res.ok) {
         if (Array.isArray(json.trades)) mergePaper(json.trades);
         if (json.account) setAccount(json.account);
@@ -87,7 +92,7 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
       }
       try {
         const res = await fetch("/api/home", { cache: "no-store" });
-        const json = (await res.json()) as HomePayload & { error?: string };
+        const json = await readResponseJson<HomePayload & { error?: string }>(res);
         if (!res.ok) throw new Error(json.error || "Accueil impossible");
         if (alive) {
           setData(json);
@@ -105,11 +110,21 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
     async function loadLive() {
       try {
         const res = await fetch("/api/live", { cache: "no-store" });
-        const json = await res.json();
+        const json = await readResponseJson<{
+          account?: PaperAccount;
+          paper?: PaperTrade[];
+          fetchedAt?: number;
+          quotes?: {
+            coin: string;
+            price: number;
+            change15mPct: number | null;
+            change2hPct: number | null;
+          }[];
+        }>(res);
         if (!res.ok || !alive) return;
-        setAccount(json.account);
+        if (json.account) setAccount(json.account);
         if (Array.isArray(json.paper)) mergePaper(json.paper);
-        setLiveAt(json.fetchedAt);
+        if (json.fetchedAt != null) setLiveAt(json.fetchedAt);
         setData((prev) => {
           if (!prev) return prev;
           const by = new Map(
@@ -124,7 +139,7 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
           );
           return {
             ...prev,
-            account: json.account,
+            account: json.account ?? prev.account,
             cards: prev.cards.map((c) => {
               const q = by.get(c.coin);
               return q
@@ -136,7 +151,7 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
                   }
                 : c;
             }),
-            fetchedAt: json.fetchedAt,
+            fetchedAt: json.fetchedAt ?? prev.fetchedAt,
           };
         });
       } catch {
@@ -228,6 +243,11 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
 
   return (
     <div className="space-y-6">
+      {data.warning ? (
+        <div className="rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-sm text-amber-100">
+          {data.warning}
+        </div>
+      ) : null}
       <section className="bb-reveal relative overflow-hidden rounded-[1.75rem] border border-white/10 px-5 py-8 sm:px-8 sm:py-10">
         <div className="pointer-events-none absolute inset-0 bb-hero-glow" />
         <div className="relative">
@@ -623,6 +643,19 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
                 TF {card.tfSummary}
               </p>
             ) : null}
+            <div className="mt-3">
+              <PriceChart
+                coin={card.coin}
+                interval="15m"
+                allowToggle
+                height={96}
+                compact
+                entryPx={card.entry}
+                tp={card.tp}
+                sl={card.sl}
+              />
+            </div>
+
             <p className="mt-2 line-clamp-3 text-xs text-muted-foreground">
               {card.blurb}
             </p>
@@ -986,6 +1019,20 @@ function PortfolioTradeRow({
           ) : null}
         </div>
       </div>
+      <div className="mt-2.5">
+        <PriceChart
+          coin={t.coin}
+          interval="15m"
+          allowToggle
+          height={120}
+          entryAt={takenAt}
+          entryPx={t.entry}
+          exitAt={t.closedAt}
+          exitPx={t.exitPx}
+          tp={t.tp}
+          sl={t.sl}
+        />
+      </div>
       {(t.justification?.summary || t.note) && (
         <div className="mt-2">
           <button
@@ -1032,12 +1079,12 @@ function AccountBox({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action, name, pin }),
     });
-    const json = await res.json();
+    const json = await readResponseJson<{ error?: string; user?: SessionUser }>(res);
     if (!res.ok) {
       setMsg(json.error || "Échec");
       return;
     }
-    onUser(json.user);
+    if (json.user) onUser(json.user);
     setMsg(action === "register" ? "Compte créé — tes trades restent." : "Connecté.");
   }
 

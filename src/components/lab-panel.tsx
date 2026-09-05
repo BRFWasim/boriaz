@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
+import { PriceChart } from "@/components/price-chart";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -1070,8 +1071,9 @@ export function LabPanel() {
             {paper.slice(0, 20).map((t) => (
               <li
                 key={t.id}
-                className="flex flex-wrap items-center justify-between gap-2 border-b border-border/40 pb-2"
+                className="space-y-2 border-b border-border/40 pb-3"
               >
+                <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <Badge
                     variant="outline"
@@ -1123,6 +1125,21 @@ export function LabPanel() {
                       Fermer
                     </button>
                   ) : null}
+                </div>
+                </div>
+                <div className="w-full">
+                  <PriceChart
+                    coin={t.coin}
+                    interval="15m"
+                    allowToggle
+                    height={100}
+                    entryAt={t.filledAt ?? t.openedAt}
+                    entryPx={t.entry}
+                    exitAt={t.closedAt}
+                    exitPx={t.exitPx}
+                    tp={t.tp}
+                    sl={t.sl}
+                  />
                 </div>
               </li>
             ))}

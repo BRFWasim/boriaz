@@ -22,7 +22,9 @@ export const maxDuration = 60;
 export async function GET() {
   try {
     await bindUserRequest();
-    const sig = await getTradeSignals({ notify: false, force: true });
+    // Pas de force:true ici — évite un timeout Vercel (504 texte non-JSON).
+    // Le mark-to-market live est déjà fait par /api/live.
+    const sig = await getTradeSignals({ notify: false });
     return Response.json({
       trades: sig.paper,
       account: sig.account,

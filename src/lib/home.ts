@@ -79,7 +79,17 @@ export async function getHomeSnapshot(): Promise<HomePayload> {
   let quotes: Awaited<ReturnType<typeof getWatchlistSnapshot>> | null = null;
 
   try {
-    quotes = await getWatchlistSnapshot();
+    const qTimed = await Promise.race([
+      getWatchlistSnapshot().then((q) => ({ ok: true as const, q })),
+      new Promise<{ ok: false }>((resolve) =>
+        setTimeout(() => resolve({ ok: false }), 5_000),
+      ),
+    ]);
+    if (qTimed.ok) {
+      quotes = qTimed.q;
+    } else {
+      warning = "Prix bougies lents — repli sur mids live";
+    }
   } catch (e) {
     warning = e instanceof Error ? e.message : "Prix indisponibles";
   }
@@ -112,8 +122,23 @@ export async function getHomeSnapshot(): Promise<HomePayload> {
     }
   }
 
+  // Soft-timeout : sur Vercel un cold start + analyse complète peut dépasser
+  // la limite → 504 texte "An error occurred…" (pas du JSON). On préfère un
+  // accueil partiel (prix + paper) plutôt qu’une page cassée.
   try {
-    signals = await getTradeSignals({ notify: false });
+    const timed = await Promise.race([
+      getTradeSignals({ notify: false }).then((s) => ({ ok: true as const, s })),
+      new Promise<{ ok: false }>((resolve) =>
+        setTimeout(() => resolve({ ok: false }), 8_000),
+      ),
+    ]);
+    if (timed.ok) {
+      signals = timed.s;
+    } else {
+      warning = warning
+        ? `${warning} · Signaux lents — vue prix/paper`
+        : "Signaux lents — vue prix/paper (réessaie dans 1 min)";
+    }
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Signaux indisponibles";
     warning = warning ? `${warning} · ${msg}` : msg;

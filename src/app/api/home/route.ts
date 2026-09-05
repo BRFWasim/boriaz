@@ -3,7 +3,8 @@ import { bindUserRequest } from "@/lib/bind-request";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-export const maxDuration = 90;
+/** Soft-timeout dans getHomeSnapshot (~12s) + marge. */
+export const maxDuration = 60;
 
 export async function GET() {
   try {
