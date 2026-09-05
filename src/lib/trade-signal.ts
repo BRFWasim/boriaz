@@ -1265,7 +1265,7 @@ export async function getTradeSignals(options?: {
       const { scanSmcWatchlist } = await import("./smc-scan");
       const primary = smcPortfolios[0]!;
       smcScan = await scanSmcWatchlist({
-        coins: prefs.watchCoins.slice(0, 8),
+        coins: prefs.watchCoins.slice(0, 16),
         walletEur: primary.bankrollEur,
         maxLeverage: primary.maxLeverage,
         prices: priceMap,

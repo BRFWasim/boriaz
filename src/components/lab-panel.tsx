@@ -123,6 +123,12 @@ export function LabPanel() {
         setPrefs({
           ...DEFAULT_PREFS,
           ...local,
+          watchCoins: [
+            ...new Set([
+              ...(local.watchCoins ?? []),
+              ...DEFAULT_PREFS.watchCoins,
+            ]),
+          ],
           portfolios: ensurePortfolios(local.portfolios),
         });
       }

@@ -5,7 +5,7 @@ import { ChevronDownIcon } from "lucide-react";
 import { CryptoLogo } from "@/components/crypto-logo";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { formatPct, formatPx, signedClass } from "@/lib/format";
+import { formatPct, formatPx, formatParisDateTime, signedClass } from "@/lib/format";
 import type { HomePayload, PortfolioHomeView } from "@/lib/home";
 import type {
   PaperAccount,
@@ -649,6 +649,30 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
             const trades = paperLive.filter(
               (t) => (t.portfolioId || "default") === pf.profile.id,
             );
+            const launched = trades.length;
+            const closed = trades.filter(
+              (t) =>
+                t.status === "tp" ||
+                t.status === "sl" ||
+                t.status === "closed_manual" ||
+                t.status === "expired" ||
+                t.status === "invalidated",
+            );
+            const wins = closed.filter(
+              (t) => t.status === "tp" || (t.pnlEur ?? 0) > 0,
+            );
+            const winRatePct =
+              closed.length > 0 ? (wins.length / closed.length) * 100 : null;
+            const pending = trades.filter((t) => t.status === "pending");
+            const running = trades.filter((t) => t.status === "open");
+            const tps = trades.filter((t) => t.status === "tp");
+            const sls = trades.filter((t) => t.status === "sl");
+            const otherClosed = trades.filter(
+              (t) =>
+                t.status === "closed_manual" ||
+                t.status === "expired" ||
+                t.status === "invalidated",
+            );
             return (
               <div
                 key={pf.profile.id}
@@ -681,11 +705,21 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
                         : `TF ${pf.profile.timeframe} · risque ${pf.profile.riskLevel}/5`}
                       {" · "}lev max {pf.profile.maxLeverage}× · R:R ≥{" "}
                       {pf.profile.minRR}
-                      · {trades.filter((t) => t.status === "open" || t.status === "pending").length}{" "}
-                      ouvert
-                      {trades.filter((t) => t.status === "open" || t.status === "pending").length > 1
-                        ? "s"
-                        : ""}
+                      {" · "}
+                      <span className="text-foreground">
+                        WR{" "}
+                        {winRatePct == null
+                          ? "n/d"
+                          : `${winRatePct.toFixed(0)} %`}
+                      </span>
+                      {" · "}
+                      <span className="text-foreground">
+                        {launched} trade{launched > 1 ? "s" : ""} lancé
+                        {launched > 1 ? "s" : ""}
+                      </span>
+                      {" · "}
+                      {pending.length + running.length} ouvert
+                      {pending.length + running.length > 1 ? "s" : ""}
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-3">
@@ -720,12 +754,16 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
                         value={`${pf.profile.sizePct} %`}
                       />
                       <Stat
-                        label="Trades / jour"
-                        value={`${pf.profile.tradesPerDay || "∞"}`}
+                        label="Winrate"
+                        value={
+                          winRatePct == null
+                            ? "n/d"
+                            : `${winRatePct.toFixed(0)} % (${wins.length}/${closed.length})`
+                        }
                       />
                       <Stat
-                        label="Perte max"
-                        value={`${pf.profile.maxLossEur} €`}
+                        label="Trades lancés"
+                        value={`${launched}`}
                       />
                     </div>
                     <p className="text-[11px] text-muted-foreground">
@@ -743,14 +781,31 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
                         Aucun trade sur ce portefeuille pour l’instant.
                       </p>
                     ) : (
-                      <div className="space-y-2">
-                        {trades.map((t) => (
-                          <PortfolioTradeRow
-                            key={t.id}
-                            trade={t}
-                            onClose={closeTrade}
+                      <div className="space-y-4">
+                        <TradeCategory
+                          title="En attente d’entrée"
+                          trades={pending}
+                          onClose={closeTrade}
+                        />
+                        <TradeCategory
+                          title="En cours"
+                          trades={running}
+                          onClose={closeTrade}
+                        />
+                        <TradeCategory
+                          title="TP"
+                          trades={tps}
+                        />
+                        <TradeCategory
+                          title="SL"
+                          trades={sls}
+                        />
+                        {otherClosed.length > 0 ? (
+                          <TradeCategory
+                            title="Autres clôtures"
+                            trades={otherClosed}
                           />
-                        ))}
+                        ) : null}
                       </div>
                     )}
                   </div>
@@ -782,6 +837,52 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
   );
 }
 
+function tradeStatusLabel(status: PaperTrade["status"]): string {
+  switch (status) {
+    case "pending":
+      return "En attente d’entrée";
+    case "open":
+      return "En cours";
+    case "tp":
+      return "TP";
+    case "sl":
+      return "SL";
+    case "closed_manual":
+      return "Manuel";
+    case "expired":
+      return "Expiré";
+    case "invalidated":
+      return "Invalidé";
+    default:
+      return status;
+  }
+}
+
+function TradeCategory({
+  title,
+  trades,
+  onClose,
+}: {
+  title: string;
+  trades: PaperTrade[];
+  onClose?: (id: string) => void;
+}) {
+  if (trades.length === 0) return null;
+  return (
+    <div className="space-y-2">
+      <p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+        {title}
+        <span className="ml-1.5 text-foreground/70">({trades.length})</span>
+      </p>
+      <div className="space-y-2">
+        {trades.map((t) => (
+          <PortfolioTradeRow key={t.id} trade={t} onClose={onClose} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function PortfolioTradeRow({
   trade: t,
   onClose,
@@ -792,6 +893,7 @@ function PortfolioTradeRow({
   const [openWhy, setOpenWhy] = useState(false);
   const [closing, setClosing] = useState(false);
   const canClose = t.status === "open" || t.status === "pending";
+  const takenAt = t.filledAt ?? t.openedAt;
   const tpEur = (() => {
     const move =
       t.side === "long"
@@ -828,13 +930,29 @@ function PortfolioTradeRow({
               </span>{" "}
               {t.coin}
               <span className="ml-2 text-[10px] font-normal uppercase text-muted-foreground">
-                {t.status}
+                {tradeStatusLabel(t.status)}
               </span>
             </p>
             <p className="numeric text-[11px] text-muted-foreground">
               Entrée {formatPx(t.entry)} · spot{" "}
               {t.markPx != null ? formatPx(t.markPx) : "—"} · TP{" "}
               {formatPx(t.tp)} · SL {formatPx(t.sl)}
+            </p>
+            <p className="mt-0.5 text-[11px] text-muted-foreground">
+              Pris{" "}
+              <span className="text-foreground">
+                {formatParisDateTime(takenAt)}
+              </span>
+              {t.status === "pending" ? " (limite)" : null}
+              {t.closedAt ? (
+                <>
+                  {" · "}Arrêté{" "}
+                  <span className="text-foreground">
+                    {formatParisDateTime(t.closedAt)}
+                  </span>
+                </>
+              ) : null}
+              <span className="ml-1 text-[10px] opacity-70">heure FR</span>
             </p>
           </div>
         </div>

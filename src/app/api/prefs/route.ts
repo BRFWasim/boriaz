@@ -72,7 +72,7 @@ export async function POST(request: Request) {
       patch.watchCoins = body.watchCoins
         .map((c) => String(c).toUpperCase())
         .filter(Boolean)
-        .slice(0, 20);
+        .slice(0, 40);
     }
     if (typeof body.hushHoursStart === "number") {
       patch.hushHoursStart = Math.min(23, Math.max(0, Math.floor(body.hushHoursStart)));

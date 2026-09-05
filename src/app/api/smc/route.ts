@@ -24,7 +24,7 @@ export async function GET(request: Request) {
 
   const coins = coin
     ? [coin]
-    : prefs.watchCoins.slice(0, 8);
+    : prefs.watchCoins.slice(0, 16);
 
   const scan = await scanSmcWatchlist({
     coins,

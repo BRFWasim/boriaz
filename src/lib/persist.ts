@@ -123,6 +123,12 @@ export async function loadPrefs(): Promise<UserPrefs> {
     if (!raw) return { ...DEFAULT_PREFS, portfolios: ensurePortfolios(null) };
     const parsed = JSON.parse(raw) as UserPrefs;
     const merged = { ...DEFAULT_PREFS, ...parsed };
+    // Ajoute les nouvelles cryptos défaut sans retirer celles déjà choisies.
+    const watchSet = new Set([
+      ...(parsed.watchCoins ?? []),
+      ...DEFAULT_PREFS.watchCoins,
+    ]);
+    merged.watchCoins = [...watchSet];
     // Migre l’ancien mode perso vers un portefeuille si besoin
     let portfolios = ensurePortfolios(parsed.portfolios);
     if (

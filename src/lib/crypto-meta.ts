@@ -69,6 +69,61 @@ export const CRYPTO_META: Record<
     logo: "https://assets.coingecko.com/coins/images/26375/small/sui-ocean-square.png",
     color: "#4DA2FF",
   },
+  NEAR: {
+    label: "NEAR",
+    logo: "https://assets.coingecko.com/coins/images/10365/small/near.jpg",
+    color: "#000000",
+  },
+  APT: {
+    label: "Aptos",
+    logo: "https://assets.coingecko.com/coins/images/26455/small/aptos_round.png",
+    color: "#2DD8A9",
+  },
+  SEI: {
+    label: "Sei",
+    logo: "https://assets.coingecko.com/coins/images/28205/small/Sei_Logo_-_Transparent.png",
+    color: "#9B1C1C",
+  },
+  FET: {
+    label: "Fetch.ai",
+    logo: "https://assets.coingecko.com/coins/images/5681/small/Fetch.jpg",
+    color: "#1E90FF",
+  },
+  AAVE: {
+    label: "Aave",
+    logo: "https://assets.coingecko.com/coins/images/12645/small/aave-token-round.png",
+    color: "#B6509E",
+  },
+  PENDLE: {
+    label: "Pendle",
+    logo: "https://assets.coingecko.com/coins/images/15069/small/Pendle_Logo_Normal-03.png",
+    color: "#1DB8A4",
+  },
+  TIA: {
+    label: "Celestia",
+    logo: "https://assets.coingecko.com/coins/images/31967/small/tia.jpg",
+    color: "#7B2BFF",
+  },
+  INJ: {
+    label: "Injective",
+    logo: "https://assets.coingecko.com/coins/images/12882/small/Secondary_Symbol.png",
+    color: "#00F2FE",
+  },
+  PEPE: {
+    label: "Pepe",
+    logo: "https://assets.coingecko.com/coins/images/29850/small/pepe-token.jpeg",
+    color: "#3D9A3C",
+  },
+  kPEPE: {
+    label: "Pepe",
+    logo: "https://assets.coingecko.com/coins/images/29850/small/pepe-token.jpeg",
+    color: "#3D9A3C",
+  },
+  PUMP: {
+    label: "Pump.fun",
+    logo: "https://assets.coingecko.com/coins/images/53097/small/pump.jpg",
+    color: "#00D4AA",
+  },
   XRP: {
     label: "XRP",
     logo: "https://assets.coingecko.com/coins/images/44/small/xrp-symbol-white-128.png",

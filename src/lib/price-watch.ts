@@ -14,10 +14,20 @@ export const WATCHLIST = [
   { coin: "LINK", label: "LINK" },
   { coin: "DOGE", label: "DOGE" },
   { coin: "SUI", label: "SUI" },
+  { coin: "NEAR", label: "NEAR" },
+  { coin: "APT", label: "APT" },
+  { coin: "SEI", label: "SEI" },
+  { coin: "TAO", label: "TAO" },
   { coin: "RENDER", label: "RENDER" },
+  { coin: "FET", label: "FET" },
+  { coin: "AAVE", label: "AAVE" },
+  { coin: "PENDLE", label: "PENDLE" },
+  { coin: "TIA", label: "TIA" },
+  { coin: "INJ", label: "INJ" },
+  { coin: "kPEPE", label: "PEPE" },
+  { coin: "PUMP", label: "PUMP" },
   { coin: "ONDO", label: "ONDO" },
   { coin: "HYPE", label: "HYPE" },
-  { coin: "TAO", label: "TAO" },
 ] as const;
 
 export type WatchCoin = (typeof WATCHLIST)[number]["coin"];

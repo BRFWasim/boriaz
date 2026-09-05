@@ -1,4 +1,4 @@
-import { format, formatDistanceStrict } from "date-fns";
+import { formatDistanceStrict } from "date-fns";
 import { fr } from "date-fns/locale";
 
 export function parseNum(value: string | number | null | undefined): number {
@@ -90,7 +90,39 @@ export function truncateAddress(address: string): string {
 }
 
 export function formatExactTime(ts: number): string {
-  return format(new Date(ts), "dd MMM yyyy 'à' HH:mm:ss", { locale: fr });
+  return new Intl.DateTimeFormat("fr-FR", {
+    timeZone: "Europe/Paris",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(new Date(ts));
+}
+
+/** Heure courte FR (Europe/Paris), ex. 17:42. */
+export function formatParisClock(ts: number): string {
+  return new Intl.DateTimeFormat("fr-FR", {
+    timeZone: "Europe/Paris",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(ts));
+}
+
+/** Date + heure FR, ex. 05/09/2026 17:42. */
+export function formatParisDateTime(ts: number): string {
+  return new Intl.DateTimeFormat("fr-FR", {
+    timeZone: "Europe/Paris",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(ts));
 }
 
 export function formatAgo(ts: number, now = Date.now()): string {
