@@ -71,6 +71,10 @@ export interface HomePayload {
     live: string;
   };
   warning: string | null;
+  /** true si soft-timeout / repli mids / signaux absents */
+  degraded: boolean;
+  /** true si les signaux n’ont pas pu être calculés à temps */
+  signalsPending: boolean;
 }
 
 export async function getHomeSnapshot(): Promise<HomePayload> {
@@ -243,5 +247,7 @@ export async function getHomeSnapshot(): Promise<HomePayload> {
       live: "Prix ~4 s. Signaux ~1–3 min. Tracking wallets + gate IA avant chaque simu.",
     },
     warning,
+    degraded: Boolean(warning) || !signals,
+    signalsPending: !signals,
   };
 }

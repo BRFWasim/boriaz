@@ -388,6 +388,26 @@ export function LabPanel() {
     <div className="space-y-8">
       <section>
         <h2 className="text-xl font-semibold">Lab · BoriazBot</h2>
+        <div className="mt-3 flex flex-wrap gap-1.5 text-[11px]">
+          {(
+            [
+              ["prefs", "Préférences"],
+              ["portfolios", "Portefeuilles"],
+              ["smc", "SMC"],
+              ["backtest", "Backtest"],
+              ["paper", "Paper"],
+              ["journal", "Journal"],
+            ] as const
+          ).map(([id, label]) => (
+            <a
+              key={id}
+              href={`#lab-${id}`}
+              className="rounded-md border border-white/10 bg-white/5 px-2 py-1 text-muted-foreground hover:border-primary/30 hover:text-primary"
+            >
+              {label}
+            </a>
+          ))}
+        </div>
         <p className="mt-1 text-sm text-muted-foreground">
           Zone d’atelier : mesurer la qualité des signaux sans risque réel,
           comprendre le macro, et régler le bot.
@@ -521,7 +541,7 @@ export function LabPanel() {
 
       {prefs ? (
         <section className="rounded-2xl border border-border/80 bg-card/60 p-4">
-          <h3 className="font-medium">Préférences globales</h3>
+          <h3 id="lab-prefs" className="font-medium">Préférences globales</h3>
           <p className="mt-1 text-sm text-muted-foreground">
             Telegram, hush hours, watchlist. Les paramètres de trading sont
             par portefeuille (ci-dessous). Clique <strong>Enregistrer</strong>
@@ -601,7 +621,7 @@ export function LabPanel() {
         <section className="rounded-2xl border border-primary/25 bg-primary/5 p-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h3 className="font-medium">Portefeuilles paper</h3>
+              <h3 id="lab-portfolios" className="font-medium">Portefeuilles paper</h3>
               <p className="mt-1 text-sm text-muted-foreground">
                 <strong className="text-foreground">Défaut</strong> (Alignement)
                 et <strong className="text-foreground">Boriaz</strong> (SMC
@@ -1149,7 +1169,7 @@ export function LabPanel() {
       </section>
 
       <section className="rounded-2xl border border-border/80 bg-card/60 p-4">
-        <h3 className="font-medium">Journal des signaux</h3>
+        <h3 id="lab-journal" className="font-medium">Journal des signaux</h3>
         <p className="mt-1 text-sm text-muted-foreground">
           Historique des LONG/SHORT envoyés (Telegram). Utile pour revoir ce qui
           a été proposé, à quelle entrée/TP/SL, et comparer au paper.

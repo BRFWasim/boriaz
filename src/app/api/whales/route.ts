@@ -1,11 +1,15 @@
 import { dispatchWhaleAlerts } from "@/lib/alerts";
 import { tickPriceWatch } from "@/lib/btc-analysis";
 import { getWhaleDashboard } from "@/lib/dashboard";
-import { getTradeSignals } from "@/lib/trade-signal";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 90;
 
+/**
+ * Dashboard baleines uniquement.
+ * Les signaux / Telegram passent par /api/cron (et /api/signals) —
+ * pas à chaque poll UI 10 s, sinon on sature HL + IA.
+ */
 export async function GET() {
   try {
     const payload = await getWhaleDashboard();
@@ -16,12 +20,6 @@ export async function GET() {
     }
     try {
       await tickPriceWatch();
-    } catch {
-      // ignore
-    }
-    try {
-      // Signaux LONG/SHORT IA → Telegram si confiance élevée (pas short+spot)
-      await getTradeSignals({ notify: true });
     } catch {
       // ignore
     }

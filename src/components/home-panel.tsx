@@ -45,6 +45,7 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
   });
   const [selectedCoin, setSelectedCoin] = useState<string | null>(null);
   const [cryptoFilter, setCryptoFilter] = useState<"all" | "long" | "short" | "wait">("all");
+  const [detailMode, setDetailMode] = useState<"simple" | "advanced">("simple");
 
   function mergePaper(next: PaperTrade[] | undefined) {
     if (!next?.length) return;
@@ -262,9 +263,30 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
 
   return (
     <div className="space-y-6">
-      {data.warning ? (
-        <div className="rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-sm text-amber-100">
-          {data.warning}
+      {data.warning || data.degraded || data.signalsPending ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-sm text-amber-100">
+          <div>
+            <p className="font-medium">
+              {data.signalsPending
+                ? "Analyse en cours — prix / paper affichés"
+                : data.degraded
+                  ? "Mode dégradé"
+                  : "Alerte"}
+            </p>
+            <p className="text-xs text-amber-100/80">
+              {data.warning ||
+                "Les signaux complets arrivent dès que Hyperliquid / IA répondent."}
+            </p>
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-7 border-amber-400/40 text-amber-50"
+            onClick={() => window.location.reload()}
+          >
+            Relancer
+          </Button>
         </div>
       ) : null}
       {acc ? (
@@ -607,6 +629,7 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
               frais {(heroTrade.feesEur ?? 0).toFixed(2)} €
             </span>
           </div>
+          {!selectedCard ? (
           <div className="mt-4">
             <PriceChart
               coin={heroTrade.coin}
@@ -622,6 +645,11 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
               sl={heroTrade.sl}
             />
           </div>
+          ) : (
+            <p className="mt-3 text-xs text-muted-foreground">
+              Graphique trade masqué — crypto sélectionnée plus bas.
+            </p>
+          )}
           {heroTrade.status === "open" || heroTrade.status === "pending" ? (
             <button
               type="button"
@@ -750,6 +778,30 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
             <p className="mt-1 text-sm text-muted-foreground">
               Choisis une crypto dans la barre — détail et graphique en dessous.
             </p>
+            <div className="mt-2 inline-flex rounded-lg border border-white/10 bg-white/5 p-0.5 text-[11px]">
+              <button
+                type="button"
+                onClick={() => setDetailMode("simple")}
+                className={`rounded-md px-2.5 py-1 ${
+                  detailMode === "simple"
+                    ? "bg-primary/20 text-primary"
+                    : "text-muted-foreground"
+                }`}
+              >
+                Simple
+              </button>
+              <button
+                type="button"
+                onClick={() => setDetailMode("advanced")}
+                className={`rounded-md px-2.5 py-1 ${
+                  detailMode === "advanced"
+                    ? "bg-primary/20 text-primary"
+                    : "text-muted-foreground"
+                }`}
+              >
+                Avancé
+              </button>
+            </div>
           </div>
           <div className="flex flex-wrap gap-1.5">
             {(
@@ -874,6 +926,27 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
               ) : null}
             </div>
 
+            {selectedCard.entryMode === "limit_wait" ? (
+              <p className="mt-2 rounded-lg border border-amber-400/25 bg-amber-400/10 px-3 py-2 text-sm text-amber-50">
+                Attendre le fill limite
+                {selectedCard.entry != null ? ` @ ${formatPx(selectedCard.entry)}` : ""}
+                {" — "}ne pas entrer au marché si le prix n’est pas là.
+                {selectedCard.entryHint ? ` ${selectedCard.entryHint}` : ""}
+              </p>
+            ) : selectedCard.entryMode === "market_now" ? (
+              <p className="mt-2 rounded-lg border border-long/25 bg-long/10 px-3 py-2 text-sm">
+                Entrée marché possible maintenant
+                {selectedCard.entry != null ? ` vers ${formatPx(selectedCard.entry)}` : ""}.
+                {selectedCard.entryHint ? ` ${selectedCard.entryHint}` : ""}
+              </p>
+            ) : selectedCard.direction === "wait" && selectedCard.confidence === 0 ? (
+              <p className="mt-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-muted-foreground">
+                {data.signalsPending
+                  ? "Analyse encore en cours pour cette crypto — pas un signal WAIT définitif."
+                  : "Pas de setup clair pour l’instant."}
+              </p>
+            ) : null}
+
             {selectedCard.alignment ? (
               <p className="mt-2 text-xs text-muted-foreground">
                 {selectedCard.alignment.breakdown}
@@ -972,7 +1045,7 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
               </p>
             ) : null}
 
-            {selectedCard.tfSummary ? (
+            {detailMode === "advanced" && selectedCard.tfSummary ? (
               <p className="mt-2 text-xs text-muted-foreground">
                 TF {selectedCard.tfSummary}
               </p>
@@ -983,7 +1056,7 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
                 coin={selectedCard.coin}
                 interval="15m"
                 allowToggle
-                height={220}
+                height={200}
                 side={
                   selectedCard.direction === "long" ||
                   selectedCard.direction === "short"

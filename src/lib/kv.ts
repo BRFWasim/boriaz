@@ -59,6 +59,29 @@ export async function kvSet(key: string, value: string): Promise<void> {
   }
 }
 
+/** SET avec TTL (secondes). Sans Upstash : mémoire process seulement. */
+export async function kvSetEx(
+  key: string,
+  value: string,
+  ttlSec: number,
+): Promise<void> {
+  mem.set(key, value);
+  if (!upstashConfigured()) return;
+  try {
+    await upstashCommand(["SET", key, value, "EX", Math.max(1, Math.floor(ttlSec))]);
+  } catch {
+    // mémoire déjà à jour
+  }
+}
+
+export async function kvSetJsonEx(
+  key: string,
+  value: unknown,
+  ttlSec: number,
+): Promise<void> {
+  await kvSetEx(key, JSON.stringify(value), ttlSec);
+}
+
 export async function kvGetJson<T>(key: string): Promise<T | null> {
   const raw = await kvGet(key);
   if (!raw) return null;

@@ -19,15 +19,44 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { MarketOverviewPanel } from "@/components/market-overview";
-import { BtcAnalysisPanel } from "@/components/btc-analysis-panel";
-import { SpotAlertsPanel } from "@/components/spot-alerts-panel";
+import dynamic from "next/dynamic";
 import { HomePanel } from "@/components/home-panel";
-import { MacroPanel } from "@/components/macro-panel";
-import { LabPanel } from "@/components/lab-panel";
 import { WhaleCard } from "@/components/whale-card";
 import { formatAgo, formatExactTime } from "@/lib/format";
 import type { AppTab, DashboardPayload, SortKey, UiMode } from "@/lib/types";
+
+function PanelSkeleton({ label }: { label: string }) {
+  return (
+    <p className="animate-pulse text-sm text-muted-foreground">
+      Chargement {label}…
+    </p>
+  );
+}
+
+const MarketOverviewPanel = dynamic(
+  () =>
+    import("@/components/market-overview").then((m) => m.MarketOverviewPanel),
+  { ssr: false, loading: () => <PanelSkeleton label="Marché" /> },
+);
+const BtcAnalysisPanel = dynamic(
+  () =>
+    import("@/components/btc-analysis-panel").then((m) => m.BtcAnalysisPanel),
+  { ssr: false, loading: () => <PanelSkeleton label="Analyse" /> },
+);
+const SpotAlertsPanel = dynamic(
+  () =>
+    import("@/components/spot-alerts-panel").then((m) => m.SpotAlertsPanel),
+  { ssr: false, loading: () => <PanelSkeleton label="Spot" /> },
+);
+const MacroPanel = dynamic(
+  () => import("@/components/macro-panel").then((m) => m.MacroPanel),
+  { ssr: false, loading: () => <PanelSkeleton label="Macro" /> },
+);
+const LabPanel = dynamic(
+  () => import("@/components/lab-panel").then((m) => m.LabPanel),
+  { ssr: false, loading: () => <PanelSkeleton label="Lab" /> },
+);
+
 
 const POLL_MS = 10_000;
 const MODE_KEY = "hl-whales-ui-mode";
@@ -58,6 +87,11 @@ export function WhalesDashboard() {
   const [tab, setTab] = useState<AppTab>("home");
   const [now, setNow] = useState(() => Date.now());
   const [followed, setFollowed] = useState<Set<string>>(new Set());
+  const [cronStatus, setCronStatus] = useState<{
+    at: number;
+    ok: boolean;
+    note?: string;
+  } | null>(null);
 
   const goTab = useCallback((next: AppTab) => {
     setTab(next);
@@ -98,6 +132,15 @@ export function WhalesDashboard() {
   }, []);
 
   useEffect(() => {
+    fetch("/api/status", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((json: { lastCron?: { at: number; ok: boolean; note?: string } | null }) => {
+        if (json.lastCron) setCronStatus(json.lastCron);
+      })
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
     fetch("/api/wallets", { cache: "no-store" })
       .then((r) => r.json())
       .then((json: { wallets?: { address: string }[] }) => {
@@ -108,29 +151,18 @@ export function WhalesDashboard() {
       .catch(() => undefined);
   }, []);
 
-  useEffect(() => {
-    const controller = new AbortController();
-    fetch("/api/whales", { cache: "no-store", signal: controller.signal })
-      .then(async (res) => {
-        const json = (await res.json()) as DashboardPayload & { error?: string };
-        if (!res.ok) {
-          throw new Error(json.error || "Impossible de charger les baleines.");
-        }
-        return json;
-      })
-      .then((json) => {
-        setData(json);
-        setError(null);
-      })
-      .catch((err: unknown) => {
-        if (err instanceof DOMException && err.name === "AbortError") return;
-        setError(err instanceof Error ? err.message : "Erreur réseau");
-      })
-      .finally(() => setLoading(false));
-    return () => controller.abort();
-  }, []);
+    useEffect(() => {
+    // Accueil / Analyse / Macro / Lab : pas d’appel baleines au mount
+    if (tab !== "whales" && tab !== "spot") {
+      setLoading(false);
+    }
+  }, [tab]);
 
+
+  // Poll HL whales seulement sur les onglets qui en ont besoin
   useEffect(() => {
+    if (tab !== "whales" && tab !== "spot") return;
+    void load(true);
     const poll = window.setInterval(() => {
       void load(true);
     }, POLL_MS);
@@ -139,7 +171,7 @@ export function WhalesDashboard() {
       window.clearInterval(poll);
       window.clearInterval(tick);
     };
-  }, [load]);
+  }, [load, tab]);
 
   function chooseMode(next: UiMode) {
     setModeState(next);
@@ -183,7 +215,7 @@ export function WhalesDashboard() {
   }, [data, query, sort, coinFilter]);
 
   return (
-    <div className="min-h-svh pb-[max(1.5rem,env(safe-area-inset-bottom))]">
+    <div className="min-h-svh pb-[max(5.5rem,env(safe-area-inset-bottom))] sm:pb-[max(1.5rem,env(safe-area-inset-bottom))]">
       <header className="sticky top-0 z-30 border-b border-white/8 bg-background/85 pt-[env(safe-area-inset-top)] backdrop-blur-xl">
         <div className="mx-auto flex w-full max-w-7xl flex-col gap-1.5 px-3 py-2 sm:gap-3 sm:px-6 sm:py-3 lg:px-8">
           <div className="flex items-center justify-between gap-2">
@@ -199,6 +231,18 @@ export function WhalesDashboard() {
                 </span>
                 {nextIn}s
               </span>
+              {cronStatus ? (
+                <span
+                  className={`hidden rounded-md border px-1.5 py-0.5 text-[10px] sm:inline-flex ${
+                    cronStatus.ok
+                      ? "border-long/30 bg-long/10 text-long"
+                      : "border-amber-400/30 bg-amber-400/10 text-amber-100"
+                  }`}
+                  title={cronStatus.note || "cron"}
+                >
+                  Cron {formatAgo(cronStatus.at)}
+                </span>
+              ) : null}
               <ModeSwitch mode={mode} onChange={chooseMode} />
               <Button type="button" size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={() => void load(true)} disabled={refreshing || loading}>
                 <RefreshCwIcon className={`size-3.5 ${refreshing ? "animate-spin" : ""}`} />
@@ -206,7 +250,7 @@ export function WhalesDashboard() {
             </div>
           </div>
 
-          <div className="scrollbar-none -mx-1 flex gap-1 overflow-x-auto px-1">
+          <div className="scrollbar-none -mx-1 hidden gap-1 overflow-x-auto px-1 sm:flex">
             <TabButton active={tab === "home"} onClick={() => goTab("home")}>Accueil</TabButton>
             <TabButton active={tab === "whales"} onClick={() => goTab("whales")}>Baleines</TabButton>
             <TabButton active={tab === "spot"} onClick={() => goTab("spot")}>Spot</TabButton>
@@ -366,7 +410,36 @@ export function WhalesDashboard() {
           </>
         ) : null}
       </main>
+
+      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-background/95 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl sm:hidden">
+        <div className="mx-auto grid max-w-7xl grid-cols-6 gap-0.5 px-1 py-1">
+          {(
+            [
+              ["home", "Accueil"],
+              ["whales", "Baleines"],
+              ["spot", "Spot"],
+              ["btc", "Analyse"],
+              ["macro", "Macro"],
+              ["lab", "Lab"],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => goTab(id)}
+              className={`rounded-lg px-0.5 py-2 text-[10px] font-medium ${
+                tab === id
+                  ? "bg-primary/15 text-primary"
+                  : "text-muted-foreground"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </nav>
     </div>
+
   );
 }
 

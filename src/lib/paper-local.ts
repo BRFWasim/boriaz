@@ -23,6 +23,7 @@ export function writeLocalPaper(trades: PaperTrade[]): void {
   }
 }
 
+/** Pousse le paper local vers le serveur ; le merge serveur privilégie la version la plus récente (closedAt/filledAt/openedAt). */
 export async function syncPaperFromBrowser(): Promise<PaperTrade[] | null> {
   const local = readLocalPaper();
   if (!local.length) return null;

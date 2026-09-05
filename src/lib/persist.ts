@@ -292,8 +292,24 @@ export async function mergePaperTrades(
     }
     const prevClosed = prev.closedAt ?? 0;
     const nextClosed = t.closedAt ?? 0;
-    if (nextClosed > prevClosed || (t.status !== prev.status && t.closedAt)) {
-      byId.set(t.id, t);
+    const prevTouch = Math.max(
+      prev.closedAt ?? 0,
+      prev.filledAt ?? 0,
+      prev.openedAt ?? 0,
+    );
+    const nextTouch = Math.max(
+      t.closedAt ?? 0,
+      t.filledAt ?? 0,
+      t.openedAt ?? 0,
+    );
+    // Clôture plus récente, changement de statut, ou version navigateur plus fraîche
+    if (
+      nextClosed > prevClosed ||
+      (t.status !== prev.status && t.closedAt) ||
+      (nextTouch > prevTouch &&
+        !(prev.closedAt && !t.closedAt)) // ne pas rouvrir un trade déjà clôturé serveur
+    ) {
+      byId.set(t.id, { ...prev, ...t });
     }
   }
   const merged = [...byId.values()].sort((a, b) => b.openedAt - a.openedAt);

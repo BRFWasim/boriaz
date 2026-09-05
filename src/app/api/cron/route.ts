@@ -1,5 +1,6 @@
 import { runMacroT30Alerts } from "@/lib/macro-alerts";
 import { getTradeSignals } from "@/lib/trade-signal";
+import { saveCronStatus } from "@/lib/cron-status";
 import { runPriceWatch } from "@/lib/price-watch";
 import { getBtcAnalysis } from "@/lib/btc-analysis";
 import { bindCronRequest } from "@/lib/bind-request";
@@ -132,6 +133,18 @@ export async function GET(request: Request) {
     results.manage = manage;
   } catch (e) {
     results.manageError = e instanceof Error ? e.message : "manage";
+  }
+
+  const ok = !results.signalsError && !results.priceWatchError;
+  try {
+    await saveCronStatus({
+      at: Date.now(),
+      ok: Boolean(ok),
+      tick: "15m",
+      note: ok ? "ok" : "partial",
+    });
+  } catch {
+    /* ignore */
   }
 
   return Response.json({ ok: true, ...results });

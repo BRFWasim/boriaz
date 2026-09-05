@@ -1,5 +1,6 @@
 import { getIntegrationStatus } from "@/lib/integrations";
 import { kvBackend } from "@/lib/kv";
+import { loadCronStatus } from "@/lib/cron-status";
 
 export const dynamic = "force-dynamic";
 
@@ -29,7 +30,10 @@ export async function GET() {
     .filter(([, ok]) => !ok)
     .map(([name]) => name);
 
+  const lastCron = await loadCronStatus();
+
   return Response.json({
+    lastCron,
     keys,
     missing,
     storage: upstash ? "upstash" : "tmp",

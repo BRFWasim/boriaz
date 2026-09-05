@@ -8,6 +8,7 @@ import { sendTelegramMessage } from "./telegram";
 import { correlateSetup } from "./signal-score";
 import { computeAlignment, type AlignmentScore } from "./alignment";
 import { stabilizeDirection } from "./signal-sticky";
+import { kvGetJson, kvSetJsonEx } from "./kv";
 import {
   aggregatePaperAccount,
   appendBook,
@@ -26,6 +27,7 @@ import {
   type PortfolioProfile,
   type TradeJustification,
 } from "./persist";
+
 import type { BookTrade } from "./user-types";
 import type { EntryMode } from "./user-types";
 import type { BuyTimingAction, SignalBias } from "./types";
@@ -463,6 +465,17 @@ export async function getTradeSignals(options?: {
     return cache.value;
   }
 
+  // Cache Upstash : survit aux cold starts Vercel (mémoire process seule = 504 fréquents)
+  if (!options?.force) {
+    const shared = await kvGetJson<{ at: number; value: TradeSignalPayload }>(
+      "boriaz:trade-signals-v1",
+    );
+    if (shared && Date.now() - shared.at < CACHE_TTL) {
+      cache = { at: shared.at, value: shared.value };
+      return shared.value;
+    }
+  }
+
   const prefs = await loadPrefs();
 
   try {
@@ -526,11 +539,14 @@ export async function getTradeSignals(options?: {
 
   for (const { coin } of watch) {
     // Watchlist entière en multi-TF (1h + 4h + 1d)
+    // 1w seulement en force (cron) — sinon 3 TF pour limiter HL 429
     const frameSpecs: { interval: CandleInterval; horizon: string }[] = [
       { interval: "1h", horizon: "court (1h)" },
       { interval: "4h", horizon: "moyen (4h)" },
       { interval: "1d", horizon: "long (1d)" },
-      { interval: "1w", horizon: "très long (1w)" },
+      ...(options?.force
+        ? [{ interval: "1w" as CandleInterval, horizon: "très long (1w)" }]
+        : []),
     ];
 
     const frames = await analyzeCoinFrames(coin, frameSpecs);
@@ -1488,5 +1504,10 @@ export async function getTradeSignals(options?: {
     smc: smcScan,
   };
   cache = { at: Date.now(), value };
+  void kvSetJsonEx(
+    "boriaz:trade-signals-v1",
+    { at: cache.at, value },
+    Math.ceil(CACHE_TTL / 1000),
+  );
   return value;
 }
