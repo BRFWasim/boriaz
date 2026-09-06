@@ -36,6 +36,9 @@ function sanitizePortfolio(raw: Record<string, unknown>): PortfolioProfile | nul
     isDefault: id === "default",
     enabled: id === "default" || id === "boriaz" ? true : Boolean(raw.enabled ?? true),
     paperTradeEnabled: Boolean(raw.paperTradeEnabled ?? true),
+    // LIVE réservé au portefeuille Boriaz (SMC)
+    liveTradeEnabled:
+      id === "boriaz" ? Boolean(raw.liveTradeEnabled ?? false) : false,
     bankrollEur: Math.min(100000, Math.max(100, Number(raw.bankrollEur) || 1000)),
     maxLeverage: Math.min(10, Math.max(1, Number(raw.maxLeverage) || 3)),
     sizePct: Math.min(25, Math.max(1, Number(raw.sizePct) || 10)),
@@ -85,6 +88,9 @@ export async function POST(request: Request) {
     }
     if (typeof body.paperTradeEnabled === "boolean") {
       patch.paperTradeEnabled = body.paperTradeEnabled;
+    }
+    if (typeof body.liveTradeEnabled === "boolean") {
+      patch.liveTradeEnabled = body.liveTradeEnabled;
     }
     if (typeof body.paperBankrollEur === "number") {
       patch.paperBankrollEur = Math.min(100000, Math.max(100, body.paperBankrollEur));

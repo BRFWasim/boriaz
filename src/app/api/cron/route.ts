@@ -69,6 +69,9 @@ export async function GET(request: Request) {
 
   try {
     const signals = await getTradeSignals({ notify: true, force: true });
+    const { isLiveEnvReady, getLiveConfig } = await import("@/lib/hl-live");
+    const liveReady = isLiveEnvReady();
+    const liveCfg = getLiveConfig();
     results.signals = {
       best: signals.best
         ? {
@@ -93,6 +96,13 @@ export async function GET(request: Request) {
       telegramSent: signals.telegramSent,
       telegramError: signals.telegramError,
       paperOpen: signals.paper.filter((p) => p.status === "open").length,
+      live: {
+        envReady: liveReady.ok,
+        envArmed: liveCfg.envArmed,
+        hasAgentKey: liveCfg.hasAgentKey,
+        testnet: liveCfg.testnet,
+        reason: liveReady.reason ?? null,
+      },
     };
   } catch (e) {
     results.signalsError = e instanceof Error ? e.message : "signals";

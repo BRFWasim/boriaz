@@ -26,6 +26,11 @@ export async function GET() {
       process.env.UPSTASH_REDIS_REST_TOKEN?.trim(),
     ),
   };
+  const liveKeys = {
+    HL_LIVE_ENABLED:
+      process.env.HL_LIVE_ENABLED?.trim().toLowerCase() === "true",
+    HL_AGENT_PRIVATE_KEY: Boolean(process.env.HL_AGENT_PRIVATE_KEY?.trim()),
+  };
   const missing = Object.entries(keys)
     .filter(([, ok]) => !ok)
     .map(([name]) => name);
@@ -34,7 +39,8 @@ export async function GET() {
 
   return Response.json({
     lastCron,
-    keys,
+    keys: { ...keys, ...liveKeys },
+    liveKeys,
     missing,
     storage: upstash ? "upstash" : "tmp",
     vercelEnvUrl: VERCEL_ENV_URL,
@@ -44,6 +50,8 @@ export async function GET() {
         "Vercel → projet boriazbot-v4 → Settings → Environment Variables. Tout en Secret / Production. Pas en chat.",
       upstash:
         "Upstash = un petit tiroir en ligne pour le paper 1000 €. Sans ça, Vercel jette le tiroir à chaque redémarrage (/tmp). Gratuit : Redis → REST URL + TOKEN.",
+      live:
+        "LIVE Boriaz : HL_LIVE_ENABLED + HL_AGENT_PRIVATE_KEY (agent wallet, pas seed master) + toggles Lab. Caps HL_MAX_*.",
     },
   });
 }

@@ -49,6 +49,21 @@ export function LabPanel() {
   const [tgBusy, setTgBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [liveStatus, setLiveStatus] = useState<{
+    env: {
+      armed: boolean;
+      hasAgentKey: boolean;
+      ready: boolean;
+      reason: string | null;
+      testnet: boolean;
+      maxNotionalUsd: number;
+      maxLeverage: number;
+      maxOpenPositions: number;
+      agentAddress: string | null;
+      accountAddress: string | null;
+    };
+    prefs: { liveTradeEnabled: boolean; boriazLiveTradeEnabled: boolean };
+  } | null>(null);
   const [smcBusy, setSmcBusy] = useState(false);
   const [smc, setSmc] = useState<{
     best: {
@@ -105,6 +120,12 @@ export function LabPanel() {
       try {
         const tgStatus = await fetch("/api/telegram/setup").then((r) => r.json());
         setTg(tgStatus);
+      } catch {
+        /* ignore */
+      }
+      try {
+        const live = await fetch("/api/live-status").then((r) => r.json());
+        if (live?.env) setLiveStatus(live);
       } catch {
         /* ignore */
       }
@@ -613,7 +634,47 @@ export function LabPanel() {
               />
               Paper trade auto (tous portefeuilles)
             </label>
+            <label className="flex items-center gap-2 text-sm text-amber-700 dark:text-amber-400">
+              <input
+                type="checkbox"
+                checked={Boolean(prefs.liveTradeEnabled)}
+                onChange={(e) =>
+                  patchPrefs({ ...prefs, liveTradeEnabled: e.target.checked })
+                }
+              />
+              LIVE master (Boriaz → Hyperliquid réel)
+            </label>
           </div>
+          {liveStatus ? (
+            <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 text-xs leading-relaxed">
+              <p className="font-medium text-amber-800 dark:text-amber-300">
+                Statut LIVE Hyperliquid
+              </p>
+              <p className="mt-1 text-muted-foreground">
+                Env armé : {liveStatus.env.armed ? "oui" : "non"} · Clé agent :{" "}
+                {liveStatus.env.hasAgentKey ? "présente" : "absente"} · Prêt :{" "}
+                {liveStatus.env.ready ? "oui" : "non"}
+                {liveStatus.env.reason ? ` (${liveStatus.env.reason})` : ""} ·
+                Testnet : {liveStatus.env.testnet ? "oui" : "non"} · Cap{" "}
+                {liveStatus.env.maxNotionalUsd}$ / lev{" "}
+                {liveStatus.env.maxLeverage}× / max{" "}
+                {liveStatus.env.maxOpenPositions} pos.
+              </p>
+              {liveStatus.env.agentAddress ? (
+                <p className="mt-1 font-mono text-[11px] text-muted-foreground">
+                  Agent {liveStatus.env.agentAddress.slice(0, 6)}…
+                  {liveStatus.env.agentAddress.slice(-4)}
+                </p>
+              ) : null}
+              <p className="mt-2 text-muted-foreground">
+                Clé privée = uniquement Vercel Env{" "}
+                <code className="text-[11px]">HL_AGENT_PRIVATE_KEY</code> (agent
+                wallet HL, pas ta seed). +{" "}
+                <code className="text-[11px]">HL_LIVE_ENABLED=true</code> +
+                toggle Boriaz ci-dessous + cron 15 min.
+              </p>
+            </div>
+          ) : null}
         </section>
       ) : null}
 
@@ -689,6 +750,20 @@ export function LabPanel() {
                       />
                       Paper auto
                     </label>
+                    {pf.id === "boriaz" ? (
+                      <label className="flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-400">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(pf.liveTradeEnabled)}
+                          onChange={(e) =>
+                            updatePortfolio(pf.id, {
+                              liveTradeEnabled: e.target.checked,
+                            })
+                          }
+                        />
+                        LIVE HL
+                      </label>
+                    ) : null}
                   </div>
                   {!pf.isDefault && pf.id !== "boriaz" ? (
                     <Button
