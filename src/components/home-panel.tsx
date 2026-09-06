@@ -46,6 +46,27 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
   const [selectedCoin, setSelectedCoin] = useState<string | null>(null);
   const [cryptoFilter, setCryptoFilter] = useState<"all" | "long" | "short" | "wait">("all");
   const [detailMode, setDetailMode] = useState<"simple" | "advanced">("simple");
+  const [liveHl, setLiveHl] = useState<{
+    ok: boolean;
+    reason?: string;
+    accountValueUsd: number;
+    totalMarginUsedUsd: number;
+    withdrawableUsd: number;
+    totalUnrealizedPnlUsd: number;
+    openPositionCount: number;
+    address: string | null;
+    agentAddress: string | null;
+    accountAddress: string | null;
+    ready: boolean;
+    riskUsd: number | null;
+    positions: {
+      coin: string;
+      side: string;
+      size: number;
+      unrealizedPnlUsd: number;
+      leverage: number;
+    }[];
+  } | null>(null);
 
   function mergePaper(next: PaperTrade[] | undefined) {
     if (!next?.length) return;
@@ -104,6 +125,56 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
           setError(null);
           setLiveAt(json.fetchedAt);
         }
+
+        // Compte HL réel (séparé du paper)
+        try {
+          const lr = await fetch("/api/live-account", { cache: "no-store" });
+          const lj = await readResponseJson<{
+            env?: {
+              ready?: boolean;
+              agentAddress?: string | null;
+              accountAddress?: string | null;
+            };
+            portfolio?: {
+              ok: boolean;
+              reason?: string;
+              accountValueUsd: number;
+              totalMarginUsedUsd: number;
+              withdrawableUsd: number;
+              totalUnrealizedPnlUsd: number;
+              openPositionCount: number;
+              address: string | null;
+              positions?: {
+                coin: string;
+                side: string;
+                size: number;
+                unrealizedPnlUsd: number;
+                leverage: number;
+              }[];
+            };
+            riskPreview?: { riskUsd?: number } | null;
+          }>(lr);
+          if (alive && lj.portfolio) {
+            setLiveHl({
+              ok: lj.portfolio.ok,
+              reason: lj.portfolio.reason,
+              accountValueUsd: lj.portfolio.accountValueUsd ?? 0,
+              totalMarginUsedUsd: lj.portfolio.totalMarginUsedUsd ?? 0,
+              withdrawableUsd: lj.portfolio.withdrawableUsd ?? 0,
+              totalUnrealizedPnlUsd: lj.portfolio.totalUnrealizedPnlUsd ?? 0,
+              openPositionCount: lj.portfolio.openPositionCount ?? lj.portfolio.openPositionCount ?? 0,
+              address: lj.portfolio.address,
+              agentAddress: lj.env?.agentAddress ?? null,
+              accountAddress: lj.env?.accountAddress ?? null,
+              ready: Boolean(lj.env?.ready),
+              riskUsd: lj.riskPreview?.riskUsd ?? null,
+              positions: lj.portfolio.positions ?? [],
+            });
+          }
+        } catch {
+          /* live optional */
+        }
+
       } catch (e) {
         if (alive) setError(e instanceof Error ? e.message : "Erreur");
       } finally {
@@ -289,6 +360,117 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
           </Button>
         </div>
       ) : null}
+
+      {/* ——— COMPTE RÉEL HYPERLIQUID ——— */}
+      <section
+        className="bb-reveal rounded-[1.5rem] border border-emerald-500/35 bg-emerald-500/5 px-4 py-5 sm:px-6"
+        style={{ animationDelay: "40ms" }}
+      >
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-[0.65rem] tracking-[0.28em] text-emerald-600 uppercase dark:text-emerald-400">
+              Catégorie réelle · Hyperliquid
+            </p>
+            <h2 className="font-heading mt-1 text-lg font-semibold">
+              Wallet live
+            </h2>
+            <p className="mt-1 max-w-xl text-sm text-muted-foreground">
+              Solde master HL. Le bot live risque 2% de ce montant (pas du
+              paper). L’agent API signe seulement — il n’a pas les USDC.
+            </p>
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-7"
+            onClick={() => onOpenTab?.("lab")}
+          >
+            Régler dans Lab
+          </Button>
+        </div>
+        {liveHl ? (
+          liveHl.ok && liveHl.accountValueUsd > 0 ? (
+            <>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                <Stat
+                  label="Account value"
+                  value={`${liveHl.accountValueUsd.toFixed(2)} $`}
+                />
+                <Stat
+                  label="Marge utilisée"
+                  value={`${liveHl.totalMarginUsedUsd.toFixed(2)} $`}
+                />
+                <Stat
+                  label="Withdrawable"
+                  value={`${liveHl.withdrawableUsd.toFixed(2)} $`}
+                />
+                <Stat
+                  label="PnL latent"
+                  value={`${liveHl.totalUnrealizedPnlUsd >= 0 ? "+" : ""}${liveHl.totalUnrealizedPnlUsd.toFixed(2)} $`}
+                  className={signedClass(liveHl.totalUnrealizedPnlUsd)}
+                />
+                <Stat
+                  label="Risque 2% / trade"
+                  value={`${(liveHl.riskUsd ?? liveHl.accountValueUsd * 0.02).toFixed(2)} $`}
+                />
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground">
+                {liveHl.openPositionCount} position
+                {liveHl.openPositionCount !== 1 ? "s" : ""} ouverte
+                {liveHl.openPositionCount !== 1 ? "s" : ""}
+                {liveHl.accountAddress
+                  ? ` · master ${liveHl.accountAddress.slice(0, 6)}…${liveHl.accountAddress.slice(-4)}`
+                  : ""}
+                {liveHl.agentAddress
+                  ? ` · agent ${liveHl.agentAddress.slice(0, 6)}…${liveHl.agentAddress.slice(-4)}`
+                  : ""}
+              </p>
+              {liveHl.positions.length > 0 ? (
+                <ul className="mt-3 space-y-2">
+                  {liveHl.positions.map((p) => (
+                    <li
+                      key={`${p.coin}-${p.side}`}
+                      className="rounded-xl border border-border/60 bg-card/50 px-3 py-2 text-sm"
+                    >
+                      <span className="font-medium">
+                        {p.coin} {p.side} {p.leverage}×
+                      </span>
+                      <span
+                        className={`ml-2 ${signedClass(p.unrealizedPnlUsd)}`}
+                      >
+                        {p.unrealizedPnlUsd >= 0 ? "+" : ""}
+                        {p.unrealizedPnlUsd.toFixed(2)} $
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </>
+          ) : (
+            <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-muted-foreground">
+              <p className="font-medium text-amber-800 dark:text-amber-300">
+                Solde réel non lu (0$)
+              </p>
+              <p className="mt-1">
+                {liveHl.reason ||
+                  "Sur Vercel → Env : HL_ACCOUNT_ADDRESS = adresse MASTER (celle à ~109$ sur Hyperliquid Portfolio), PAS l’adresse de l’API wallet agent (0x947c…). Redeploy après."}
+              </p>
+              {liveHl.agentAddress ? (
+                <p className="mt-1 font-mono text-[11px]">
+                  Agent vu : {liveHl.agentAddress.slice(0, 10)}… (signe les
+                  ordres, solde = 0$ — normal)
+                </p>
+              ) : null}
+            </div>
+          )
+        ) : (
+          <p className="mt-3 text-sm text-muted-foreground">
+            Chargement du wallet HL…
+          </p>
+        )}
+      </section>
+
       {acc ? (
         <section
           className="bb-reveal rounded-[1.5rem] border border-primary/25 bg-primary/5 px-4 py-5 sm:px-6"
@@ -297,13 +479,12 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <p className="text-[0.65rem] tracking-[0.28em] text-primary uppercase">
-                Compte simu {acc.bankrollStartEur.toFixed(0)} € ·{" "}
+                Catégorie fictive · paper {acc.bankrollStartEur.toFixed(0)} € ·{" "}
                 {user?.guest === false ? user.name : user?.name ?? "invité"}
               </p>
               <p className="mt-1 max-w-xl text-sm text-muted-foreground">
-                Plusieurs trades en même temps sur le même capital. Un trade reste
-                figé (entrée / TP / SL / côté) jusqu’au TP ou SL — il ne change
-                plus de stratégie. Refresh = tout reste.
+                Simulation seulement — n’envoie aucun ordre sur HL. Le capital
+                paper (1000 €) ne size pas le live. Trades figés jusqu’au TP/SL.
               </p>
             </div>
             <AccountBox user={user} onUser={setUser} />
@@ -334,10 +515,12 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
 
       <section className="bb-reveal space-y-3">
         <div>
-          <h2 className="font-heading text-lg font-semibold">Portefeuilles</h2>
+          <h2 className="font-heading text-lg font-semibold">
+            Portefeuilles fictifs (paper)
+          </h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Défaut toujours actif. Déplie pour voir equity, paramètres et trades
-            de chaque profil (réglages dans le Lab).
+            Books de simulation. Le wallet réel est dans la carte verte
+            ci-dessus. Défaut / Boriaz / Scalp : réglages dans le Lab.
           </p>
         </div>
         {portfolioViews.length === 0 ? (

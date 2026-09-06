@@ -146,9 +146,11 @@ export function getLiveConfig(): LiveConfigStatus {
       ),
     ),
     agentAddress,
+    // OBLIGATOIRE : adresse MASTER (celle qui a les USDC), PAS l’agent API.
+    // L’agent signe ; le master détient le solde (info clearinghouse).
     accountAddress:
       envStrAny(["HL_ACCOUNT_ADDRESS", "HL_ACCOUNT_ADDRESS"]).toLowerCase() ||
-      agentAddress,
+      null,
   };
 }
 
@@ -163,7 +165,24 @@ export function isLiveEnvReady(): { ok: boolean; reason?: string } {
   if (!cfg.hasAgentKey) {
     return {
       ok: false,
-      reason: "HL_AGENT_PRIVATE_KEY (ou alias HL_AGENT_PRIVATE_KEY) manquante ou invalide.",
+      reason: "HL_AGENT_PRIVATE_KEY manquante ou invalide.",
+    };
+  }
+  if (!cfg.accountAddress) {
+    return {
+      ok: false,
+      reason:
+        "HL_ACCOUNT_ADDRESS manquante — mets l’adresse MASTER (celle avec tes USDC), pas l’agent API.",
+    };
+  }
+  if (
+    cfg.agentAddress &&
+    cfg.accountAddress.toLowerCase() === cfg.agentAddress.toLowerCase()
+  ) {
+    return {
+      ok: false,
+      reason:
+        "HL_ACCOUNT_ADDRESS = adresse agent. Remplace par l’adresse MASTER du portefeuille (~109$).",
     };
   }
   return { ok: true };
@@ -274,7 +293,7 @@ export async function fetchLivePortfolio(): Promise<LivePortfolioSnapshot> {
   if (!address) {
     return {
       ok: false,
-      reason: "Adresse HL absente (HL_ACCOUNT_ADDRESS ou clé agent).",
+      reason: "HL_ACCOUNT_ADDRESS absente — adresse MASTER obligatoire (pas l’agent API).",
       testnet: cfg.testnet,
       address: null,
       accountValueUsd: 0,
@@ -316,6 +335,10 @@ export async function fetchLivePortfolio(): Promise<LivePortfolioSnapshot> {
       state.marginSummary?.totalMarginUsed ?? 0,
     );
     const withdrawableUsd = Number(state.withdrawable ?? 0);
+    const zeroHint =
+      accountValueUsd <= 0
+        ? "Solde 0$ sur cette adresse — vérifie HL_ACCOUNT_ADDRESS = wallet MASTER (pas l’agent 0x947c…)."
+        : undefined;
     return {
       ok: true,
       testnet: cfg.testnet,
@@ -329,6 +352,7 @@ export async function fetchLivePortfolio(): Promise<LivePortfolioSnapshot> {
       ),
       openPositionCount: positions.length,
       positions,
+      reason: zeroHint,
     };
   } catch (e) {
     return {

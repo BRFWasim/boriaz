@@ -40,7 +40,7 @@ export async function GET() {
       ? {
           riskPct: 2,
           riskUsd: Math.round(portfolio.accountValueUsd * 0.02 * 100) / 100,
-          note: "Live Boriaz = 2% de l’equity HL réelle (paper ignoré).",
+          note: "Live = 2% de l’equity HL réelle (master). Paper ignoré.",
         }
       : null,
   });

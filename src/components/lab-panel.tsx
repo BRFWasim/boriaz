@@ -671,7 +671,7 @@ export function LabPanel() {
                   patchPrefs({ ...prefs, liveTradeEnabled: e.target.checked })
                 }
               />
-              LIVE master (Boriaz → Hyperliquid réel)
+              LIVE master (Boriaz / Scalp → Hyperliquid réel)
             </label>
           </div>
           {liveStatus ? (
@@ -689,18 +689,34 @@ export function LabPanel() {
                 {liveStatus.env.maxLeverage}× / max{" "}
                 {liveStatus.env.maxOpenPositions} pos.
               </p>
-              {liveStatus.env.agentAddress ? (
-                <p className="mt-1 font-mono text-[11px] text-muted-foreground">
-                  Agent {liveStatus.env.agentAddress.slice(0, 6)}…
-                  {liveStatus.env.agentAddress.slice(-4)}
-                </p>
-              ) : null}
+              <div className="mt-2 space-y-1 font-mono text-[11px] text-muted-foreground">
+                {liveStatus.env.agentAddress ? (
+                  <p>
+                    Agent (signe) {liveStatus.env.agentAddress.slice(0, 6)}…
+                    {liveStatus.env.agentAddress.slice(-4)}
+                  </p>
+                ) : null}
+                {liveStatus.env.accountAddress ? (
+                  <p>
+                    Master (solde) {liveStatus.env.accountAddress.slice(0, 6)}…
+                    {liveStatus.env.accountAddress.slice(-4)}
+                  </p>
+                ) : (
+                  <p className="text-amber-700 dark:text-amber-400">
+                    HL_ACCOUNT_ADDRESS manquante — mets ton adresse MASTER
+                    (celle à ~109$), pas l’agent API.
+                  </p>
+                )}
+              </div>
               <p className="mt-2 text-muted-foreground">
-                Clé privée = uniquement Vercel Env{" "}
-                <code className="text-[11px]">HL_AGENT_PRIVATE_KEY</code> (agent
-                wallet HL, pas ta seed). +{" "}
+                Vercel Env :{" "}
+                <code className="text-[11px]">HL_AGENT_PRIVATE_KEY</code> (clé
+                agent) +{" "}
+                <code className="text-[11px]">HL_ACCOUNT_ADDRESS</code> = adresse{" "}
+                <strong className="text-foreground">MASTER</strong> (celle avec
+                tes ~109$) +{" "}
                 <code className="text-[11px]">HL_LIVE_ENABLED=true</code> +
-                toggle Boriaz ci-dessous + cron 15 min.
+                toggles Lab + cron.
               </p>
             </div>
           ) : null}
@@ -781,13 +797,16 @@ export function LabPanel() {
               ) : (
                 <p className="mt-2 text-xs text-muted-foreground">
                   Aucune position ouverte sur HL pour le moment.
+                  {livePortfolio.accountValueUsd <= 0 && livePortfolio.reason
+                    ? ` — ${livePortfolio.reason}`
+                    : ""}
                 </p>
               )}
             </>
           ) : (
             <p className="mt-2 text-sm text-muted-foreground">
               {livePortfolio.reason ||
-                "Compte HL illisible — vérifie HL_ACCOUNT_ADDRESS / clé agent."}
+                "Compte HL illisible — HL_ACCOUNT_ADDRESS doit être le MASTER (pas l’agent)."}
             </p>
           )
         ) : (
@@ -871,7 +890,7 @@ export function LabPanel() {
                       />
                       Paper auto
                     </label>
-                    {pf.id === "boriaz" ? (
+                    {!pf.isDefault ? (
                       <label className="flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-400">
                         <input
                           type="checkbox"
