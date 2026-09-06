@@ -176,9 +176,10 @@ export function ensurePortfolios(
     });
   }
   // Ordre : défaut, boriaz, puis les autres
-  const rest = [...byId.values()].filter(
-    (p) => p.id !== "default" && p.id !== "boriaz",
-  );
+  // LIVE HL uniquement pour Défaut + Boriaz (Scalp / autres = paper only)
+  const rest = [...byId.values()]
+    .filter((p) => p.id !== "default" && p.id !== "boriaz")
+    .map((p) => ({ ...p, liveTradeEnabled: false }));
   return [
     byId.get("default")!,
     byId.get("boriaz")!,

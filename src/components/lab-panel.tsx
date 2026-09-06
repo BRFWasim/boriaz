@@ -224,13 +224,14 @@ export function LabPanel() {
     return () => window.clearInterval(id);
   }, []);
 
-  async function savePrefs() {
-    if (!prefs) return;
+  async function savePrefs(nextPrefs?: UserPrefs) {
+    const base = nextPrefs ?? prefs;
+    if (!base) return;
     setSaving(true);
     setMsg("Enregistrement…");
     const payload = {
-      ...prefs,
-      portfolios: ensurePortfolios(prefs.portfolios),
+      ...base,
+      portfolios: ensurePortfolios(base.portfolios),
     };
     const res = await fetch("/api/prefs", {
       method: "POST",
@@ -260,10 +261,26 @@ export function LabPanel() {
 
   function updatePortfolio(id: string, patch: Partial<PortfolioProfile>) {
     if (!prefs) return;
+    // LIVE réservé à Défaut + Boriaz — Scalp / autres forcé paper-only
+    const safePatch =
+      id === "default" || id === "boriaz"
+        ? patch
+        : { ...patch, liveTradeEnabled: false };
     const portfolios = ensurePortfolios(prefs.portfolios).map((p) =>
-      p.id === id ? { ...p, ...patch, id: p.id, isDefault: p.isDefault } : p,
+      p.id === id
+        ? { ...p, ...safePatch, id: p.id, isDefault: p.isDefault }
+        : p,
     );
-    patchPrefs({ ...prefs, portfolios });
+    const next = { ...prefs, portfolios };
+    patchPrefs(next);
+    // Auto-save immédiat pour les toggles LIVE / paper (sinon le cron ignore)
+    if (
+      "liveTradeEnabled" in patch ||
+      "paperTradeEnabled" in patch ||
+      "enabled" in patch
+    ) {
+      void savePrefs(next);
+    }
   }
 
   function addPortfolio(kind: "scalp" | "risky" | "swing") {
@@ -740,12 +757,22 @@ export function LabPanel() {
               <input
                 type="checkbox"
                 checked={Boolean(prefs.liveTradeEnabled)}
-                onChange={(e) =>
-                  patchPrefs({ ...prefs, liveTradeEnabled: e.target.checked })
-                }
+                onChange={(e) => {
+                  const next = {
+                    ...prefs,
+                    liveTradeEnabled: e.target.checked,
+                  };
+                  patchPrefs(next);
+                  void savePrefs(next);
+                }}
               />
-              LIVE master (Boriaz / Scalp / Défaut → Hyperliquid réel)
+              LIVE master (uniquement Défaut + Boriaz → Hyperliquid réel)
             </label>
+            <p className="text-[11px] text-muted-foreground sm:col-span-2">
+              Scalp / Risqué / Swing = paper seulement. Le LIVE réel ne passe
+              que par Défaut et Boriaz (toggles ci-dessous). Les cases
+              s’enregistrent automatiquement.
+            </p>
           </div>
           {liveStatus ? (
             <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 text-xs leading-relaxed">
@@ -1021,23 +1048,33 @@ export function LabPanel() {
                       />
                       Paper auto
                     </label>
-                    <label className="flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-400">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(pf.liveTradeEnabled)}
-                        onChange={(e) =>
-                          updatePortfolio(pf.id, {
-                            liveTradeEnabled: e.target.checked,
-                          })
-                        }
-                      />
-                      LIVE HL
-                      {pf.isDefault ? (
-                        <span className="text-[10px] text-muted-foreground">
-                          (Défaut)
-                        </span>
-                      ) : null}
-                    </label>
+                    {pf.id === "default" || pf.id === "boriaz" ? (
+                      <label className="flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-400">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(pf.liveTradeEnabled)}
+                          onChange={(e) =>
+                            updatePortfolio(pf.id, {
+                              liveTradeEnabled: e.target.checked,
+                            })
+                          }
+                        />
+                        LIVE HL
+                        {pf.isDefault ? (
+                          <span className="text-[10px] text-muted-foreground">
+                            (Défaut)
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-muted-foreground">
+                            (Boriaz)
+                          </span>
+                        )}
+                      </label>
+                    ) : (
+                      <span className="text-[10px] text-muted-foreground">
+                        LIVE HL : non (paper only)
+                      </span>
+                    )}
                   </div>
                   {!pf.isDefault && pf.id !== "boriaz" ? (
                     <Button

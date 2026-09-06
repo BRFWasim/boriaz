@@ -45,8 +45,10 @@ function LoginForm() {
       </h1>
       <p className="mt-2 text-sm text-muted-foreground">
         Débloque les onglets Boriaz (wallet réel) et Lab. Le reste du site
-        reste public. Cookie 1 an — tu restes connecté sur tes appareils. Le
-        bot / cron continue sans cette page.
+        reste public. Cookie 1 an — tu restes connecté sur tes appareils.
+        Sans <code className="text-xs">SITE_PASSWORD</code> sur Vercel, le
+        login ne peut pas ouvrir ces onglets. Le bot / cron continue sans
+        cette page.
       </p>
 
       <form onSubmit={onSubmit} className="mt-8 space-y-4">

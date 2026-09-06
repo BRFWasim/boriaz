@@ -3,10 +3,18 @@
  * Compatible Edge (middleware) + Node (API).
  * Le cron / bot en fond N’EST PAS bloqué (exemption /api/cron).
  *
- * Env : SITE_PASSWORD — si vide, portail désactivé.
+ * Env : SITE_PASSWORD — obligatoire pour Login / onglets Boriaz + Lab.
+ * Sans SITE_PASSWORD : Boriaz/Lab restent verrouillés (pas d’accès libre).
  */
 
 export const SITE_GATE_COOKIE = "bb_site_gate";
+
+/** Portefeuilles autorisés à trader en LIVE HL (réel). */
+export const LIVE_ALLOWED_PORTFOLIO_IDS = new Set(["default", "boriaz"]);
+
+export function isLiveAllowedPortfolio(id: string | null | undefined): boolean {
+  return Boolean(id && LIVE_ALLOWED_PORTFOLIO_IDS.has(id));
+}
 
 function gateMaterial(): string {
   return (
@@ -36,7 +44,7 @@ export async function expectedSiteGateToken(): Promise<string> {
 export async function siteGateTokenValid(
   token: string | undefined | null,
 ): Promise<boolean> {
-  if (!sitePasswordConfigured()) return true;
+  if (!sitePasswordConfigured()) return false;
   if (!token) return false;
   const expected = await expectedSiteGateToken();
   if (token.length !== expected.length) return false;
@@ -49,7 +57,7 @@ export async function siteGateTokenValid(
 
 export async function passwordMatches(input: string): Promise<boolean> {
   const expected = process.env.SITE_PASSWORD?.trim() || "";
-  if (!expected) return true;
+  if (!expected) return false;
   if (input.length !== expected.length) return false;
   let ok = 0;
   for (let i = 0; i < input.length; i++) {

@@ -8,8 +8,9 @@ import {
 /**
  * Portail soft :
  * - Pages publiques (Accueil, Baleines, etc.) ouvertes
- * - APIs privées (live, lab/paper bot) derrière cookie
+ * - APIs privées (live, lab/paper) derrière cookie Login
  * - /api/cron JAMAIS bloqué → bot en fond
+ * - Sans SITE_PASSWORD : APIs privées restent fermées (Boriaz/Lab inaccessibles)
  */
 
 const PRIVATE_API_PREFIXES = [
@@ -31,10 +32,6 @@ function isPrivateApi(pathname: string): boolean {
 }
 
 export async function middleware(request: NextRequest) {
-  if (!sitePasswordConfigured()) {
-    return NextResponse.next();
-  }
-
   const { pathname } = request.nextUrl;
 
   if (
@@ -52,6 +49,16 @@ export async function middleware(request: NextRequest) {
   // Pages & APIs publiques → OK sans login
   if (!isPrivateApi(pathname)) {
     return NextResponse.next();
+  }
+
+  if (!sitePasswordConfigured()) {
+    return NextResponse.json(
+      {
+        error:
+          "SITE_PASSWORD manquant sur Vercel — Boriaz / Lab verrouillés jusqu’à configuration + login.",
+      },
+      { status: 503 },
+    );
   }
 
   const token = request.cookies.get(SITE_GATE_COOKIE)?.value;

@@ -36,8 +36,11 @@ function sanitizePortfolio(raw: Record<string, unknown>): PortfolioProfile | nul
     isDefault: id === "default",
     enabled: id === "default" || id === "boriaz" ? true : Boolean(raw.enabled ?? true),
     paperTradeEnabled: Boolean(raw.paperTradeEnabled ?? true),
-    // LIVE autorisé pour Défaut / Boriaz / customs (master kill-switch en plus)
-    liveTradeEnabled: Boolean(raw.liveTradeEnabled ?? false),
+    // LIVE uniquement Défaut + Boriaz (Scalp / customs = paper only)
+    liveTradeEnabled:
+      id === "default" || id === "boriaz"
+        ? Boolean(raw.liveTradeEnabled ?? false)
+        : false,
     bankrollEur: Math.min(100000, Math.max(100, Number(raw.bankrollEur) || 1000)),
     maxLeverage: Math.min(10, Math.max(1, Number(raw.maxLeverage) || 3)),
     sizePct: Math.min(25, Math.max(1, Number(raw.sizePct) || 10)),

@@ -13,11 +13,13 @@ export const runtime = "nodejs";
 /** POST { password } → cookie portail. DELETE → logout. */
 export async function POST(request: Request) {
   if (!sitePasswordConfigured()) {
-    return NextResponse.json({
-      ok: true,
-      disabled: true,
-      note: "SITE_PASSWORD non défini — portail désactivé.",
-    });
+    return NextResponse.json(
+      {
+        error:
+          "SITE_PASSWORD non défini sur Vercel — impossible de se connecter.",
+      },
+      { status: 503 },
+    );
   }
 
   let password = "";
@@ -41,7 +43,7 @@ export async function POST(request: Request) {
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
     path: "/",
-    maxAge: 60 * 60 * 24 * 365, // 1 an — reste connecté sur tes appareils
+    maxAge: 60 * 60 * 24 * 365, // 1 an
   });
   return res;
 }
@@ -61,9 +63,9 @@ export async function DELETE() {
 }
 
 export async function GET(request: Request) {
-  const enabled = sitePasswordConfigured();
-  let authenticated = !enabled;
-  if (enabled) {
+  const configured = sitePasswordConfigured();
+  let authenticated = false;
+  if (configured) {
     const cookie = request.headers.get("cookie") || "";
     const match = cookie.match(
       new RegExp(`(?:^|;\\s*)${SITE_GATE_COOKIE}=([^;]+)`),
@@ -72,10 +74,12 @@ export async function GET(request: Request) {
     authenticated = await siteGateTokenValid(token);
   }
   return NextResponse.json({
-    enabled,
+    /** Toujours true côté UI : Login visible, Boriaz/Lab privés sans cookie. */
+    enabled: true,
+    configured,
     authenticated,
-    note: enabled
+    note: configured
       ? "Portail actif — Boriaz + Lab après login. /api/cron reste libre (bot en fond)."
-      : "Portail off — définis SITE_PASSWORD sur Vercel.",
+      : "Définis SITE_PASSWORD sur Vercel puis redéploie — sans ça Login ne peut pas ouvrir Boriaz/Lab.",
   });
 }

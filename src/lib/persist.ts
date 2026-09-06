@@ -156,6 +156,21 @@ export async function loadPrefs(): Promise<UserPrefs> {
       portfolios.find((p) => p.isDefault)?.bankrollEur ||
       merged.paperBankrollEur ||
       1000;
+    // Purge persistée : Scalp/autres ne doivent plus rester LIVE en storage
+    const hadForbiddenLive = (parsed.portfolios ?? []).some(
+      (p) =>
+        p &&
+        p.id !== "default" &&
+        p.id !== "boriaz" &&
+        Boolean(p.liveTradeEnabled),
+    );
+    if (hadForbiddenLive) {
+      try {
+        await writeText(k.prefs, JSON.stringify(merged, null, 2));
+      } catch {
+        /* ignore */
+      }
+    }
     return merged;
   } catch {
     return { ...DEFAULT_PREFS, portfolios: ensurePortfolios(null) };

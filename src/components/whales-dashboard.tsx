@@ -173,17 +173,16 @@ export function WhalesDashboard() {
         });
       })
       .catch(() => {
-        if (alive) setSiteAuth({ enabled: false, authenticated: true });
+        // En cas d’erreur réseau : rester verrouillé (pas d’accès Lab/Boriaz)
+        if (alive) setSiteAuth({ enabled: true, authenticated: false });
       });
     return () => {
       alive = false;
     };
   }, []);
 
-  const unlocked =
-    siteAuth == null
-      ? false
-      : !siteAuth.enabled || siteAuth.authenticated;
+  // Boriaz + Lab UNIQUEMENT après login (cookie), jamais en public
+  const unlocked = Boolean(siteAuth?.authenticated);
 
   useEffect(() => {
     if (siteAuth == null) return;
@@ -282,7 +281,7 @@ export function WhalesDashboard() {
                 </span>
               ) : null}
               <ThemeSwitch theme={theme} onChange={setTheme} />
-              {siteAuth?.enabled && !siteAuth.authenticated ? (
+              {siteAuth != null && !siteAuth.authenticated ? (
                 <Button
                   type="button"
                   size="sm"
@@ -294,7 +293,7 @@ export function WhalesDashboard() {
                   Login
                 </Button>
               ) : null}
-              {siteAuth?.enabled && siteAuth.authenticated ? (
+              {siteAuth?.authenticated ? (
                 <Button
                   type="button"
                   size="sm"

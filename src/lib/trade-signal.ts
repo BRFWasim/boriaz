@@ -471,7 +471,10 @@ export async function getTradeSignals(options?: {
     const { isLiveEnvReady } = await import("./hl-live");
     liveArmed =
       Boolean(prefs.liveTradeEnabled) &&
-      prefs.portfolios.some((p) => p.liveTradeEnabled) &&
+      prefs.portfolios.some(
+        (p) =>
+          p.liveTradeEnabled && (p.id === "default" || p.id === "boriaz"),
+      ) &&
       isLiveEnvReady().ok;
   } catch {
     liveArmed = false;
@@ -1255,6 +1258,7 @@ export async function getTradeSignals(options?: {
         opened &&
         prefs.liveTradeEnabled &&
         pf.liveTradeEnabled &&
+        (pf.id === "default" || pf.id === "boriaz") &&
         !opened.note.includes("Cash insuffisant")
       ) {
         try {
@@ -1464,6 +1468,7 @@ export async function getTradeSignals(options?: {
           opened &&
           prefs.liveTradeEnabled &&
           pf.liveTradeEnabled &&
+          (pf.id === "default" || pf.id === "boriaz") &&
           !opened.note.includes("Cash insuffisant")
         ) {
           try {
