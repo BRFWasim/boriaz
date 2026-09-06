@@ -18,6 +18,7 @@ import type { BacktestPayload } from "@/lib/backtest";
 import type { CorrelationPayload } from "@/lib/correlation";
 import {
   DEFAULT_PREFS,
+  computePaperAccount,
   ensurePortfolios,
   makeCustomPortfolio,
 } from "@/lib/user-types";
@@ -49,6 +50,42 @@ export function LabPanel() {
   const [tgBusy, setTgBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [liveStatus, setLiveStatus] = useState<{
+    env: {
+      armed: boolean;
+      hasAgentKey: boolean;
+      ready: boolean;
+      reason: string | null;
+      testnet: boolean;
+      maxNotionalUsd: number;
+      maxLeverage: number;
+      maxOpenPositions: number;
+      agentAddress: string | null;
+      accountAddress: string | null;
+    };
+    prefs: { liveTradeEnabled: boolean; boriazLiveTradeEnabled: boolean };
+  } | null>(null);
+  const [livePortfolio, setLivePortfolio] = useState<{
+    ok: boolean;
+    reason?: string;
+    testnet: boolean;
+    address: string | null;
+    accountValueUsd: number;
+    totalMarginUsedUsd: number;
+    withdrawableUsd: number;
+    totalUnrealizedPnlUsd: number;
+    openPositionCount: number;
+    positions: {
+      coin: string;
+      side: "long" | "short";
+      size: number;
+      entryPx: number;
+      positionValueUsd: number;
+      unrealizedPnlUsd: number;
+      leverage: number;
+      marginUsedUsd: number;
+    }[];
+  } | null>(null);
   const [smcBusy, setSmcBusy] = useState(false);
   const [smc, setSmc] = useState<{
     best: {
@@ -105,6 +142,19 @@ export function LabPanel() {
       try {
         const tgStatus = await fetch("/api/telegram/setup").then((r) => r.json());
         setTg(tgStatus);
+      } catch {
+        /* ignore */
+      }
+      try {
+        const live = await fetch("/api/live-status").then((r) => r.json());
+        if (live?.env) setLiveStatus(live);
+      } catch {
+        /* ignore */
+      }
+      try {
+        const liveAcc = await fetch("/api/live-account").then((r) => r.json());
+        if (liveAcc?.portfolio) setLivePortfolio(liveAcc.portfolio);
+        if (liveAcc?.env) setLiveStatus(liveAcc);
       } catch {
         /* ignore */
       }
@@ -613,9 +663,133 @@ export function LabPanel() {
               />
               Paper trade auto (tous portefeuilles)
             </label>
+            <label className="flex items-center gap-2 text-sm text-amber-700 dark:text-amber-400">
+              <input
+                type="checkbox"
+                checked={Boolean(prefs.liveTradeEnabled)}
+                onChange={(e) =>
+                  patchPrefs({ ...prefs, liveTradeEnabled: e.target.checked })
+                }
+              />
+              LIVE master (Boriaz → Hyperliquid réel)
+            </label>
           </div>
+          {liveStatus ? (
+            <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 text-xs leading-relaxed">
+              <p className="font-medium text-amber-800 dark:text-amber-300">
+                Statut LIVE Hyperliquid
+              </p>
+              <p className="mt-1 text-muted-foreground">
+                Env armé : {liveStatus.env.armed ? "oui" : "non"} · Clé agent :{" "}
+                {liveStatus.env.hasAgentKey ? "présente" : "absente"} · Prêt :{" "}
+                {liveStatus.env.ready ? "oui" : "non"}
+                {liveStatus.env.reason ? ` (${liveStatus.env.reason})` : ""} ·
+                Testnet : {liveStatus.env.testnet ? "oui" : "non"} · Cap{" "}
+                {liveStatus.env.maxNotionalUsd}$ / lev{" "}
+                {liveStatus.env.maxLeverage}× / max{" "}
+                {liveStatus.env.maxOpenPositions} pos.
+              </p>
+              {liveStatus.env.agentAddress ? (
+                <p className="mt-1 font-mono text-[11px] text-muted-foreground">
+                  Agent {liveStatus.env.agentAddress.slice(0, 6)}…
+                  {liveStatus.env.agentAddress.slice(-4)}
+                </p>
+              ) : null}
+              <p className="mt-2 text-muted-foreground">
+                Clé privée = uniquement Vercel Env{" "}
+                <code className="text-[11px]">HL_AGENT_PRIVATE_KEY</code> (agent
+                wallet HL, pas ta seed). +{" "}
+                <code className="text-[11px]">HL_LIVE_ENABLED=true</code> +
+                toggle Boriaz ci-dessous + cron 15 min.
+              </p>
+            </div>
+          ) : null}
         </section>
       ) : null}
+
+      <section className="rounded-2xl border border-emerald-500/30 bg-emerald-500/5 p-4">
+        <h3 id="lab-live-portfolio" className="font-medium">
+          Portefeuille réel Hyperliquid
+        </h3>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Suivi séparé du paper. Lit le clearinghouse HL (adresse master /
+          agent). Les P&L paper ci-dessous ne sont pas mélangés ici.
+        </p>
+        {livePortfolio ? (
+          livePortfolio.ok ? (
+            <>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                <Metric
+                  label="Account value"
+                  value={`${livePortfolio.accountValueUsd.toFixed(2)} $`}
+                />
+                <Metric
+                  label="Marge utilisée"
+                  value={`${livePortfolio.totalMarginUsedUsd.toFixed(2)} $`}
+                />
+                <Metric
+                  label="Withdrawable"
+                  value={`${livePortfolio.withdrawableUsd.toFixed(2)} $`}
+                />
+                <Metric
+                  label="PnL latent"
+                  value={`${livePortfolio.totalUnrealizedPnlUsd >= 0 ? "+" : ""}${livePortfolio.totalUnrealizedPnlUsd.toFixed(2)} $`}
+                  className={signedClass(livePortfolio.totalUnrealizedPnlUsd)}
+                />
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground">
+                {livePortfolio.testnet ? "Testnet" : "Mainnet"} ·{" "}
+                {livePortfolio.openPositionCount} position
+                {livePortfolio.openPositionCount > 1 ? "s" : ""}
+                {livePortfolio.address
+                  ? ` · ${livePortfolio.address.slice(0, 6)}…${livePortfolio.address.slice(-4)}`
+                  : ""}
+              </p>
+              {livePortfolio.positions.length ? (
+                <ul className="mt-3 space-y-2">
+                  {livePortfolio.positions.map((p) => (
+                    <li
+                      key={`${p.coin}-${p.side}`}
+                      className="rounded-lg border border-border/60 bg-card/60 px-3 py-2 text-sm"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-medium">
+                          {p.coin}{" "}
+                          <span className="text-xs uppercase text-muted-foreground">
+                            {p.side} {p.leverage}×
+                          </span>
+                        </span>
+                        <span className={signedClass(p.unrealizedPnlUsd)}>
+                          {p.unrealizedPnlUsd >= 0 ? "+" : ""}
+                          {p.unrealizedPnlUsd.toFixed(2)} $
+                        </span>
+                      </div>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        size {p.size} · entry {p.entryPx} · notionnel{" "}
+                        {p.positionValueUsd.toFixed(2)} $ · marge{" "}
+                        {p.marginUsedUsd.toFixed(2)} $
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Aucune position ouverte sur HL pour le moment.
+                </p>
+              )}
+            </>
+          ) : (
+            <p className="mt-2 text-sm text-muted-foreground">
+              {livePortfolio.reason ||
+                "Compte HL illisible — vérifie HL_ACCOUNT_ADDRESS / clé agent."}
+            </p>
+          )
+        ) : (
+          <p className="mt-2 text-sm text-muted-foreground">
+            Chargement du compte HL… (nécessite la clé agent en env Vercel)
+          </p>
+        )}
+      </section>
 
       {prefs ? (
         <section className="rounded-2xl border border-primary/25 bg-primary/5 p-4">
@@ -689,6 +863,20 @@ export function LabPanel() {
                       />
                       Paper auto
                     </label>
+                    {pf.id === "boriaz" ? (
+                      <label className="flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-400">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(pf.liveTradeEnabled)}
+                          onChange={(e) =>
+                            updatePortfolio(pf.id, {
+                              liveTradeEnabled: e.target.checked,
+                            })
+                          }
+                        />
+                        LIVE HL
+                      </label>
+                    ) : null}
                   </div>
                   {!pf.isDefault && pf.id !== "boriaz" ? (
                     <Button
@@ -706,6 +894,44 @@ export function LabPanel() {
                     TP1 1R (50 %+BE) · TP2 2R · gate mécanique (Claude off).
                   </p>
                 ) : null}
+                {(() => {
+                  const acc = computePaperAccount(paper, pf.bankrollEur, pf.id);
+                  const total =
+                    acc.realizedPnlEur + acc.unrealizedPnlEur;
+                  const fmt = (n: number) =>
+                    `${n >= 0 ? "+" : ""}${n.toFixed(2)} €`;
+                  return (
+                    <div className="mt-3 grid gap-2 rounded-lg border border-border/60 bg-muted/20 p-2 sm:grid-cols-4">
+                      <Metric
+                        label="Sorti (réalisé)"
+                        value={fmt(acc.realizedPnlEur)}
+                        className={signedClass(acc.realizedPnlEur)}
+                      />
+                      <Metric
+                        label="En cours (latent)"
+                        value={fmt(acc.unrealizedPnlEur)}
+                        className={signedClass(acc.unrealizedPnlEur)}
+                      />
+                      <Metric
+                        label="Total P&L"
+                        value={fmt(total)}
+                        className={signedClass(total)}
+                      />
+                      <Metric
+                        label="Equity"
+                        value={`${acc.equityEur.toFixed(2)} €`}
+                        className={signedClass(
+                          acc.equityEur - acc.bankrollStartEur,
+                        )}
+                      />
+                      <p className="sm:col-span-4 text-[11px] text-muted-foreground">
+                        Ouverts {acc.openCount} · en attente {acc.pendingCount} ·
+                        clos {acc.closedCount} (W{acc.winCount}/L{acc.lossCount})
+                        · départ {acc.bankrollStartEur} €
+                      </p>
+                    </div>
+                  );
+                })()}
                 <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
                   <div>
                     <Label>Capital (€)</Label>
@@ -1207,13 +1433,25 @@ export function LabPanel() {
   );
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function Metric({
+  label,
+  value,
+  className,
+}: {
+  label: string;
+  value: string;
+  className?: string;
+}) {
   return (
     <div className="rounded-lg bg-muted/30 px-3 py-2">
       <p className="text-[10px] tracking-wide text-muted-foreground uppercase">
         {label}
       </p>
-      <p className="mt-0.5 break-all text-sm font-medium">{value}</p>
+      <p
+        className={`mt-0.5 break-all text-sm font-medium ${className ?? ""}`}
+      >
+        {value}
+      </p>
     </div>
   );
 }

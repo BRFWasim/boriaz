@@ -1373,6 +1373,75 @@ export async function getTradeSignals(options?: {
           riskPct: 2,
         });
 
+        // LIVE Hyperliquid — Boriaz uniquement (kill-switch env + prefs)
+        if (
+          opened &&
+          pf.id === "boriaz" &&
+          prefs.liveTradeEnabled &&
+          pf.liveTradeEnabled &&
+          !opened.note.includes("Cash insuffisant")
+        ) {
+          try {
+            const { placeBoriazLiveTrade } = await import("./hl-live");
+            const { loadPaperTrades, savePaperTrades } = await import("./persist");
+            const live = await placeBoriazLiveTrade({
+              coin: setup.coin,
+              side: setup.order.side,
+              entry: setup.order.entry,
+              tp: setup.order.tp2,
+              sl: setup.order.sl,
+              notionalUsd: setup.risk.notionalEur,
+              leverage: setup.risk.leverage,
+              entryMode:
+                setup.order.entryMode === "limit_wait"
+                  ? "limit_wait"
+                  : "market_now",
+              paperId: opened.id,
+            });
+            if (live.ok) {
+              opened.note = `${opened.note} · LIVE HL size=${live.size} entryOid=${live.entryOid ?? "?"}`;
+              try {
+                const all = await loadPaperTrades();
+                const row = all.find((t) => t.id === opened.id);
+                if (row) {
+                  row.note = opened.note;
+                  await savePaperTrades(all);
+                }
+              } catch {
+                /* paper note best-effort */
+              }
+              if (notify && !hush) {
+                await sendTelegramMessage(
+                  [
+                    `LIVE BORIAZ · ${setup.order.side.toUpperCase()} ${setup.coin}`,
+                    `Size ${live.size} · entryOid ${live.entryOid ?? "—"}`,
+                    `TP oid ${live.tpOid ?? "—"} · SL oid ${live.slOid ?? "—"}`,
+                    "Ordre réel Hyperliquid — vérifie sur l’app HL.",
+                  ].join("\n"),
+                );
+              }
+            } else if (!live.skipped) {
+              console.error("LIVE Boriaz order failed", live.reason);
+              if (notify && !hush) {
+                await sendTelegramMessage(
+                  `LIVE BORIAZ ÉCHEC · ${setup.coin}: ${live.reason || "erreur"}`,
+                );
+              }
+            } else {
+              console.info("LIVE Boriaz skipped", live.reason);
+            }
+          } catch (e) {
+            console.error("LIVE Boriaz exception", e);
+            if (notify && !hush) {
+              await sendTelegramMessage(
+                `LIVE BORIAZ EXCEPTION · ${setup.coin}: ${
+                  e instanceof Error ? e.message : "erreur"
+                }`,
+              );
+            }
+          }
+        }
+
         if (opened && !opened.note.includes("Cash insuffisant")) {
           anyOpened = true;
           await appendBook({

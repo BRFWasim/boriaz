@@ -9,6 +9,8 @@ export interface PortfolioProfile {
   isDefault: boolean;
   enabled: boolean;
   paperTradeEnabled: boolean;
+  /** LIVE Hyperliquid — Boriaz only (requires HL_LIVE_ENABLED env). */
+  liveTradeEnabled: boolean;
   bankrollEur: number;
   maxLeverage: number;
   /** % du capital engagé en marge par trade */
@@ -54,6 +56,8 @@ export interface UserPrefs {
   hushHoursEnd: number;
   telegramEnabled: boolean;
   paperTradeEnabled: boolean;
+  /** Master LIVE (Boriaz) — also needs HL_LIVE_ENABLED=true in Vercel. */
+  liveTradeEnabled: boolean;
   /** Solde paper de départ en € (legacy / défaut) */
   paperBankrollEur: number;
   /**
@@ -77,6 +81,7 @@ export const DEFAULT_PORTFOLIO: PortfolioProfile = {
   isDefault: true,
   enabled: true,
   paperTradeEnabled: true,
+  liveTradeEnabled: false,
   bankrollEur: 1000,
   maxLeverage: 3,
   sizePct: 10,
@@ -99,6 +104,7 @@ export const BORIAZ_PORTFOLIO: PortfolioProfile = {
   isDefault: false,
   enabled: true,
   paperTradeEnabled: true,
+  liveTradeEnabled: false,
   bankrollEur: 1000,
   maxLeverage: 3,
   sizePct: 8,
@@ -160,6 +166,7 @@ export function ensurePortfolios(
       strategy: "smc",
       riskPct: 2,
       isDefault: false,
+      liveTradeEnabled: Boolean(b.liveTradeEnabled),
     });
   }
   // Ordre : défaut, boriaz, puis les autres
@@ -183,6 +190,7 @@ export function makeCustomPortfolio(
     isDefault: false,
     enabled: partial?.enabled ?? true,
     paperTradeEnabled: partial?.paperTradeEnabled ?? true,
+    liveTradeEnabled: false,
     bankrollEur: partial?.bankrollEur ?? 1000,
     maxLeverage: partial?.maxLeverage ?? 4,
     sizePct: partial?.sizePct ?? 8,
@@ -229,6 +237,7 @@ export const DEFAULT_PREFS: UserPrefs = {
   hushHoursEnd: 6,
   telegramEnabled: true,
   paperTradeEnabled: true,
+  liveTradeEnabled: false,
   paperBankrollEur: 1000,
   maxSafetyMode: true,
   customTradingMode: false,
