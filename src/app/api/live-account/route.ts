@@ -4,12 +4,16 @@ import {
   isLiveEnvReady,
 } from "@/lib/hl-live";
 import { bindUserRequest } from "@/lib/bind-request";
-import { loadPrefs } from "@/lib/persist";
+import { loadPaperTrades, loadPrefs } from "@/lib/persist";
 import {
   loadLiveJournal,
   matchJournalToPosition,
   syncLiveJournalWithPositions,
 } from "@/lib/live-journal";
+import {
+  botLabelFromPortfolio,
+  tradeOutcomesUsd,
+} from "@/lib/trade-outcomes";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -27,6 +31,9 @@ export async function GET() {
   const boriaz = prefs.portfolios.find((p) => p.id === "boriaz");
   const defaultPf = prefs.portfolios.find((p) => p.id === "default");
   const portfolio = await fetchLivePortfolio();
+  const paperOpen = (await loadPaperTrades()).filter(
+    (t) => t.status === "open" || t.status === "pending",
+  );
 
   let positions = portfolio.positions;
   let openJournal = await loadLiveJournal().then((all) =>
@@ -39,7 +46,16 @@ export async function GET() {
     );
     positions = portfolio.positions.map((p) => {
       const j = matchJournalToPosition(openJournal, p.coin, p.side);
-      if (!j) {
+      // Fallback paper (même coin+side) si journal manquant — bot / Si TP-SL
+      const paper = !j
+        ? paperOpen.find(
+            (t) =>
+              t.coin.toUpperCase() === p.coin.toUpperCase() &&
+              t.side === p.side,
+          )
+        : null;
+
+      if (!j && !paper) {
         return {
           ...p,
           botLabel: null,
@@ -54,18 +70,59 @@ export async function GET() {
           paperId: null,
         };
       }
+
+      if (j) {
+        const outcomes =
+          j.tp > 0 && j.sl > 0 && p.size > 0
+            ? tradeOutcomesUsd({
+                side: p.side,
+                entry: j.entry > 0 ? j.entry : p.entryPx,
+                tp: j.tp,
+                sl: j.sl,
+                size: p.size,
+              })
+            : null;
+        return {
+          ...p,
+          botLabel: j.botLabel || j.portfolioName || null,
+          portfolioId: j.portfolioId,
+          portfolioName: j.portfolioName,
+          strategy: j.strategy,
+          tp: j.tp,
+          sl: j.sl,
+          tpPnlUsd: outcomes?.tpPnlUsd ?? j.tpPnlUsd ?? null,
+          slPnlUsd: outcomes?.slPnlUsd ?? j.slPnlUsd ?? null,
+          riskUsd: j.riskUsd,
+          paperId: j.paperId ?? null,
+        };
+      }
+
+      const entry = paper!.entry;
+      const tp = paper!.tp1Hit && paper!.tp2 ? paper!.tp2 : paper!.tp;
+      const sl = paper!.tp1Hit ? paper!.entry : paper!.sl;
+      const outcomes = tradeOutcomesUsd({
+        side: p.side,
+        entry,
+        tp,
+        sl,
+        size: p.size,
+      });
       return {
         ...p,
-        botLabel: j.botLabel,
-        portfolioId: j.portfolioId,
-        portfolioName: j.portfolioName,
-        strategy: j.strategy,
-        tp: j.tp,
-        sl: j.sl,
-        tpPnlUsd: j.tpPnlUsd,
-        slPnlUsd: j.slPnlUsd,
-        riskUsd: j.riskUsd,
-        paperId: j.paperId ?? null,
+        botLabel: botLabelFromPortfolio({
+          portfolioId: paper!.portfolioId,
+          portfolioName: paper!.portfolioName,
+          strategy: paper!.strategy,
+        }),
+        portfolioId: paper!.portfolioId ?? null,
+        portfolioName: paper!.portfolioName ?? null,
+        strategy: paper!.strategy ?? null,
+        tp,
+        sl,
+        tpPnlUsd: outcomes.tpPnlUsd,
+        slPnlUsd: outcomes.slPnlUsd,
+        riskUsd: null,
+        paperId: paper!.id,
       };
     });
   }
@@ -98,7 +155,8 @@ export async function GET() {
       ? {
           riskPct: 2,
           riskUsd: Math.round(portfolio.accountValueUsd * 0.02 * 100) / 100,
-          note: "Live = 2% de l’equity HL réelle (master). Paper ignoré.",
+          note:
+            "Boriaz live = même % de marge que le paper sur l’equity HL. Si TP / Si SL / bot via journal partagé.",
         }
       : null,
   });

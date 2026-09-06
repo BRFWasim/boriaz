@@ -518,6 +518,17 @@ export async function getTradeSignals(options?: {
 
   const { paper, closes } = await refreshPaperTrades(priceMap);
 
+  // Miroir paper SMC sur le LIVE : TP1 50% → SL→BE → vise TP2
+  try {
+    const { manageLiveSmcPositions } = await import("./hl-live");
+    const managed = await manageLiveSmcPositions();
+    if (managed.updated > 0) {
+      console.info("LIVE SMC manage", managed.notes.join(" | "));
+    }
+  } catch (e) {
+    console.info("LIVE SMC manage skip", e);
+  }
+
   // Notif Telegram TP/SL — INDÉPENDANTE du cron : une clôture est souvent
   // détectée par un appel non-notifiant (accueil), donc on prévient ici dès
   // qu'un trade est clôturé, une seule fois (flag closeNotified persistant).
@@ -1490,6 +1501,8 @@ export async function getTradeSignals(options?: {
               entry: setup.order.entry,
               tp: setup.order.tp2,
               sl: setup.order.sl,
+              tp1: setup.order.tp1,
+              tp2: setup.order.tp2,
               leverage: setup.risk.leverage,
               riskPct: pf.riskPct ?? 2,
               entryMode:

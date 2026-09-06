@@ -22,6 +22,10 @@ export type LiveJournalEntry = {
   entry: number;
   tp: number;
   sl: number;
+  /** TP1 SMC (1R) — clôture 50% + BE comme paper. */
+  tp1?: number | null;
+  tp2?: number | null;
+  tp1Hit?: boolean;
   size: number;
   leverage: number;
   riskPct: number;
@@ -40,17 +44,20 @@ export type LiveJournalEntry = {
 
 const mem = new Map<string, string>();
 
+const SHARED_JOURNAL_KEY = "boriazbot:hl-live-journal";
+
 function journalKey(): string {
-  return `boriazbot:${persistUserId()}:live-journal`;
+  // Journal partagé : 1 wallet HL = 1 journal (cron default + UI session).
+  // Sinon botLabel / Si TP-SL vides selon l’utilisateur connecté.
+  return SHARED_JOURNAL_KEY;
 }
 
-function journalFile(): string {
-  const safe = journalKey().replace(/[^a-zA-Z0-9._-]/g, "_");
+function journalFile(key = journalKey()): string {
+  const safe = key.replace(/[^a-zA-Z0-9._-]/g, "_");
   return dataPath(`.${safe}.json`);
 }
 
-async function readRaw(): Promise<string | null> {
-  const key = journalKey();
+async function readKeyRaw(key: string): Promise<string | null> {
   if (kvBackend() === "upstash") {
     const fromKv = await kvGet(key);
     if (fromKv != null) {
@@ -59,12 +66,32 @@ async function readRaw(): Promise<string | null> {
     }
   }
   try {
-    const raw = await fs.readFile(journalFile(), "utf8");
+    const raw = await fs.readFile(journalFile(key), "utf8");
     mem.set(key, raw);
     return raw;
   } catch {
     return mem.get(key) ?? null;
   }
+}
+
+async function readRaw(): Promise<string | null> {
+  const key = journalKey();
+  const primary = await readKeyRaw(key);
+  if (primary) return primary;
+
+  // Migration one-shot : anciens journaux scoped user → journal partagé
+  const legacyKeys = [
+    `boriazbot:default:live-journal`,
+    `boriazbot:${persistUserId()}:live-journal`,
+  ];
+  for (const legacy of legacyKeys) {
+    if (legacy === key) continue;
+    const raw = await readKeyRaw(legacy);
+    if (!raw) continue;
+    await writeRaw(raw);
+    return raw;
+  }
+  return null;
 }
 
 async function writeRaw(raw: string): Promise<void> {
@@ -173,4 +200,18 @@ export function matchJournalToPosition(
   );
   if (!hits.length) return null;
   return hits.sort((a, b) => b.openedAt - a.openedAt)[0] ?? null;
+}
+
+/** Met à jour une entrée open (ex. TP1 hit → BE). */
+export async function updateLiveJournalEntry(
+  id: string,
+  patch: Partial<LiveJournalEntry>,
+): Promise<LiveJournalEntry | null> {
+  const all = await loadLiveJournal();
+  const idx = all.findIndex((e) => e.id === id);
+  if (idx < 0) return null;
+  const next = { ...all[idx]!, ...patch, id: all[idx]!.id };
+  all[idx] = next;
+  await saveLiveJournal(all);
+  return next;
 }

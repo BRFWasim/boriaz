@@ -355,7 +355,7 @@ export async function openPaperTrade(input: {
   /** Marge forcée (sizing risque SMC). */
   marginEur?: number;
   notionalEur?: number;
-}): Promise<PaperTrade> {
+}): Promise<PaperTrade | null> {
   const trades = await loadPaperTrades();
   const pfId = input.portfolioId || "default";
   const pfName = input.portfolioName || "Défaut (sûr)";
@@ -364,10 +364,11 @@ export async function openPaperTrade(input: {
       (t.status === "open" || t.status === "pending") &&
       (t.portfolioId || "default") === pfId,
   );
+  // Ne pas renvoyer un ancien trade (sinon le LIVE part sans nouveau paper).
   const same = live.find((t) => t.coin === input.coin && t.side === input.side);
-  if (same) return same;
+  if (same) return null;
   const opposite = live.find((t) => t.coin === input.coin && t.side !== input.side);
-  if (opposite) return opposite;
+  if (opposite) return null;
 
   const bankroll = input.bankrollEur ?? 1000;
   const sizePct = Math.max(0.5, Math.min(25, input.sizePct || 10));
@@ -381,41 +382,9 @@ export async function openPaperTrade(input: {
       : marginEur * input.leverage;
   const acc = computePaperAccount(trades, bankroll, pfId);
   if (acc.cashEur < marginEur) {
-    return (
-      live[0] ?? {
-        id: `pt-skip-${input.coin}`,
-        openedAt: input.openedAt,
-        filledAt: null,
-        coin: input.coin,
-        side: input.side,
-        entry: input.entry,
-        tp: input.tp,
-        sl: input.sl,
-        tp1: input.tp1 ?? null,
-        tp2: input.tp2 ?? null,
-        tp1Hit: false,
-        realizedPartialEur: 0,
-        remainingQtyPct: 1,
-        strategy: input.strategy ?? "alignment",
-        riskPct: input.riskPct,
-        leverage: input.leverage,
-        sizePct,
-        marginEur,
-        notionalEur,
-        entryMode: input.entryMode,
-        status: "pending",
-        closedAt: null,
-        exitPx: null,
-        markPx: input.markPx ?? input.entry,
-        pnlPct: 0,
-        pnlEur: 0,
-        note: "Cash insuffisant — trade non ouvert",
-        portfolioId: pfId,
-        portfolioName: pfName,
-        justification: input.justification ?? null,
-      }
-    );
+    return null;
   }
+
   const marketNow = input.entryMode === "market_now";
   const trade: PaperTrade = {
     id: `pt-${input.openedAt}-${pfId}-${input.coin}-${input.side}`,
