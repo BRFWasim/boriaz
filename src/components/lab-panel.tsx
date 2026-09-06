@@ -97,6 +97,7 @@ export function LabPanel() {
     }[];
   } | null>(null);
   const [smcBusy, setSmcBusy] = useState(false);
+  const [signalBusy, setSignalBusy] = useState(false);
   const [smc, setSmc] = useState<{
     best: {
       coin: string;
@@ -317,6 +318,31 @@ export function LabPanel() {
         prefs.portfolios.filter((p) => p.id !== id),
       ),
     });
+  }
+
+  
+  /** Même cerveau : force un scan immédiat paper + live (sans attendre le cron). */
+  async function runSignalsNow() {
+    setSignalBusy(true);
+    setMsg("Scan immédiat paper + live (même cerveau)…");
+    try {
+      const res = await fetch("/api/signals?force=1&notify=1", {
+        cache: "no-store",
+      });
+      const json = await readResponseJson<{ error?: string }>(res);
+      if (!res.ok) {
+        setMsg(json.error || "Scan signaux échoué");
+        return;
+      }
+      setMsg(
+        "Scan terminé — s’il y a un setup, paper et live partent ensemble (toggles LIVE ON).",
+      );
+      await refresh({ forcePrefs: true });
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Scan signaux échoué");
+    } finally {
+      setSignalBusy(false);
+    }
   }
 
   async function runSmcScan(force = false) {
@@ -741,6 +767,25 @@ export function LabPanel() {
                 )}
               </div>
               <p className="mt-2 text-muted-foreground">
+                Paper et live = <strong className="text-foreground">même cerveau</strong>,
+                même passage : dès qu’un setup est pris en paper, le live part
+                juste après (pas 15 min plus tard). Le cron ne fait que
+                <em> rescanner</em> ; avec LIVE armé le scan auto passe à ~1 min
+                (Lab ouvert / accueil).
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  variant="default"
+                  disabled={signalBusy}
+                  onClick={() => void runSignalsNow()}
+                >
+                  {signalBusy
+                    ? "Scan…"
+                    : "Exécuter paper + live maintenant"}
+                </Button>
+              </div>
+              <p className="mt-2 text-muted-foreground">
                 Vercel Env :{" "}
                 <code className="text-[11px]">HL_AGENT_PRIVATE_KEY</code> (clé
                 agent) +{" "}
@@ -748,7 +793,7 @@ export function LabPanel() {
                 <strong className="text-foreground">MASTER</strong> (celle avec
                 tes ~109$) +{" "}
                 <code className="text-[11px]">HL_LIVE_ENABLED=true</code> +
-                toggles Lab + cron.
+                toggles Lab.
               </p>
             </div>
           ) : null}

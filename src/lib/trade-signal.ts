@@ -84,7 +84,10 @@ export interface TradeSignalPayload {
   smc: import("./smc-scan").SmcScanResult | null;
 }
 
-const CACHE_TTL = 5 * 60_000;
+/** Cache lecture seule (UI). */
+const CACHE_TTL_IDLE = 5 * 60_000;
+/** Quand LIVE est armé : rescanner ~1×/min pour paper+live ensemble. */
+const CACHE_TTL_LIVE = 60_000;
 const TG_COOLDOWN = 25 * 60_000;
 let cache: { at: number; value: TradeSignalPayload } | null = null;
 let lastTgKey = "";
@@ -461,7 +464,21 @@ export async function getTradeSignals(options?: {
   notify?: boolean;
   force?: boolean;
 }): Promise<TradeSignalPayload> {
-  if (!options?.force && cache && Date.now() - cache.at < CACHE_TTL) {
+  // Prefs d’abord : TTL court si LIVE armé → paper + live repartent ensemble vite
+  const prefs = await loadPrefs();
+  let liveArmed = false;
+  try {
+    const { isLiveEnvReady } = await import("./hl-live");
+    liveArmed =
+      Boolean(prefs.liveTradeEnabled) &&
+      prefs.portfolios.some((p) => p.liveTradeEnabled) &&
+      isLiveEnvReady().ok;
+  } catch {
+    liveArmed = false;
+  }
+  const cacheTtl = liveArmed ? CACHE_TTL_LIVE : CACHE_TTL_IDLE;
+
+  if (!options?.force && cache && Date.now() - cache.at < cacheTtl) {
     return cache.value;
   }
 
@@ -470,13 +487,11 @@ export async function getTradeSignals(options?: {
     const shared = await kvGetJson<{ at: number; value: TradeSignalPayload }>(
       "boriaz:trade-signals-v1",
     );
-    if (shared && Date.now() - shared.at < CACHE_TTL) {
+    if (shared && Date.now() - shared.at < cacheTtl) {
       cache = { at: shared.at, value: shared.value };
       return shared.value;
     }
   }
-
-  const prefs = await loadPrefs();
 
   try {
     await runPriceWatch();
@@ -1664,7 +1679,7 @@ export async function getTradeSignals(options?: {
   void kvSetJsonEx(
     "boriaz:trade-signals-v1",
     { at: cache.at, value },
-    Math.ceil(CACHE_TTL / 1000),
+    Math.ceil(cacheTtl / 1000),
   );
   return value;
 }
