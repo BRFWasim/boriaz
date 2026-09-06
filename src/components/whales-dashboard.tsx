@@ -1,13 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   AlertTriangleIcon,
   FishIcon,
-  LayoutListIcon,
   RefreshCwIcon,
   SearchIcon,
-  SmartphoneIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -57,11 +55,17 @@ const LabPanel = dynamic(
   { ssr: false, loading: () => <PanelSkeleton label="Lab" /> },
 );
 
+const BoriazPanel = dynamic(
+  () => import("@/components/boriaz-panel").then((m) => m.BoriazPanel),
+  { ssr: false, loading: () => <PanelSkeleton label="Boriaz" /> },
+);
+
 
 const POLL_MS = 10_000;
-const MODE_KEY = "hl-whales-ui-mode";
 
-const TAB_IDS: AppTab[] = ["home", "whales", "spot", "btc", "macro", "lab"];
+const PUBLIC_TAB_IDS: AppTab[] = ["home", "whales", "spot", "btc", "macro"];
+const PRIVATE_TAB_IDS: AppTab[] = ["boriaz", "lab"];
+const TAB_IDS: AppTab[] = [...PUBLIC_TAB_IDS, ...PRIVATE_TAB_IDS];
 
 function parseTabHash(hash: string): AppTab | null {
   const raw = hash.replace(/^#/, "").trim().toLowerCase();
@@ -83,7 +87,7 @@ export function WhalesDashboard() {
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SortKey>("portfolio");
   const [coin, setCoin] = useState("all");
-  const [mode, setModeState] = useUiMode();
+  const mode: UiMode = "advanced";
   const [tab, setTab] = useState<AppTab>("home");
   const [now, setNow] = useState(() => Date.now());
   const [followed, setFollowed] = useState<Set<string>>(new Set());
@@ -92,6 +96,11 @@ export function WhalesDashboard() {
     ok: boolean;
     note?: string;
   } | null>(null);
+  const [siteAuth, setSiteAuth] = useState<{
+    enabled: boolean;
+    authenticated: boolean;
+  } | null>(null);
+  const [theme, setTheme] = useThemeMode();
 
   const goTab = useCallback((next: AppTab) => {
     setTab(next);
@@ -151,7 +160,39 @@ export function WhalesDashboard() {
       .catch(() => undefined);
   }, []);
 
-    useEffect(() => {
+
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/site-auth", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((json: { enabled?: boolean; authenticated?: boolean }) => {
+        if (!alive) return;
+        setSiteAuth({
+          enabled: Boolean(json.enabled),
+          authenticated: Boolean(json.authenticated),
+        });
+      })
+      .catch(() => {
+        if (alive) setSiteAuth({ enabled: false, authenticated: true });
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const unlocked =
+    siteAuth == null
+      ? false
+      : !siteAuth.enabled || siteAuth.authenticated;
+
+  useEffect(() => {
+    if (siteAuth == null) return;
+    if (!unlocked && (tab === "lab" || tab === "boriaz")) {
+      goTab("home");
+    }
+  }, [siteAuth, unlocked, tab, goTab]);
+
+  useEffect(() => {
     // Accueil / Analyse / Macro / Lab : pas d’appel baleines au mount
     if (tab !== "whales" && tab !== "spot") {
       setLoading(false);
@@ -173,9 +214,6 @@ export function WhalesDashboard() {
     };
   }, [load, tab]);
 
-  function chooseMode(next: UiMode) {
-    setModeState(next);
-  }
 
   const coinFilter =
     coin !== "all" && data && !data.coins.includes(coin) ? "all" : coin;
@@ -243,7 +281,35 @@ export function WhalesDashboard() {
                   Cron {formatAgo(cronStatus.at)}
                 </span>
               ) : null}
-              <ModeSwitch mode={mode} onChange={chooseMode} />
+              <ThemeSwitch theme={theme} onChange={setTheme} />
+              {siteAuth?.enabled && !siteAuth.authenticated ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  className="h-7 px-2.5 text-xs"
+                  onClick={() => {
+                    window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.hash)}`;
+                  }}
+                >
+                  Login
+                </Button>
+              ) : null}
+              {siteAuth?.enabled && siteAuth.authenticated ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 px-2 text-xs text-muted-foreground"
+                  onClick={() => {
+                    void fetch("/api/site-auth", { method: "DELETE" }).then(() => {
+                      setSiteAuth({ enabled: true, authenticated: false });
+                      goTab("home");
+                    });
+                  }}
+                >
+                  Logout
+                </Button>
+              ) : null}
               <Button type="button" size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={() => void load(true)} disabled={refreshing || loading}>
                 <RefreshCwIcon className={`size-3.5 ${refreshing ? "animate-spin" : ""}`} />
               </Button>
@@ -256,7 +322,12 @@ export function WhalesDashboard() {
             <TabButton active={tab === "spot"} onClick={() => goTab("spot")}>Spot</TabButton>
             <TabButton active={tab === "btc"} onClick={() => goTab("btc")}>Analyse</TabButton>
             <TabButton active={tab === "macro"} onClick={() => goTab("macro")}>Macro</TabButton>
-            <TabButton active={tab === "lab"} onClick={() => goTab("lab")}>Lab</TabButton>
+            {unlocked ? (
+              <TabButton active={tab === "boriaz"} onClick={() => goTab("boriaz")}>Boriaz</TabButton>
+            ) : null}
+            {unlocked ? (
+              <TabButton active={tab === "lab"} onClick={() => goTab("lab")}>Lab</TabButton>
+            ) : null}
           </div>
 
           {tab === "whales" ? (
@@ -354,7 +425,11 @@ export function WhalesDashboard() {
 
         {tab === "macro" ? <MacroPanel /> : null}
 
-        {tab === "lab" ? <LabPanel /> : null}
+        {tab === "boriaz" && unlocked ? (
+          <BoriazPanel onOpenLab={() => goTab("lab")} />
+        ) : null}
+
+        {tab === "lab" && unlocked ? <LabPanel /> : null}
 
         {tab === "btc" ? <BtcAnalysisPanel /> : null}
 
@@ -412,16 +487,18 @@ export function WhalesDashboard() {
       </main>
 
       <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-background/95 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl sm:hidden">
-        <div className="mx-auto grid max-w-7xl grid-cols-6 gap-0.5 px-1 py-1">
+        <div className={`mx-auto grid max-w-7xl gap-0.5 px-1 py-1 ${unlocked ? "grid-cols-7" : "grid-cols-5"}`}>
           {(
-            [
+            ([
               ["home", "Accueil"],
               ["whales", "Baleines"],
               ["spot", "Spot"],
               ["btc", "Analyse"],
               ["macro", "Macro"],
-              ["lab", "Lab"],
-            ] as const
+              ...(unlocked
+                ? ([["boriaz", "Boriaz"], ["lab", "Lab"]] as const)
+                : []),
+            ] as const)
           ).map(([id, label]) => (
             <button
               key={id}
@@ -472,57 +549,58 @@ function TabButton({
   );
 }
 
-function useUiMode(): [UiMode, (mode: UiMode) => void] {
-  const mode = useSyncExternalStore(subscribeMode, getMode, () => "simple" as const);
-  const setMode = (next: UiMode) => {
-    window.localStorage.setItem(MODE_KEY, next);
-    window.dispatchEvent(new Event("hl-ui-mode"));
-  };
-  return [mode, setMode];
+
+const THEME_KEY = "boriazbot-theme";
+
+function applyThemeClass(next: "dark" | "light") {
+  const root = document.documentElement;
+  root.classList.toggle("dark", next === "dark");
+  root.classList.toggle("light", next === "light");
+  root.style.colorScheme = next;
 }
 
-function subscribeMode(onStoreChange: () => void) {
-  window.addEventListener("storage", onStoreChange);
-  window.addEventListener("hl-ui-mode", onStoreChange);
-  return () => {
-    window.removeEventListener("storage", onStoreChange);
-    window.removeEventListener("hl-ui-mode", onStoreChange);
-  };
+function useThemeMode(): ["dark" | "light", (t: "dark" | "light") => void] {
+  const [theme, setThemeState] = useState<"dark" | "light">("dark");
+  useEffect(() => {
+    const saved = window.localStorage.getItem(THEME_KEY);
+    const next = saved === "light" ? "light" : "dark";
+    setThemeState(next);
+    applyThemeClass(next);
+  }, []);
+  const setTheme = useCallback((next: "dark" | "light") => {
+    setThemeState(next);
+    window.localStorage.setItem(THEME_KEY, next);
+    applyThemeClass(next);
+  }, []);
+  return [theme, setTheme];
 }
 
-function getMode(): UiMode {
-  const saved = window.localStorage.getItem(MODE_KEY);
-  return saved === "advanced" ? "advanced" : "simple";
-}
-
-function ModeSwitch({
-  mode,
+function ThemeSwitch({
+  theme,
   onChange,
 }: {
-  mode: UiMode;
-  onChange: (mode: UiMode) => void;
+  theme: "dark" | "light";
+  onChange: (theme: "dark" | "light") => void;
 }) {
   return (
     <div className="inline-flex rounded-lg border border-border bg-muted/40 p-0.5">
       <Button
         type="button"
         size="sm"
-        variant={mode === "simple" ? "default" : "ghost"}
-        className="h-7 px-2.5"
-        onClick={() => onChange("simple")}
+        variant={theme === "light" ? "default" : "ghost"}
+        className="h-7 px-2 text-xs"
+        onClick={() => onChange("light")}
       >
-        <SmartphoneIcon />
-        Simple
+        Clair
       </Button>
       <Button
         type="button"
         size="sm"
-        variant={mode === "advanced" ? "default" : "ghost"}
-        className="h-7 px-2.5"
-        onClick={() => onChange("advanced")}
+        variant={theme === "dark" ? "default" : "ghost"}
+        className="h-7 px-2 text-xs"
+        onClick={() => onChange("dark")}
       >
-        <LayoutListIcon />
-        Avancé
+        Sombre
       </Button>
     </div>
   );

@@ -6,9 +6,30 @@ import {
 } from "@/lib/site-gate";
 
 /**
- * Portail d’accès humain uniquement.
- * Exempte /api/cron → le bot continue en fond (cron-job.org / Vercel Cron).
+ * Portail soft :
+ * - Pages publiques (Accueil, Baleines, etc.) ouvertes
+ * - APIs privées (live, lab/paper bot) derrière cookie
+ * - /api/cron JAMAIS bloqué → bot en fond
  */
+
+const PRIVATE_API_PREFIXES = [
+  "/api/live-account",
+  "/api/live-status",
+  "/api/live",
+  "/api/paper",
+  "/api/prefs",
+  "/api/signals",
+  "/api/journal",
+  "/api/smc",
+  "/api/manage",
+];
+
+function isPrivateApi(pathname: string): boolean {
+  return PRIVATE_API_PREFIXES.some(
+    (p) => pathname === p || pathname.startsWith(`${p}/`),
+  );
+}
+
 export async function middleware(request: NextRequest) {
   if (!sitePasswordConfigured()) {
     return NextResponse.next();
@@ -16,20 +37,20 @@ export async function middleware(request: NextRequest) {
 
   const { pathname } = request.nextUrl;
 
-  // Assets + login + auth API
   if (
     pathname.startsWith("/_next") ||
     pathname.startsWith("/favicon") ||
     pathname.startsWith("/icon") ||
     pathname.startsWith("/manifest") ||
     pathname === "/login" ||
-    pathname.startsWith("/api/site-auth")
+    pathname.startsWith("/api/site-auth") ||
+    pathname.startsWith("/api/cron")
   ) {
     return NextResponse.next();
   }
 
-  // Bot / cron en fond — JAMAIS bloqué par le mot de passe site
-  if (pathname.startsWith("/api/cron")) {
+  // Pages & APIs publiques → OK sans login
+  if (!isPrivateApi(pathname)) {
     return NextResponse.next();
   }
 
@@ -38,26 +59,14 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // API → 401 JSON (pas de redirect HTML)
-  if (pathname.startsWith("/api/")) {
-    return NextResponse.json(
-      { error: "Accès site requis — connecte-toi sur /login" },
-      { status: 401 },
-    );
-  }
-
-  const login = request.nextUrl.clone();
-  login.pathname = "/login";
-  login.searchParams.set("next", pathname);
-  return NextResponse.redirect(login);
+  return NextResponse.json(
+    { error: "Login requis — onglets Boriaz / Lab privés." },
+    { status: 401 },
+  );
 }
 
 export const config = {
   matcher: [
-    /*
-     * Tout sauf fichiers statiques courants.
-     * /api/cron est dans le matcher mais exempté dans le handler.
-     */
     "/((?!_next/static|_next/image|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
   ],
 };

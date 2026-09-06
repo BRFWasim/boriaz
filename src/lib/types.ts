@@ -20,7 +20,8 @@ export type AppTab =
   | "spot"
   | "btc"
   | "macro"
-  | "lab";
+  | "lab"
+  | "boriaz";
 
 export type SignalBias = "haussier" | "baissier" | "neutre";
 

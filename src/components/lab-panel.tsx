@@ -571,7 +571,7 @@ export function LabPanel() {
             className="mt-2 text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
             onClick={() => {
               void fetch("/api/site-auth", { method: "DELETE" }).then(() => {
-                window.location.href = "/login";
+                window.location.href = "/#home";
               });
             }}
           >

@@ -3,6 +3,7 @@ import {
   SITE_GATE_COOKIE,
   expectedSiteGateToken,
   passwordMatches,
+  siteGateTokenValid,
   sitePasswordConfigured,
 } from "@/lib/site-gate";
 
@@ -40,7 +41,7 @@ export async function POST(request: Request) {
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
     path: "/",
-    maxAge: 60 * 60 * 24 * 30, // 30 jours
+    maxAge: 60 * 60 * 24 * 365, // 1 an — reste connecté sur tes appareils
   });
   return res;
 }
@@ -59,11 +60,22 @@ export async function DELETE() {
   return res;
 }
 
-export async function GET() {
+export async function GET(request: Request) {
+  const enabled = sitePasswordConfigured();
+  let authenticated = !enabled;
+  if (enabled) {
+    const cookie = request.headers.get("cookie") || "";
+    const match = cookie.match(
+      new RegExp(`(?:^|;\\s*)${SITE_GATE_COOKIE}=([^;]+)`),
+    );
+    const token = match?.[1] ? decodeURIComponent(match[1]) : null;
+    authenticated = await siteGateTokenValid(token);
+  }
   return NextResponse.json({
-    enabled: sitePasswordConfigured(),
-    note: sitePasswordConfigured()
-      ? "Portail actif — UI protégée. /api/cron reste accessible via CRON_SECRET."
-      : "Portail off — définis SITE_PASSWORD sur Vercel pour activer.",
+    enabled,
+    authenticated,
+    note: enabled
+      ? "Portail actif — Boriaz + Lab après login. /api/cron reste libre (bot en fond)."
+      : "Portail off — définis SITE_PASSWORD sur Vercel.",
   });
 }

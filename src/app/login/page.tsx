@@ -44,8 +44,9 @@ function LoginForm() {
         Accès privé
       </h1>
       <p className="mt-2 text-sm text-muted-foreground">
-        Mot de passe site pour l’interface. Le bot / cron continue de tourner en
-        fond sans cette page.
+        Débloque les onglets Boriaz (wallet réel) et Lab. Le reste du site
+        reste public. Cookie 1 an — tu restes connecté sur tes appareils. Le
+        bot / cron continue sans cette page.
       </p>
 
       <form onSubmit={onSubmit} className="mt-8 space-y-4">
