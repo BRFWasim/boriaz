@@ -1384,14 +1384,15 @@ export async function getTradeSignals(options?: {
           try {
             const { placeBoriazLiveTrade } = await import("./hl-live");
             const { loadPaperTrades, savePaperTrades } = await import("./persist");
+            // Notionnel paper ignoré : le live size à 2% de l’equity HL réelle
             const live = await placeBoriazLiveTrade({
               coin: setup.coin,
               side: setup.order.side,
               entry: setup.order.entry,
               tp: setup.order.tp2,
               sl: setup.order.sl,
-              notionalUsd: setup.risk.notionalEur,
               leverage: setup.risk.leverage,
+              riskPct: 2,
               entryMode:
                 setup.order.entryMode === "limit_wait"
                   ? "limit_wait"
@@ -1416,6 +1417,7 @@ export async function getTradeSignals(options?: {
                     `LIVE BORIAZ · ${setup.order.side.toUpperCase()} ${setup.coin}`,
                     `Size ${live.size} · entryOid ${live.entryOid ?? "—"}`,
                     `TP oid ${live.tpOid ?? "—"} · SL oid ${live.slOid ?? "—"}`,
+                    live.reason ? `Sizing: ${live.reason}` : "Sizing: 2% equity HL réelle",
                     "Ordre réel Hyperliquid — vérifie sur l’app HL.",
                   ].join("\n"),
                 );

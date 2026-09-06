@@ -712,8 +712,9 @@ export function LabPanel() {
           Portefeuille réel Hyperliquid
         </h3>
         <p className="mt-1 text-sm text-muted-foreground">
-          Suivi séparé du paper. Lit le clearinghouse HL (adresse master /
-          agent). Les P&L paper ci-dessous ne sont pas mélangés ici.
+          Compte HL réel — séparé du paper. Le live Boriaz risque{" "}
+          <strong className="text-foreground">2% de ce solde</strong>, pas du
+          capital paper. Les P&L paper plus bas ne sont jamais mélangés ici.
         </p>
         {livePortfolio ? (
           livePortfolio.ok ? (
@@ -744,6 +745,11 @@ export function LabPanel() {
                 {livePortfolio.address
                   ? ` · ${livePortfolio.address.slice(0, 6)}…${livePortfolio.address.slice(-4)}`
                   : ""}
+                {" · "}risque live 2% ≈{" "}
+                <span className="text-foreground">
+                  {(livePortfolio.accountValueUsd * 0.02).toFixed(2)} $
+                </span>{" "}
+                par trade
               </p>
               {livePortfolio.positions.length ? (
                 <ul className="mt-3 space-y-2">
@@ -795,12 +801,14 @@ export function LabPanel() {
         <section className="rounded-2xl border border-primary/25 bg-primary/5 p-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h3 id="lab-portfolios" className="font-medium">Portefeuilles paper</h3>
+              <h3 id="lab-portfolios" className="font-medium">Portefeuilles paper (simulation)</h3>
               <p className="mt-1 text-sm text-muted-foreground">
+                Capital paper = <strong className="text-foreground">simulation seulement</strong>.
+                Il ne size <em>pas</em> les ordres LIVE. Le live Boriaz utilise
+                2% du solde HL réel (section au-dessus).{" "}
                 <strong className="text-foreground">Défaut</strong> (Alignement)
-                et <strong className="text-foreground">Boriaz</strong> (SMC
-                top-down, risque 2 %, TP1 50 %+BE) toujours présents. Ajoute un
-                perso (scalp, risqué, swing…).
+                et <strong className="text-foreground">Boriaz</strong> (SMC)
+                toujours présents.
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -890,8 +898,8 @@ export function LabPanel() {
                 </div>
                 {pf.strategy === "smc" ? (
                   <p className="mt-2 text-xs text-muted-foreground">
-                    Bot SMC : D1→H4→H1→M15 · checklist structure · sizing exact 2 % ·
-                    TP1 1R (50 %+BE) · TP2 2R · gate mécanique (Claude off).
+                    Bot SMC : D1→H4→H1→M15 · paper size sur capital simu · LIVE =
+                    2% du solde HL réel · TP1 1R (50 %+BE) · TP2 2R · gate mécanique.
                   </p>
                 ) : null}
                 {(() => {
@@ -934,7 +942,7 @@ export function LabPanel() {
                 })()}
                 <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
                   <div>
-                    <Label>Capital (€)</Label>
+                    <Label>Capital paper (€) — simu</Label>
                     <Input
                       type="number"
                       min={100}

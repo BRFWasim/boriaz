@@ -24,10 +24,13 @@ export type LiveTradeRequest = {
   entry: number;
   tp: number;
   sl: number;
-  notionalUsd: number;
+  /** Ignoré pour le sizing live — le live utilise 2% de l’equity HL réelle. */
+  notionalUsd?: number;
   leverage: number;
   entryMode: LiveEntryMode;
   paperId?: string;
+  /** Risque live en % du solde HL réel (défaut 2). */
+  riskPct?: number;
 };
 
 export type LiveTradeResult = {
@@ -130,7 +133,7 @@ export function getLiveConfig(): LiveConfigStatus {
     // Défaut 80$ — adapté aux petits comptes (~100 USDC). Override via env.
     maxNotionalUsd: envNumAny(
       ["HL_MAX_NOTIONAL_USD", "HL_MAX_NOTIONAL_USD"],
-      80,
+      500,
     ),
     maxLeverage: Math.min(
       10,
@@ -343,36 +346,112 @@ export async function fetchLivePortfolio(): Promise<LivePortfolioSnapshot> {
   }
 }
 
-function scaleLiveNotional(
-  requested: number,
-  leverage: number,
-  maxNotionalUsd: number,
-  equityUsd: number,
-): { notionalUsd: number; note?: string; skipReason?: string } {
-  let notional = requested;
-  const notes: string[] = [];
-  if (notional > maxNotionalUsd) {
-    notional = maxNotionalUsd;
-    notes.push(`cap env ${maxNotionalUsd}$`);
-  }
-  if (equityUsd > 0) {
-    const byPower = equityUsd * leverage * 0.55;
-    const byMargin = equityUsd * 0.45 * leverage;
-    const equityCap = Math.min(byPower, byMargin);
-    if (notional > equityCap) {
-      notional = equityCap;
-      notes.push(`equity ${equityUsd.toFixed(0)}$`);
-    }
-  }
-  if (notional < 10) {
+/**
+ * Sizing LIVE = 2% du solde HL réel (pas le paper).
+ * Le capital paper Lab n’entre pas dans ce calcul.
+ * HL_MAX_NOTIONAL_USD = plafond de sécurité optionnel (pas la taille du trade).
+ */
+export function sizeLiveFromRealEquity(input: {
+  equityUsd: number;
+  freeCollateralUsd?: number;
+  entry: number;
+  sl: number;
+  maxLeverage: number;
+  maxNotionalUsd: number;
+  riskPct?: number;
+}): {
+  ok: boolean;
+  reason?: string;
+  equityUsd: number;
+  riskPct: number;
+  riskUsd: number;
+  notionalUsd: number;
+  leverage: number;
+  marginUsd: number;
+  note?: string;
+} {
+  const riskPct = input.riskPct && input.riskPct > 0 ? input.riskPct : 2;
+  const equityUsd = Math.max(0, input.equityUsd);
+  if (!(equityUsd >= 20)) {
     return {
+      ok: false,
+      reason: `Equity HL trop faible (${equityUsd.toFixed(2)}$) — minimum ~20$ pour sizer à 2%.`,
+      equityUsd,
+      riskPct,
+      riskUsd: 0,
       notionalUsd: 0,
-      skipReason: `Notionnel trop faible après caps (${notional.toFixed(2)}$) — augmente la marge ou baisse le paper bankroll Boriaz.`,
+      leverage: 1,
+      marginUsd: 0,
     };
   }
+  if (!(input.entry > 0 && input.sl > 0 && input.entry !== input.sl)) {
+    return {
+      ok: false,
+      reason: "Entrée/SL invalides pour le sizing live.",
+      equityUsd,
+      riskPct,
+      riskUsd: 0,
+      notionalUsd: 0,
+      leverage: 1,
+      marginUsd: 0,
+    };
+  }
+
+  const riskUsd = equityUsd * (riskPct / 100);
+  const slDist = Math.abs(input.entry - input.sl) / input.entry;
+  const dist = Math.max(0.0015, slDist); // min 0.15% pour éviter notionnel absurde
+  let notional = riskUsd / dist;
+  const notes: string[] = [
+    `2% de ${equityUsd.toFixed(2)}$ = ${riskUsd.toFixed(2)}$ risqués`,
+  ];
+
+  let leverage = Math.min(
+    input.maxLeverage,
+    Math.max(1, Math.ceil(notional / (equityUsd * 0.25))),
+  );
+  leverage = Math.min(input.maxLeverage, Math.max(1, leverage));
+
+  // Plafond sécurité env (optionnel) — ne définit PAS le risque 2%
+  if (notional > input.maxNotionalUsd) {
+    notional = input.maxNotionalUsd;
+    notes.push(`plafond HL_MAX_NOTIONAL_USD ${input.maxNotionalUsd}$`);
+  }
+
+  // Ne pas consommer toute la marge disponible
+  const free =
+    input.freeCollateralUsd != null && input.freeCollateralUsd > 0
+      ? input.freeCollateralUsd
+      : equityUsd;
+  const marginCap = free * 0.45;
+  const notionalCap = marginCap * leverage;
+  if (notional > notionalCap) {
+    notional = notionalCap;
+    notes.push(`marge libre ${free.toFixed(0)}$`);
+  }
+
+  const marginUsd = notional / leverage;
+  if (notional < 8 || marginUsd < 2) {
+    return {
+      ok: false,
+      reason: `Taille live trop petite (notionnel ${notional.toFixed(2)}$, marge ${marginUsd.toFixed(2)}$).`,
+      equityUsd,
+      riskPct,
+      riskUsd,
+      notionalUsd: 0,
+      leverage,
+      marginUsd: 0,
+    };
+  }
+
   return {
+    ok: true,
+    equityUsd,
+    riskPct,
+    riskUsd: Math.round(riskUsd * 100) / 100,
     notionalUsd: Math.round(notional * 100) / 100,
-    note: notes.length ? `size réduite (${notes.join(" + ")})` : undefined,
+    leverage,
+    marginUsd: Math.round(marginUsd * 100) / 100,
+    note: notes.join(" · "),
   };
 }
 
@@ -386,8 +465,8 @@ export async function placeBoriazLiveTrade(
   }
   const cfg = getLiveConfig();
 
-  if (!(req.entry > 0 && req.tp > 0 && req.sl > 0 && req.notionalUsd > 0)) {
-    return { ok: false, reason: "Paramètres entrée/TP/SL/notionnel invalides." };
+  if (!(req.entry > 0 && req.tp > 0 && req.sl > 0)) {
+    return { ok: false, reason: "Paramètres entrée/TP/SL invalides." };
   }
   const lev = Math.min(
     Math.max(1, Math.floor(req.leverage || 1)),
@@ -402,6 +481,15 @@ export async function placeBoriazLiveTrade(
 
   const user = cfg.accountAddress!;
   const portfolio = await fetchLivePortfolio();
+  if (!portfolio.ok || !(portfolio.accountValueUsd > 0)) {
+    return {
+      ok: false,
+      skipped: true,
+      reason:
+        portfolio.reason ||
+        "Equity HL réelle indisponible — live sizing 2% impossible.",
+    };
+  }
   const openN = portfolio.ok
     ? portfolio.openPositionCount
     : await countOpenPositions(cfg.testnet, user);
@@ -413,16 +501,25 @@ export async function placeBoriazLiveTrade(
     };
   }
 
-  const scaled = scaleLiveNotional(
-    req.notionalUsd,
-    lev,
-    cfg.maxNotionalUsd,
-    portfolio.accountValueUsd,
+  // LIVE size = 2% du solde HL réel (paper bankroll ignoré)
+  const freeCollateral = Math.max(
+    0,
+    portfolio.accountValueUsd - portfolio.totalMarginUsedUsd,
   );
-  if (!scaled.notionalUsd) {
-    return { ok: false, skipped: true, reason: scaled.skipReason };
+  const sized = sizeLiveFromRealEquity({
+    equityUsd: portfolio.accountValueUsd,
+    freeCollateralUsd: freeCollateral || portfolio.withdrawableUsd,
+    entry: req.entry,
+    sl: req.sl,
+    maxLeverage: Math.min(lev, cfg.maxLeverage, asset.maxLeverage),
+    maxNotionalUsd: cfg.maxNotionalUsd,
+    riskPct: req.riskPct ?? 2,
+  });
+  if (!sized.ok) {
+    return { ok: false, skipped: true, reason: sized.reason };
   }
-  const notionalUsd = scaled.notionalUsd;
+  const notionalUsd = sized.notionalUsd;
+  const liveLev = sized.leverage;
 
   const size = formatSz(notionalUsd / req.entry, asset.szDecimals);
   if (!size || Number(size) <= 0) {
@@ -446,7 +543,7 @@ export async function placeBoriazLiveTrade(
   await client.updateLeverage({
     asset: asset.id,
     isCross: true,
-    leverage: Math.min(lev, asset.maxLeverage),
+    leverage: Math.min(liveLev, asset.maxLeverage),
   });
 
   const result = await client.order({
@@ -518,7 +615,7 @@ export async function placeBoriazLiveTrade(
     entryOid: readOid(statuses[0]),
     tpOid: readOid(statuses[1]),
     slOid: readOid(statuses[2]),
-    reason: scaled.note,
+    reason: sized.note,
     raw: result,
   };
 }
