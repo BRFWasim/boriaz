@@ -9,7 +9,7 @@ export interface PortfolioProfile {
   isDefault: boolean;
   enabled: boolean;
   paperTradeEnabled: boolean;
-  /** LIVE Hyperliquid — Boriaz only (requires HL_LIVE_ENABLED env). */
+  /** LIVE Hyperliquid — Boriaz / Scalp / Défaut si activé (requires HL_LIVE_ENABLED env). */
   liveTradeEnabled: boolean;
   bankrollEur: number;
   maxLeverage: number;
@@ -155,7 +155,8 @@ export function ensurePortfolios(
       ...d,
       isDefault: true,
       enabled: true,
-      liveTradeEnabled: false, // Défaut = paper only
+      // LIVE possible si master + toggle Lab (plus forcé paper-only)
+      liveTradeEnabled: Boolean(d.liveTradeEnabled),
     });
   }
   // Boriaz toujours présent (SMC)

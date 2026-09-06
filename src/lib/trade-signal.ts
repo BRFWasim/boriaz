@@ -1256,9 +1256,17 @@ export async function getTradeSignals(options?: {
             entryMode:
               chosen.entryMode === "limit_wait" ? "limit_wait" : "market_now",
             paperId: opened.id,
+            portfolioId: pf.id,
+            portfolioName: pf.name,
+            strategy: "alignment",
           });
           if (live.ok) {
-            opened.note = `${opened.note} · LIVE HL size=${live.size} entryOid=${live.entryOid ?? "?"}`;
+            const bot = live.botLabel || pf.name;
+            const tpTxt =
+              live.tpPnlUsd != null ? ` · si TP ${live.tpPnlUsd >= 0 ? "+" : ""}${live.tpPnlUsd.toFixed(2)}$` : "";
+            const slTxt =
+              live.slPnlUsd != null ? ` · si SL ${live.slPnlUsd >= 0 ? "+" : ""}${live.slPnlUsd.toFixed(2)}$` : "";
+            opened.note = `${opened.note} · LIVE HL [${bot}] size=${live.size} entryOid=${live.entryOid ?? "?"}${tpTxt}${slTxt}`;
             try {
               const all = await loadPaperTrades();
               const row = all.find((t) => t.id === opened.id);
@@ -1274,7 +1282,11 @@ export async function getTradeSignals(options?: {
                 [
                   `LIVE ${pf.name.toUpperCase()} · ${side.toUpperCase()} ${chosen.coin}`,
                   `Size ${live.size} · entryOid ${live.entryOid ?? "—"}`,
-                  live.reason ? `Sizing: ${live.reason}` : "Sizing: 2% equity HL",
+                  live.tpPnlUsd != null
+                    ? `Si TP ${live.tpPnlUsd >= 0 ? "+" : ""}${live.tpPnlUsd.toFixed(2)}$ · Si SL ${live.slPnlUsd != null && live.slPnlUsd >= 0 ? "+" : ""}${(live.slPnlUsd ?? 0).toFixed(2)}$`
+                    : live.reason
+                      ? `Sizing: ${live.reason}`
+                      : "Sizing: 2% equity HL",
                   "Ordre réel Hyperliquid — vérifie sur l’app HL.",
                 ].join("\n"),
               );
@@ -1456,9 +1468,21 @@ export async function getTradeSignals(options?: {
                   ? "limit_wait"
                   : "market_now",
               paperId: opened.id,
+              portfolioId: pf.id,
+              portfolioName: pf.name,
+              strategy: "smc",
             });
             if (live.ok) {
-              opened.note = `${opened.note} · LIVE HL size=${live.size} entryOid=${live.entryOid ?? "?"}`;
+              const bot = live.botLabel || "Boriaz";
+              const tpTxt =
+                live.tpPnlUsd != null
+                  ? ` · si TP ${live.tpPnlUsd >= 0 ? "+" : ""}${live.tpPnlUsd.toFixed(2)}$`
+                  : "";
+              const slTxt =
+                live.slPnlUsd != null
+                  ? ` · si SL ${live.slPnlUsd >= 0 ? "+" : ""}${live.slPnlUsd.toFixed(2)}$`
+                  : "";
+              opened.note = `${opened.note} · LIVE HL [${bot}] size=${live.size} entryOid=${live.entryOid ?? "?"}${tpTxt}${slTxt}`;
               try {
                 const all = await loadPaperTrades();
                 const row = all.find((t) => t.id === opened.id);
@@ -1475,7 +1499,11 @@ export async function getTradeSignals(options?: {
                     `LIVE BORIAZ · ${setup.order.side.toUpperCase()} ${setup.coin}`,
                     `Size ${live.size} · entryOid ${live.entryOid ?? "—"}`,
                     `TP oid ${live.tpOid ?? "—"} · SL oid ${live.slOid ?? "—"}`,
-                    live.reason ? `Sizing: ${live.reason}` : "Sizing: 2% equity HL réelle",
+                    live.tpPnlUsd != null
+                      ? `Si TP ${live.tpPnlUsd >= 0 ? "+" : ""}${live.tpPnlUsd.toFixed(2)}$ · Si SL ${live.slPnlUsd != null && live.slPnlUsd >= 0 ? "+" : ""}${(live.slPnlUsd ?? 0).toFixed(2)}$`
+                      : live.reason
+                        ? `Sizing: ${live.reason}`
+                        : "Sizing: 2% equity HL réelle",
                     "Ordre réel Hyperliquid — vérifie sur l’app HL.",
                   ].join("\n"),
                 );

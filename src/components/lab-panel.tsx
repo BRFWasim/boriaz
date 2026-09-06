@@ -87,6 +87,13 @@ export function LabPanel() {
       unrealizedPnlUsd: number;
       leverage: number;
       marginUsedUsd: number;
+      botLabel?: string | null;
+      portfolioName?: string | null;
+      tp?: number | null;
+      sl?: number | null;
+      tpPnlUsd?: number | null;
+      slPnlUsd?: number | null;
+      riskUsd?: number | null;
     }[];
   } | null>(null);
   const [smcBusy, setSmcBusy] = useState(false);
@@ -696,7 +703,7 @@ export function LabPanel() {
                   patchPrefs({ ...prefs, liveTradeEnabled: e.target.checked })
                 }
               />
-              LIVE master (Boriaz / Scalp → Hyperliquid réel)
+              LIVE master (Boriaz / Scalp / Défaut → Hyperliquid réel)
             </label>
           </div>
           {liveStatus ? (
@@ -812,6 +819,15 @@ export function LabPanel() {
                           <span className="text-xs uppercase text-muted-foreground">
                             {p.side} {p.leverage}×
                           </span>
+                          {p.botLabel ? (
+                            <span className="ml-2 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-300">
+                              {p.botLabel}
+                            </span>
+                          ) : (
+                            <span className="ml-2 text-[10px] text-muted-foreground">
+                              bot ?
+                            </span>
+                          )}
                         </span>
                         <span className={signedClass(p.unrealizedPnlUsd)}>
                           {p.unrealizedPnlUsd >= 0 ? "+" : ""}
@@ -819,9 +835,32 @@ export function LabPanel() {
                         </span>
                       </div>
                       <p className="mt-1 text-xs text-muted-foreground">
-                        size {p.size} · entry {p.entryPx} · notionnel{" "}
-                        {p.positionValueUsd.toFixed(2)} $ · marge{" "}
+                        size {p.size} · entry {p.entryPx}
+                        {p.tp != null ? ` · TP ${p.tp}` : ""}
+                        {p.sl != null ? ` · SL ${p.sl}` : ""}
+                        {" · "}notionnel {p.positionValueUsd.toFixed(2)} $ · marge{" "}
                         {p.marginUsedUsd.toFixed(2)} $
+                      </p>
+                      <p className="mt-0.5 text-xs">
+                        <span className="text-emerald-700 dark:text-emerald-400">
+                          Si TP{" "}
+                          {p.tpPnlUsd != null
+                            ? `${p.tpPnlUsd >= 0 ? "+" : ""}${p.tpPnlUsd.toFixed(2)} $`
+                            : "—"}
+                        </span>
+                        {" · "}
+                        <span className="text-rose-700 dark:text-rose-400">
+                          Si SL{" "}
+                          {p.slPnlUsd != null
+                            ? `${p.slPnlUsd >= 0 ? "+" : ""}${p.slPnlUsd.toFixed(2)} $`
+                            : "—"}
+                        </span>
+                        {p.riskUsd != null ? (
+                          <span className="text-muted-foreground">
+                            {" "}
+                            · risque ~{p.riskUsd.toFixed(2)} $
+                          </span>
+                        ) : null}
                       </p>
                     </li>
                   ))}
@@ -922,20 +961,23 @@ export function LabPanel() {
                       />
                       Paper auto
                     </label>
-                    {!pf.isDefault ? (
-                      <label className="flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-400">
-                        <input
-                          type="checkbox"
-                          checked={Boolean(pf.liveTradeEnabled)}
-                          onChange={(e) =>
-                            updatePortfolio(pf.id, {
-                              liveTradeEnabled: e.target.checked,
-                            })
-                          }
-                        />
-                        LIVE HL
-                      </label>
-                    ) : null}
+                    <label className="flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-400">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(pf.liveTradeEnabled)}
+                        onChange={(e) =>
+                          updatePortfolio(pf.id, {
+                            liveTradeEnabled: e.target.checked,
+                          })
+                        }
+                      />
+                      LIVE HL
+                      {pf.isDefault ? (
+                        <span className="text-[10px] text-muted-foreground">
+                          (Défaut)
+                        </span>
+                      ) : null}
+                    </label>
                   </div>
                   {!pf.isDefault && pf.id !== "boriaz" ? (
                     <Button
@@ -1420,6 +1462,27 @@ export function LabPanel() {
                         ({formatPct(t.pnlPct, 2)})
                       </span>
                     ) : null}
+                  </div>
+                  <div className="text-[11px]">
+                    <span className="text-emerald-700 dark:text-emerald-400">
+                      Si TP +
+                      {(
+                        (t.marginEur *
+                          (Math.abs(t.tp - t.entry) / t.entry) *
+                          t.leverage)
+                      ).toFixed(2)}{" "}
+                      €
+                    </span>
+                    {" · "}
+                    <span className="text-rose-700 dark:text-rose-400">
+                      Si SL −
+                      {(
+                        (t.marginEur *
+                          (Math.abs(t.entry - t.sl) / t.entry) *
+                          t.leverage)
+                      ).toFixed(2)}{" "}
+                      €
+                    </span>
                   </div>
                   {t.status === "open" || t.status === "pending" ? (
                     <button

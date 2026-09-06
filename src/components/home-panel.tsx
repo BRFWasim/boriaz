@@ -65,6 +65,14 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
       size: number;
       unrealizedPnlUsd: number;
       leverage: number;
+      entryPx?: number;
+      botLabel?: string | null;
+      portfolioName?: string | null;
+      tp?: number | null;
+      sl?: number | null;
+      tpPnlUsd?: number | null;
+      slPnlUsd?: number | null;
+      riskUsd?: number | null;
     }[];
   } | null>(null);
 
@@ -150,6 +158,14 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
                 size: number;
                 unrealizedPnlUsd: number;
                 leverage: number;
+                entryPx?: number;
+                botLabel?: string | null;
+                portfolioName?: string | null;
+                tp?: number | null;
+                sl?: number | null;
+                tpPnlUsd?: number | null;
+                slPnlUsd?: number | null;
+                riskUsd?: number | null;
               }[];
             };
             riskPreview?: { riskUsd?: number } | null;
@@ -433,15 +449,45 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
                       key={`${p.coin}-${p.side}`}
                       className="rounded-xl border border-border/60 bg-card/50 px-3 py-2 text-sm"
                     >
-                      <span className="font-medium">
-                        {p.coin} {p.side} {p.leverage}×
-                      </span>
-                      <span
-                        className={`ml-2 ${signedClass(p.unrealizedPnlUsd)}`}
-                      >
-                        {p.unrealizedPnlUsd >= 0 ? "+" : ""}
-                        {p.unrealizedPnlUsd.toFixed(2)} $
-                      </span>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-medium">
+                          {p.coin} {p.side} {p.leverage}×
+                          {p.botLabel ? (
+                            <span className="ml-2 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-300">
+                              {p.botLabel}
+                            </span>
+                          ) : (
+                            <span className="ml-2 text-[10px] text-muted-foreground">
+                              bot ?
+                            </span>
+                          )}
+                        </span>
+                        <span className={signedClass(p.unrealizedPnlUsd)}>
+                          {p.unrealizedPnlUsd >= 0 ? "+" : ""}
+                          {p.unrealizedPnlUsd.toFixed(2)} $
+                        </span>
+                      </div>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {p.entryPx != null ? `entry ${p.entryPx} · ` : ""}
+                        size {p.size}
+                        {p.tp != null ? ` · TP ${p.tp}` : ""}
+                        {p.sl != null ? ` · SL ${p.sl}` : ""}
+                      </p>
+                      <p className="mt-0.5 text-xs">
+                        <span className="text-emerald-700 dark:text-emerald-400">
+                          Si TP{" "}
+                          {p.tpPnlUsd != null
+                            ? `${p.tpPnlUsd >= 0 ? "+" : ""}${p.tpPnlUsd.toFixed(2)} $`
+                            : "—"}
+                        </span>
+                        {" · "}
+                        <span className="text-rose-700 dark:text-rose-400">
+                          Si SL{" "}
+                          {p.slPnlUsd != null
+                            ? `${p.slPnlUsd >= 0 ? "+" : ""}${p.slPnlUsd.toFixed(2)} $`
+                            : "—"}
+                        </span>
+                      </p>
                     </li>
                   ))}
                 </ul>

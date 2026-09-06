@@ -31,6 +31,10 @@ export type LiveTradeRequest = {
   paperId?: string;
   /** Risque live en % du solde HL réel (défaut 2). */
   riskPct?: number;
+  /** Portefeuille / bot qui a déclenché l’ordre (Boriaz, Scalp, Défaut…). */
+  portfolioId?: string;
+  portfolioName?: string;
+  strategy?: "alignment" | "smc";
 };
 
 export type LiveTradeResult = {
@@ -43,6 +47,10 @@ export type LiveTradeResult = {
   entryOid?: number | null;
   tpOid?: number | null;
   slOid?: number | null;
+  riskUsd?: number;
+  tpPnlUsd?: number;
+  slPnlUsd?: number;
+  botLabel?: string;
   raw?: unknown;
 };
 
@@ -272,6 +280,17 @@ export type LivePositionRow = {
   unrealizedPnlUsd: number;
   leverage: number;
   marginUsedUsd: number;
+  /** Rattaché via journal live (HL ne fournit pas le bot). */
+  botLabel?: string | null;
+  portfolioId?: string | null;
+  portfolioName?: string | null;
+  strategy?: "alignment" | "smc" | null;
+  tp?: number | null;
+  sl?: number | null;
+  tpPnlUsd?: number | null;
+  slPnlUsd?: number | null;
+  riskUsd?: number | null;
+  paperId?: string | null;
 };
 
 export type LivePortfolioSnapshot = {
@@ -695,14 +714,68 @@ export async function placeBoriazLiveTrade(
     };
   }
 
+  const sizeNum = Number(size);
+  const entryOid = readOid(statuses[0]);
+  const tpOid = readOid(statuses[1]);
+  const slOid = readOid(statuses[2]);
+
+  let botLabel: string | undefined;
+  let tpPnlUsd: number | undefined;
+  let slPnlUsd: number | undefined;
+  try {
+    const { recordLiveJournalEntry } = await import("./live-journal");
+    const { botLabelFromPortfolio, tradeOutcomesUsd } = await import(
+      "./trade-outcomes"
+    );
+    botLabel = botLabelFromPortfolio({
+      portfolioId: req.portfolioId,
+      portfolioName: req.portfolioName,
+      strategy: req.strategy,
+    });
+    const outcomes = tradeOutcomesUsd({
+      side: req.side,
+      entry: req.entry,
+      tp: req.tp,
+      sl: req.sl,
+      size: sizeNum,
+    });
+    tpPnlUsd = outcomes.tpPnlUsd;
+    slPnlUsd = outcomes.slPnlUsd;
+    await recordLiveJournalEntry({
+      coin: asset.name,
+      side: req.side,
+      entry: req.entry,
+      tp: req.tp,
+      sl: req.sl,
+      size: sizeNum,
+      leverage: liveLev,
+      riskPct: req.riskPct ?? 2,
+      riskUsd: sized.riskUsd,
+      portfolioId: req.portfolioId || "unknown",
+      portfolioName: req.portfolioName || botLabel,
+      strategy: req.strategy === "smc" ? "smc" : "alignment",
+      botLabel,
+      paperId: req.paperId,
+      entryOid,
+      tpOid,
+      slOid,
+    });
+  } catch (e) {
+    console.error("live journal record failed", e);
+  }
+
   return {
     ok: true,
     coin: asset.name,
     assetId: asset.id,
     size,
-    entryOid: readOid(statuses[0]),
-    tpOid: readOid(statuses[1]),
-    slOid: readOid(statuses[2]),
+    entryOid,
+    tpOid,
+    slOid,
+    riskUsd: sized.riskUsd,
+    tpPnlUsd,
+    slPnlUsd,
+    botLabel,
     reason: sized.note,
     raw: result,
   };
