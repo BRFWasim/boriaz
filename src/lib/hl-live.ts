@@ -279,12 +279,15 @@ export type LivePortfolioSnapshot = {
   reason?: string;
   testnet: boolean;
   address: string | null;
+  /** Equity utilisée pour le sizing live (perp + USDC spot Unified). */
   accountValueUsd: number;
   totalMarginUsedUsd: number;
   withdrawableUsd: number;
   totalUnrealizedPnlUsd: number;
   openPositionCount: number;
   positions: LivePositionRow[];
+  perpEquityUsd?: number;
+  spotUsdcUsd?: number;
 };
 
 export async function fetchLivePortfolio(): Promise<LivePortfolioSnapshot> {
@@ -293,7 +296,8 @@ export async function fetchLivePortfolio(): Promise<LivePortfolioSnapshot> {
   if (!address) {
     return {
       ok: false,
-      reason: "HL_ACCOUNT_ADDRESS absente — adresse MASTER obligatoire (pas l’agent API).",
+      reason:
+        "HL_ACCOUNT_ADDRESS absente — adresse MASTER obligatoire (pas l’agent API).",
       testnet: cfg.testnet,
       address: null,
       accountValueUsd: 0,
@@ -302,13 +306,22 @@ export async function fetchLivePortfolio(): Promise<LivePortfolioSnapshot> {
       totalUnrealizedPnlUsd: 0,
       openPositionCount: 0,
       positions: [],
+      perpEquityUsd: 0,
+      spotUsdcUsd: 0,
     };
   }
   try {
     const info = new InfoClient({ transport: makeTransport(cfg.testnet) });
-    const state = await info.clearinghouseState({
-      user: address as `0x${string}`,
-    });
+    const user = address as `0x${string}`;
+
+    // Perps + Spot (+ portfolio fallback). Unified Account : USDC souvent 100 % spot.
+    const [state, spot, portfolioRows, abstraction] = await Promise.all([
+      info.clearinghouseState({ user }),
+      info.spotClearinghouseState({ user }).catch(() => null),
+      info.portfolio({ user }).catch(() => null),
+      info.userAbstraction({ user }).catch(() => null),
+    ]);
+
     const positions: LivePositionRow[] = [];
     for (const row of state.assetPositions ?? []) {
       const p = row.position;
@@ -330,15 +343,62 @@ export async function fetchLivePortfolio(): Promise<LivePortfolioSnapshot> {
         marginUsedUsd: Number(p?.marginUsed ?? 0),
       });
     }
-    const accountValueUsd = Number(state.marginSummary?.accountValue ?? 0);
-    const totalMarginUsedUsd = Number(
-      state.marginSummary?.totalMarginUsed ?? 0,
+
+    const perpEquityUsd = Math.max(
+      Number(state.marginSummary?.accountValue ?? 0),
+      Number(state.crossMarginSummary?.accountValue ?? 0),
+      0,
     );
-    const withdrawableUsd = Number(state.withdrawable ?? 0);
-    const zeroHint =
-      accountValueUsd <= 0
-        ? "Solde 0$ sur cette adresse — vérifie HL_ACCOUNT_ADDRESS = wallet MASTER (pas l’agent 0x947c…)."
-        : undefined;
+    const totalMarginUsedUsd = Math.max(
+      Number(state.marginSummary?.totalMarginUsed ?? 0),
+      Number(state.crossMarginSummary?.totalMarginUsed ?? 0),
+      0,
+    );
+    const withdrawablePerp = Number(state.withdrawable ?? 0);
+
+    let spotUsdcUsd = 0;
+    if (spot && Array.isArray(spot.balances)) {
+      for (const b of spot.balances) {
+        const coin = String((b as { coin?: string }).coin ?? "");
+        if (coin.toUpperCase() === "USDC") {
+          const total = Number((b as { total?: string }).total ?? 0);
+          if (Number.isFinite(total)) spotUsdcUsd += total;
+        }
+      }
+    }
+
+    let portfolioEquityUsd = 0;
+    if (Array.isArray(portfolioRows)) {
+      const allTime = portfolioRows.find((row) => row?.[0] === "allTime");
+      const hist = allTime?.[1]?.accountValueHistory;
+      if (Array.isArray(hist) && hist.length) {
+        const last = Number(hist[hist.length - 1]?.[1] ?? 0);
+        if (Number.isFinite(last)) portfolioEquityUsd = last;
+      }
+    }
+
+    // Unified : perps souvent à 0$ tant que l’USDC reste en spot — max des sources.
+    const accountValueUsd = Math.max(
+      perpEquityUsd,
+      spotUsdcUsd,
+      portfolioEquityUsd,
+    );
+    const withdrawableUsd = Math.max(withdrawablePerp, spotUsdcUsd);
+
+    let reason: string | undefined;
+    if (accountValueUsd <= 0) {
+      reason =
+        `Solde 0$ pour ${address.slice(0, 6)}…${address.slice(-4)} ` +
+        `(perp ${perpEquityUsd.toFixed(2)}$ / spot USDC ${spotUsdcUsd.toFixed(2)}$` +
+        (abstraction ? ` / mode ${abstraction}` : "") +
+        `). ` +
+        `Vérifie que HL_ACCOUNT_ADDRESS est bien le wallet connecté à Hyperliquid (haut droite → adresse 0x…), pas l’agent.`;
+    } else if (perpEquityUsd <= 0 && spotUsdcUsd > 0) {
+      reason =
+        `Compte Unified : ${spotUsdcUsd.toFixed(2)}$ USDC en spot (perp ${perpEquityUsd.toFixed(2)}$). ` +
+        `Le live size sur ce solde (2%).`;
+    }
+
     return {
       ok: true,
       testnet: cfg.testnet,
@@ -352,7 +412,9 @@ export async function fetchLivePortfolio(): Promise<LivePortfolioSnapshot> {
       ),
       openPositionCount: positions.length,
       positions,
-      reason: zeroHint,
+      perpEquityUsd,
+      spotUsdcUsd,
+      reason,
     };
   } catch (e) {
     return {
@@ -366,6 +428,8 @@ export async function fetchLivePortfolio(): Promise<LivePortfolioSnapshot> {
       totalUnrealizedPnlUsd: 0,
       openPositionCount: 0,
       positions: [],
+      perpEquityUsd: 0,
+      spotUsdcUsd: 0,
     };
   }
 }

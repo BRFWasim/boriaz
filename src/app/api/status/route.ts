@@ -30,6 +30,7 @@ export async function GET() {
     HL_LIVE_ENABLED:
       process.env.HL_LIVE_ENABLED?.trim().toLowerCase() === "true",
     HL_AGENT_PRIVATE_KEY: Boolean(process.env.HL_AGENT_PRIVATE_KEY?.trim()),
+    HL_ACCOUNT_ADDRESS: Boolean(process.env.HL_ACCOUNT_ADDRESS?.trim()),
   };
   const missing = Object.entries(keys)
     .filter(([, ok]) => !ok)
@@ -51,7 +52,7 @@ export async function GET() {
       upstash:
         "Upstash = un petit tiroir en ligne pour le paper 1000 €. Sans ça, Vercel jette le tiroir à chaque redémarrage (/tmp). Gratuit : Redis → REST URL + TOKEN.",
       live:
-        "LIVE Boriaz : HL_LIVE_ENABLED + HL_AGENT_PRIVATE_KEY (agent wallet, pas seed master) + toggles Lab. Caps HL_MAX_*.",
+        "LIVE Boriaz : HL_LIVE_ENABLED + HL_AGENT_PRIVATE_KEY (agent) + HL_ACCOUNT_ADDRESS (MASTER avec USDC) + toggles Lab. Caps HL_MAX_*.",
     },
   });
 }

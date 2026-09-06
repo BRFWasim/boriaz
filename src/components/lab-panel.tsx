@@ -23,6 +23,7 @@ import {
   makeCustomPortfolio,
 } from "@/lib/user-types";
 import { syncPaperFromBrowser, writeLocalPaper } from "@/lib/paper-local";
+import { readResponseJson } from "@/lib/safe-json";
 
 const PREFS_LS_KEY = "boriazbot-prefs-v1";
 
@@ -75,6 +76,8 @@ export function LabPanel() {
     withdrawableUsd: number;
     totalUnrealizedPnlUsd: number;
     openPositionCount: number;
+    perpEquityUsd?: number;
+    spotUsdcUsd?: number;
     positions: {
       coin: string;
       side: "long" | "short";
@@ -118,10 +121,18 @@ export function LabPanel() {
   async function refresh(opts?: { forcePrefs?: boolean }) {
     try {
       const [p, j, pa, c] = await Promise.all([
-        fetch("/api/prefs").then((r) => r.json()),
-        fetch("/api/journal").then((r) => r.json()),
-        fetch("/api/paper").then((r) => r.json()),
-        fetch("/api/correlation").then((r) => r.json()),
+        fetch("/api/prefs").then((r) =>
+          readResponseJson<{ prefs?: UserPrefs }>(r),
+        ),
+        fetch("/api/journal").then((r) =>
+          readResponseJson<{ entries?: JournalEntry[] }>(r),
+        ),
+        fetch("/api/paper").then((r) =>
+          readResponseJson<{ trades?: PaperTrade[]; account?: PaperAccount }>(r),
+        ),
+        fetch("/api/correlation").then((r) =>
+          readResponseJson<CorrelationPayload & { error?: string }>(r),
+        ),
       ]);
       if (!dirtyRef.current || opts?.forcePrefs) {
         const serverPrefs = {
@@ -137,24 +148,38 @@ export function LabPanel() {
       setAccount(pa.account ?? null);
       if (pa.trades) writeLocalPaper(pa.trades);
       if (!c.error || c.latest) setCorr(c);
-      const st = await fetch("/api/status").then((r) => r.json());
+      const st = await fetch("/api/status").then((r) => readResponseJson<NonNullable<typeof status>>(r));
       setStatus(st);
       try {
-        const tgStatus = await fetch("/api/telegram/setup").then((r) => r.json());
+        const tgStatus = await fetch("/api/telegram/setup").then((r) => readResponseJson<NonNullable<typeof tg>>(r));
         setTg(tgStatus);
       } catch {
         /* ignore */
       }
       try {
-        const live = await fetch("/api/live-status").then((r) => r.json());
+        const live = await fetch("/api/live-status").then((r) => readResponseJson<NonNullable<typeof liveStatus>>(r));
         if (live?.env) setLiveStatus(live);
       } catch {
         /* ignore */
       }
       try {
-        const liveAcc = await fetch("/api/live-account").then((r) => r.json());
+        const liveAcc = await fetch("/api/live-account").then((r) =>
+          readResponseJson<{
+            env?: NonNullable<typeof liveStatus>["env"];
+            prefs?: NonNullable<typeof liveStatus>["prefs"];
+            portfolio?: NonNullable<typeof livePortfolio>;
+          }>(r),
+        );
         if (liveAcc?.portfolio) setLivePortfolio(liveAcc.portfolio);
-        if (liveAcc?.env) setLiveStatus(liveAcc);
+        if (liveAcc?.env) {
+          setLiveStatus({
+            env: liveAcc.env,
+            prefs: liveAcc.prefs ?? {
+              liveTradeEnabled: false,
+              boriazLiveTradeEnabled: false,
+            },
+          });
+        }
       } catch {
         /* ignore */
       }
@@ -349,7 +374,7 @@ export function LabPanel() {
         );
       }
       try {
-        const tgStatus = await fetch("/api/telegram/setup").then((r) => r.json());
+        const tgStatus = await fetch("/api/telegram/setup").then((r) => readResponseJson<NonNullable<typeof tg>>(r));
         setTg(tgStatus);
       } catch {
         /* ignore */
@@ -761,12 +786,19 @@ export function LabPanel() {
                 {livePortfolio.address
                   ? ` · ${livePortfolio.address.slice(0, 6)}…${livePortfolio.address.slice(-4)}`
                   : ""}
-                {" · "}risque live 2% ≈{" "}
+                {" · "}perp {(livePortfolio.perpEquityUsd ?? 0).toFixed(2)}$ · spot
+                USDC {(livePortfolio.spotUsdcUsd ?? 0).toFixed(2)}$ · risque live
+                2% ≈{" "}
                 <span className="text-foreground">
                   {(livePortfolio.accountValueUsd * 0.02).toFixed(2)} $
                 </span>{" "}
                 par trade
               </p>
+              {livePortfolio.reason ? (
+                <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
+                  {livePortfolio.reason}
+                </p>
+              ) : null}
               {livePortfolio.positions.length ? (
                 <ul className="mt-3 space-y-2">
                   {livePortfolio.positions.map((p) => (
