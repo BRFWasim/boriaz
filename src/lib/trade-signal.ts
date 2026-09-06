@@ -1235,6 +1235,65 @@ export async function getTradeSignals(options?: {
         justification,
         strategy: "alignment",
       });
+      // LIVE Hyperliquid — si toggle portfolio (ex. Scalp) + master ON
+      if (
+        opened &&
+        prefs.liveTradeEnabled &&
+        pf.liveTradeEnabled &&
+        !opened.note.includes("Cash insuffisant")
+      ) {
+        try {
+          const { placeBoriazLiveTrade } = await import("./hl-live");
+          const { loadPaperTrades, savePaperTrades } = await import("./persist");
+          const live = await placeBoriazLiveTrade({
+            coin: chosen.coin,
+            side,
+            entry: chosen.entry!,
+            tp: chosen.tp!,
+            sl: chosen.sl!,
+            leverage: levNum,
+            riskPct: pf.riskPct ?? 2,
+            entryMode:
+              chosen.entryMode === "limit_wait" ? "limit_wait" : "market_now",
+            paperId: opened.id,
+          });
+          if (live.ok) {
+            opened.note = `${opened.note} · LIVE HL size=${live.size} entryOid=${live.entryOid ?? "?"}`;
+            try {
+              const all = await loadPaperTrades();
+              const row = all.find((t) => t.id === opened.id);
+              if (row) {
+                row.note = opened.note;
+                await savePaperTrades(all);
+              }
+            } catch {
+              /* ignore */
+            }
+            if (notify && !hush) {
+              await sendTelegramMessage(
+                [
+                  `LIVE ${pf.name.toUpperCase()} · ${side.toUpperCase()} ${chosen.coin}`,
+                  `Size ${live.size} · entryOid ${live.entryOid ?? "—"}`,
+                  live.reason ? `Sizing: ${live.reason}` : "Sizing: 2% equity HL",
+                  "Ordre réel Hyperliquid — vérifie sur l’app HL.",
+                ].join("\n"),
+              );
+            }
+          } else if (!live.skipped) {
+            console.error("LIVE alignment order failed", live.reason);
+            if (notify && !hush) {
+              await sendTelegramMessage(
+                `LIVE ${pf.name} ÉCHEC · ${chosen.coin}: ${live.reason || "erreur"}`,
+              );
+            }
+          } else {
+            console.info("LIVE alignment skipped", live.reason);
+          }
+        } catch (e) {
+          console.error("LIVE alignment exception", e);
+        }
+      }
+
       if (opened && !opened.note.includes("Cash insuffisant")) {
         anyOpened = true;
         await appendBook({
@@ -1376,7 +1435,6 @@ export async function getTradeSignals(options?: {
         // LIVE Hyperliquid — Boriaz uniquement (kill-switch env + prefs)
         if (
           opened &&
-          pf.id === "boriaz" &&
           prefs.liveTradeEnabled &&
           pf.liveTradeEnabled &&
           !opened.note.includes("Cash insuffisant")

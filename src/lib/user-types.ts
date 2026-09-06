@@ -151,7 +151,12 @@ export function ensurePortfolios(
     byId.set("default", { ...DEFAULT_PORTFOLIO });
   } else {
     const d = byId.get("default")!;
-    byId.set("default", { ...d, isDefault: true, enabled: true });
+    byId.set("default", {
+      ...d,
+      isDefault: true,
+      enabled: true,
+      liveTradeEnabled: false, // Défaut = paper only
+    });
   }
   // Boriaz toujours présent (SMC)
   if (!byId.has("boriaz")) {
