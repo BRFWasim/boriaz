@@ -18,6 +18,7 @@ import type { BacktestPayload } from "@/lib/backtest";
 import type { CorrelationPayload } from "@/lib/correlation";
 import {
   DEFAULT_PREFS,
+  computePaperAccount,
   ensurePortfolios,
   makeCustomPortfolio,
 } from "@/lib/user-types";
@@ -63,6 +64,27 @@ export function LabPanel() {
       accountAddress: string | null;
     };
     prefs: { liveTradeEnabled: boolean; boriazLiveTradeEnabled: boolean };
+  } | null>(null);
+  const [livePortfolio, setLivePortfolio] = useState<{
+    ok: boolean;
+    reason?: string;
+    testnet: boolean;
+    address: string | null;
+    accountValueUsd: number;
+    totalMarginUsedUsd: number;
+    withdrawableUsd: number;
+    totalUnrealizedPnlUsd: number;
+    openPositionCount: number;
+    positions: {
+      coin: string;
+      side: "long" | "short";
+      size: number;
+      entryPx: number;
+      positionValueUsd: number;
+      unrealizedPnlUsd: number;
+      leverage: number;
+      marginUsedUsd: number;
+    }[];
   } | null>(null);
   const [smcBusy, setSmcBusy] = useState(false);
   const [smc, setSmc] = useState<{
@@ -126,6 +148,13 @@ export function LabPanel() {
       try {
         const live = await fetch("/api/live-status").then((r) => r.json());
         if (live?.env) setLiveStatus(live);
+      } catch {
+        /* ignore */
+      }
+      try {
+        const liveAcc = await fetch("/api/live-account").then((r) => r.json());
+        if (liveAcc?.portfolio) setLivePortfolio(liveAcc.portfolio);
+        if (liveAcc?.env) setLiveStatus(liveAcc);
       } catch {
         /* ignore */
       }
@@ -678,6 +707,90 @@ export function LabPanel() {
         </section>
       ) : null}
 
+      <section className="rounded-2xl border border-emerald-500/30 bg-emerald-500/5 p-4">
+        <h3 id="lab-live-portfolio" className="font-medium">
+          Portefeuille réel Hyperliquid
+        </h3>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Suivi séparé du paper. Lit le clearinghouse HL (adresse master /
+          agent). Les P&L paper ci-dessous ne sont pas mélangés ici.
+        </p>
+        {livePortfolio ? (
+          livePortfolio.ok ? (
+            <>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                <Metric
+                  label="Account value"
+                  value={`${livePortfolio.accountValueUsd.toFixed(2)} $`}
+                />
+                <Metric
+                  label="Marge utilisée"
+                  value={`${livePortfolio.totalMarginUsedUsd.toFixed(2)} $`}
+                />
+                <Metric
+                  label="Withdrawable"
+                  value={`${livePortfolio.withdrawableUsd.toFixed(2)} $`}
+                />
+                <Metric
+                  label="PnL latent"
+                  value={`${livePortfolio.totalUnrealizedPnlUsd >= 0 ? "+" : ""}${livePortfolio.totalUnrealizedPnlUsd.toFixed(2)} $`}
+                  className={signedClass(livePortfolio.totalUnrealizedPnlUsd)}
+                />
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground">
+                {livePortfolio.testnet ? "Testnet" : "Mainnet"} ·{" "}
+                {livePortfolio.openPositionCount} position
+                {livePortfolio.openPositionCount > 1 ? "s" : ""}
+                {livePortfolio.address
+                  ? ` · ${livePortfolio.address.slice(0, 6)}…${livePortfolio.address.slice(-4)}`
+                  : ""}
+              </p>
+              {livePortfolio.positions.length ? (
+                <ul className="mt-3 space-y-2">
+                  {livePortfolio.positions.map((p) => (
+                    <li
+                      key={`${p.coin}-${p.side}`}
+                      className="rounded-lg border border-border/60 bg-card/60 px-3 py-2 text-sm"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-medium">
+                          {p.coin}{" "}
+                          <span className="text-xs uppercase text-muted-foreground">
+                            {p.side} {p.leverage}×
+                          </span>
+                        </span>
+                        <span className={signedClass(p.unrealizedPnlUsd)}>
+                          {p.unrealizedPnlUsd >= 0 ? "+" : ""}
+                          {p.unrealizedPnlUsd.toFixed(2)} $
+                        </span>
+                      </div>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        size {p.size} · entry {p.entryPx} · notionnel{" "}
+                        {p.positionValueUsd.toFixed(2)} $ · marge{" "}
+                        {p.marginUsedUsd.toFixed(2)} $
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Aucune position ouverte sur HL pour le moment.
+                </p>
+              )}
+            </>
+          ) : (
+            <p className="mt-2 text-sm text-muted-foreground">
+              {livePortfolio.reason ||
+                "Compte HL illisible — vérifie HL_ACCOUNT_ADDRESS / clé agent."}
+            </p>
+          )
+        ) : (
+          <p className="mt-2 text-sm text-muted-foreground">
+            Chargement du compte HL… (nécessite la clé agent en env Vercel)
+          </p>
+        )}
+      </section>
+
       {prefs ? (
         <section className="rounded-2xl border border-primary/25 bg-primary/5 p-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
@@ -781,6 +894,44 @@ export function LabPanel() {
                     TP1 1R (50 %+BE) · TP2 2R · gate mécanique (Claude off).
                   </p>
                 ) : null}
+                {(() => {
+                  const acc = computePaperAccount(paper, pf.bankrollEur, pf.id);
+                  const total =
+                    acc.realizedPnlEur + acc.unrealizedPnlEur;
+                  const fmt = (n: number) =>
+                    `${n >= 0 ? "+" : ""}${n.toFixed(2)} €`;
+                  return (
+                    <div className="mt-3 grid gap-2 rounded-lg border border-border/60 bg-muted/20 p-2 sm:grid-cols-4">
+                      <Metric
+                        label="Sorti (réalisé)"
+                        value={fmt(acc.realizedPnlEur)}
+                        className={signedClass(acc.realizedPnlEur)}
+                      />
+                      <Metric
+                        label="En cours (latent)"
+                        value={fmt(acc.unrealizedPnlEur)}
+                        className={signedClass(acc.unrealizedPnlEur)}
+                      />
+                      <Metric
+                        label="Total P&L"
+                        value={fmt(total)}
+                        className={signedClass(total)}
+                      />
+                      <Metric
+                        label="Equity"
+                        value={`${acc.equityEur.toFixed(2)} €`}
+                        className={signedClass(
+                          acc.equityEur - acc.bankrollStartEur,
+                        )}
+                      />
+                      <p className="sm:col-span-4 text-[11px] text-muted-foreground">
+                        Ouverts {acc.openCount} · en attente {acc.pendingCount} ·
+                        clos {acc.closedCount} (W{acc.winCount}/L{acc.lossCount})
+                        · départ {acc.bankrollStartEur} €
+                      </p>
+                    </div>
+                  );
+                })()}
                 <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
                   <div>
                     <Label>Capital (€)</Label>
@@ -1282,13 +1433,25 @@ export function LabPanel() {
   );
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function Metric({
+  label,
+  value,
+  className,
+}: {
+  label: string;
+  value: string;
+  className?: string;
+}) {
   return (
     <div className="rounded-lg bg-muted/30 px-3 py-2">
       <p className="text-[10px] tracking-wide text-muted-foreground uppercase">
         {label}
       </p>
-      <p className="mt-0.5 break-all text-sm font-medium">{value}</p>
+      <p
+        className={`mt-0.5 break-all text-sm font-medium ${className ?? ""}`}
+      >
+        {value}
+      </p>
     </div>
   );
 }

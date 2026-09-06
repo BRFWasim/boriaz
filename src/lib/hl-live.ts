@@ -2,9 +2,10 @@
  * Hyperliquid LIVE execution — Boriaz SMC only.
  *
  * Kill-switches:
- * - HL_LIVE_ENABLED must be "true"
- * - HL_AGENT_PRIVATE_KEY = agent wallet key (NOT master seed)
+ * - HL_LIVE_ENABLED (alias HL_LIVE_ENABLED) must be "true"
+ * - HL_AGENT_PRIVATE_KEY (alias HL_AGENT_PRIVATE_KEY) = agent key (NOT master seed)
  * Caps via HL_MAX_NOTIONAL_USD / HL_MAX_LEVERAGE / HL_MAX_OPEN_POSITIONS
+ * Live size is also capped by real HL equity (safe for ~100 USDC accounts)
  */
 
 import {
@@ -68,9 +69,43 @@ function envFlag(name: string, fallback = false): boolean {
   return v === "1" || v === "true" || v === "yes" || v === "on";
 }
 
+function envFlagAny(names: string[], fallback = false): boolean {
+  for (const name of names) {
+    const v = process.env[name]?.trim().toLowerCase();
+    if (!v) continue;
+    return v === "1" || v === "true" || v === "yes" || v === "on";
+  }
+  return fallback;
+}
+
 function envNum(name: string, fallback: number): number {
   const n = Number(process.env[name]);
   return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+function envNumAny(names: string[], fallback: number): number {
+  for (const name of names) {
+    const n = Number(process.env[name]);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return fallback;
+}
+
+function envStrAny(names: string[]): string {
+  for (const name of names) {
+    const v = process.env[name]?.trim();
+    if (v) return v;
+  }
+  return "";
+}
+
+function readAgentPrivateKey(): string {
+  // Canonical + aliases (docs / chat sometimes used HL_AGENT_PRIVATE_KEY)
+  return envStrAny([
+    "HL_AGENT_PRIVATE_KEY",
+    "HL_AGENT_PRIVATE_KEY",
+    "HL_PRIVATE_KEY",
+  ]);
 }
 
 function makeTransport(testnet: boolean) {
@@ -78,7 +113,7 @@ function makeTransport(testnet: boolean) {
 }
 
 export function getLiveConfig(): LiveConfigStatus {
-  const key = process.env.HL_AGENT_PRIVATE_KEY?.trim() || "";
+  const key = readAgentPrivateKey();
   let agentAddress: string | null = null;
   if (key) {
     try {
@@ -89,18 +124,28 @@ export function getLiveConfig(): LiveConfigStatus {
     }
   }
   return {
-    envArmed: envFlag("HL_LIVE_ENABLED", false),
+    envArmed: envFlagAny(["HL_LIVE_ENABLED", "HL_LIVE_ENABLED"], false),
     hasAgentKey: Boolean(key) && Boolean(agentAddress),
-    testnet: envFlag("HL_LIVE_TESTNET", false),
-    maxNotionalUsd: envNum("HL_MAX_NOTIONAL_USD", 200),
-    maxLeverage: Math.min(10, envNum("HL_MAX_LEVERAGE", 3)),
+    testnet: envFlagAny(["HL_LIVE_TESTNET", "HL_LIVE_TESTNET"], false),
+    // Défaut 80$ — adapté aux petits comptes (~100 USDC). Override via env.
+    maxNotionalUsd: envNumAny(
+      ["HL_MAX_NOTIONAL_USD", "HL_MAX_NOTIONAL_USD"],
+      80,
+    ),
+    maxLeverage: Math.min(
+      10,
+      envNumAny(["HL_MAX_LEVERAGE", "HL_MAX_LEVERAGE"], 3),
+    ),
     maxOpenPositions: Math.min(
       10,
-      Math.floor(envNum("HL_MAX_OPEN_POSITIONS", 2)),
+      Math.floor(
+        envNumAny(["HL_MAX_OPEN_POSITIONS", "HL_MAX_OPEN_POSITIONS"], 2),
+      ),
     ),
     agentAddress,
     accountAddress:
-      process.env.HL_ACCOUNT_ADDRESS?.trim().toLowerCase() || agentAddress,
+      envStrAny(["HL_ACCOUNT_ADDRESS", "HL_ACCOUNT_ADDRESS"]).toLowerCase() ||
+      agentAddress,
   };
 }
 
@@ -115,7 +160,7 @@ export function isLiveEnvReady(): { ok: boolean; reason?: string } {
   if (!cfg.hasAgentKey) {
     return {
       ok: false,
-      reason: "HL_AGENT_PRIVATE_KEY manquante ou invalide.",
+      reason: "HL_AGENT_PRIVATE_KEY (ou alias HL_AGENT_PRIVATE_KEY) manquante ou invalide.",
     };
   }
   return { ok: true };
@@ -159,7 +204,7 @@ async function loadAssetMap(testnet: boolean): Promise<Map<string, AssetMeta>> {
 }
 
 function getExchangeClient(testnet: boolean): ExchangeClient {
-  const raw = process.env.HL_AGENT_PRIVATE_KEY!.trim();
+  const raw = readAgentPrivateKey();
   const pk = (raw.startsWith("0x") ? raw : `0x${raw}`) as `0x${string}`;
   return new ExchangeClient({
     transport: makeTransport(testnet),
@@ -195,6 +240,142 @@ function readOid(status: unknown): number | null {
   return null;
 }
 
+
+export type LivePositionRow = {
+  coin: string;
+  side: LiveSide;
+  size: number;
+  entryPx: number;
+  positionValueUsd: number;
+  unrealizedPnlUsd: number;
+  leverage: number;
+  marginUsedUsd: number;
+};
+
+export type LivePortfolioSnapshot = {
+  ok: boolean;
+  reason?: string;
+  testnet: boolean;
+  address: string | null;
+  accountValueUsd: number;
+  totalMarginUsedUsd: number;
+  withdrawableUsd: number;
+  totalUnrealizedPnlUsd: number;
+  openPositionCount: number;
+  positions: LivePositionRow[];
+};
+
+export async function fetchLivePortfolio(): Promise<LivePortfolioSnapshot> {
+  const cfg = getLiveConfig();
+  const address = cfg.accountAddress;
+  if (!address) {
+    return {
+      ok: false,
+      reason: "Adresse HL absente (HL_ACCOUNT_ADDRESS ou clé agent).",
+      testnet: cfg.testnet,
+      address: null,
+      accountValueUsd: 0,
+      totalMarginUsedUsd: 0,
+      withdrawableUsd: 0,
+      totalUnrealizedPnlUsd: 0,
+      openPositionCount: 0,
+      positions: [],
+    };
+  }
+  try {
+    const info = new InfoClient({ transport: makeTransport(cfg.testnet) });
+    const state = await info.clearinghouseState({
+      user: address as `0x${string}`,
+    });
+    const positions: LivePositionRow[] = [];
+    for (const row of state.assetPositions ?? []) {
+      const p = row.position;
+      const szi = Number(p?.szi ?? 0);
+      if (!Number.isFinite(szi) || Math.abs(szi) <= 0) continue;
+      const levRaw = p?.leverage as { value?: number } | number | undefined;
+      const leverage =
+        typeof levRaw === "number"
+          ? levRaw
+          : Number(levRaw?.value ?? 1) || 1;
+      positions.push({
+        coin: String(p?.coin ?? "?"),
+        side: szi > 0 ? "long" : "short",
+        size: Math.abs(szi),
+        entryPx: Number(p?.entryPx ?? 0),
+        positionValueUsd: Math.abs(Number(p?.positionValue ?? 0)),
+        unrealizedPnlUsd: Number(p?.unrealizedPnl ?? 0),
+        leverage,
+        marginUsedUsd: Number(p?.marginUsed ?? 0),
+      });
+    }
+    const accountValueUsd = Number(state.marginSummary?.accountValue ?? 0);
+    const totalMarginUsedUsd = Number(
+      state.marginSummary?.totalMarginUsed ?? 0,
+    );
+    const withdrawableUsd = Number(state.withdrawable ?? 0);
+    return {
+      ok: true,
+      testnet: cfg.testnet,
+      address,
+      accountValueUsd,
+      totalMarginUsedUsd,
+      withdrawableUsd,
+      totalUnrealizedPnlUsd: positions.reduce(
+        (s, p) => s + p.unrealizedPnlUsd,
+        0,
+      ),
+      openPositionCount: positions.length,
+      positions,
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      reason: e instanceof Error ? e.message : "clearinghouse HL illisible",
+      testnet: cfg.testnet,
+      address,
+      accountValueUsd: 0,
+      totalMarginUsedUsd: 0,
+      withdrawableUsd: 0,
+      totalUnrealizedPnlUsd: 0,
+      openPositionCount: 0,
+      positions: [],
+    };
+  }
+}
+
+function scaleLiveNotional(
+  requested: number,
+  leverage: number,
+  maxNotionalUsd: number,
+  equityUsd: number,
+): { notionalUsd: number; note?: string; skipReason?: string } {
+  let notional = requested;
+  const notes: string[] = [];
+  if (notional > maxNotionalUsd) {
+    notional = maxNotionalUsd;
+    notes.push(`cap env ${maxNotionalUsd}$`);
+  }
+  if (equityUsd > 0) {
+    const byPower = equityUsd * leverage * 0.55;
+    const byMargin = equityUsd * 0.45 * leverage;
+    const equityCap = Math.min(byPower, byMargin);
+    if (notional > equityCap) {
+      notional = equityCap;
+      notes.push(`equity ${equityUsd.toFixed(0)}$`);
+    }
+  }
+  if (notional < 10) {
+    return {
+      notionalUsd: 0,
+      skipReason: `Notionnel trop faible après caps (${notional.toFixed(2)}$) — augmente la marge ou baisse le paper bankroll Boriaz.`,
+    };
+  }
+  return {
+    notionalUsd: Math.round(notional * 100) / 100,
+    note: notes.length ? `size réduite (${notes.join(" + ")})` : undefined,
+  };
+}
+
 /** Place entry + TP/SL reduce-only for Boriaz. */
 export async function placeBoriazLiveTrade(
   req: LiveTradeRequest,
@@ -208,14 +389,6 @@ export async function placeBoriazLiveTrade(
   if (!(req.entry > 0 && req.tp > 0 && req.sl > 0 && req.notionalUsd > 0)) {
     return { ok: false, reason: "Paramètres entrée/TP/SL/notionnel invalides." };
   }
-  if (req.notionalUsd > cfg.maxNotionalUsd) {
-    return {
-      ok: false,
-      skipped: true,
-      reason: `Notionnel ${req.notionalUsd.toFixed(0)} $ > cap ${cfg.maxNotionalUsd}`,
-    };
-  }
-
   const lev = Math.min(
     Math.max(1, Math.floor(req.leverage || 1)),
     cfg.maxLeverage,
@@ -228,7 +401,10 @@ export async function placeBoriazLiveTrade(
   }
 
   const user = cfg.accountAddress!;
-  const openN = await countOpenPositions(cfg.testnet, user);
+  const portfolio = await fetchLivePortfolio();
+  const openN = portfolio.ok
+    ? portfolio.openPositionCount
+    : await countOpenPositions(cfg.testnet, user);
   if (openN >= cfg.maxOpenPositions) {
     return {
       ok: false,
@@ -237,7 +413,18 @@ export async function placeBoriazLiveTrade(
     };
   }
 
-  const size = formatSz(req.notionalUsd / req.entry, asset.szDecimals);
+  const scaled = scaleLiveNotional(
+    req.notionalUsd,
+    lev,
+    cfg.maxNotionalUsd,
+    portfolio.accountValueUsd,
+  );
+  if (!scaled.notionalUsd) {
+    return { ok: false, skipped: true, reason: scaled.skipReason };
+  }
+  const notionalUsd = scaled.notionalUsd;
+
+  const size = formatSz(notionalUsd / req.entry, asset.szDecimals);
   if (!size || Number(size) <= 0) {
     return { ok: false, reason: "Taille calculée nulle." };
   }
@@ -331,6 +518,7 @@ export async function placeBoriazLiveTrade(
     entryOid: readOid(statuses[0]),
     tpOid: readOid(statuses[1]),
     slOid: readOid(statuses[2]),
+    reason: scaled.note,
     raw: result,
   };
 }
