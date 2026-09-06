@@ -36,5 +36,12 @@ export async function GET() {
       boriazLiveTradeEnabled: Boolean(boriaz?.liveTradeEnabled),
     },
     portfolio,
+    riskPreview: portfolio.ok
+      ? {
+          riskPct: 2,
+          riskUsd: Math.round(portfolio.accountValueUsd * 0.02 * 100) / 100,
+          note: "Live Boriaz = 2% de l’equity HL réelle (paper ignoré).",
+        }
+      : null,
   });
 }
