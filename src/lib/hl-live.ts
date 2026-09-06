@@ -24,13 +24,21 @@ export type LiveTradeRequest = {
   entry: number;
   tp: number;
   sl: number;
-  /** Ignoré pour le sizing live — le live utilise 2% de l’equity HL réelle. */
+  /** Ignoré pour le sizing live — le live suit le % paper sur l’equity HL réelle. */
   notionalUsd?: number;
   leverage: number;
   entryMode: LiveEntryMode;
   paperId?: string;
-  /** Risque live en % du solde HL réel (défaut 2). */
+  /** Risque live en % du solde HL réel (défaut 2) si pas de ratio paper. */
   riskPct?: number;
+  /**
+   * Miroir paper→live : marge paper / bankroll paper.
+   * Appliqué au solde HL réel (même fraction engagée).
+   */
+  paperMarginEur?: number;
+  paperBankrollEur?: number;
+  /** Si true : assouplit caps/seuils — un paper Boriaz doit tenter le live. */
+  mirrorPaper?: boolean;
   /** Portefeuille / bot qui a déclenché l’ordre (Boriaz, Scalp, Défaut…). */
   portfolioId?: string;
   portfolioName?: string;
@@ -454,9 +462,10 @@ export async function fetchLivePortfolio(): Promise<LivePortfolioSnapshot> {
 }
 
 /**
- * Sizing LIVE = 2% du solde HL réel (pas le paper).
- * Le capital paper Lab n’entre pas dans ce calcul.
- * HL_MAX_NOTIONAL_USD = plafond de sécurité optionnel (pas la taille du trade).
+ * Sizing LIVE sur le solde HL réel.
+ * - Mode miroir paper : même % de marge que le paper (marge/bankroll) sur l’equity réelle.
+ * - Sinon : riskPct % de l’equity (défaut 2%).
+ * Seuils assouplis en mirrorPaper pour coller au paper même sur petit solde.
  */
 export function sizeLiveFromRealEquity(input: {
   equityUsd: number;
@@ -466,6 +475,9 @@ export function sizeLiveFromRealEquity(input: {
   maxLeverage: number;
   maxNotionalUsd: number;
   riskPct?: number;
+  paperMarginEur?: number;
+  paperBankrollEur?: number;
+  mirrorPaper?: boolean;
 }): {
   ok: boolean;
   reason?: string;
@@ -477,12 +489,18 @@ export function sizeLiveFromRealEquity(input: {
   marginUsd: number;
   note?: string;
 } {
+  const mirror = Boolean(input.mirrorPaper);
+  const minEquity = mirror ? 5 : 20;
+  const minNotional = mirror ? 1 : 8;
+  const minMargin = mirror ? 0.5 : 2;
+  const freeFrac = mirror ? 0.85 : 0.45;
+
   const riskPct = input.riskPct && input.riskPct > 0 ? input.riskPct : 2;
   const equityUsd = Math.max(0, input.equityUsd);
-  if (!(equityUsd >= 20)) {
+  if (!(equityUsd >= minEquity)) {
     return {
       ok: false,
-      reason: `Equity HL trop faible (${equityUsd.toFixed(2)}$) — minimum ~20$ pour sizer à 2%.`,
+      reason: `Equity HL trop faible (${equityUsd.toFixed(2)}$) — minimum ~${minEquity}$.`,
       equityUsd,
       riskPct,
       riskUsd: 0,
@@ -504,45 +522,72 @@ export function sizeLiveFromRealEquity(input: {
     };
   }
 
-  const riskUsd = equityUsd * (riskPct / 100);
-  const slDist = Math.abs(input.entry - input.sl) / input.entry;
-  const dist = Math.max(0.0015, slDist); // min 0.15% pour éviter notionnel absurde
-  let notional = riskUsd / dist;
-  const notes: string[] = [
-    `2% de ${equityUsd.toFixed(2)}$ = ${riskUsd.toFixed(2)}$ risqués`,
-  ];
+  const notes: string[] = [];
+  let leverage = Math.min(input.maxLeverage, Math.max(1, input.maxLeverage));
+  let notional = 0;
+  let riskUsd = equityUsd * (riskPct / 100);
+  let effectiveRiskPct = riskPct;
 
-  let leverage = Math.min(
-    input.maxLeverage,
-    Math.max(1, Math.ceil(notional / (equityUsd * 0.25))),
-  );
-  leverage = Math.min(input.maxLeverage, Math.max(1, leverage));
+  const paperMargin = Number(input.paperMarginEur);
+  const paperBankroll = Number(input.paperBankrollEur);
+  if (
+    mirror &&
+    Number.isFinite(paperMargin) &&
+    paperMargin > 0 &&
+    Number.isFinite(paperBankroll) &&
+    paperBankroll > 0
+  ) {
+    // Même fraction de capital engagée en marge que le paper
+    const marginFrac = Math.min(0.5, Math.max(0.002, paperMargin / paperBankroll));
+    let marginUsd = equityUsd * marginFrac;
+    leverage = Math.min(
+      input.maxLeverage,
+      Math.max(1, Math.floor(input.maxLeverage) || 1),
+    );
+    notional = marginUsd * leverage;
+    riskUsd = marginUsd; // marge engagée (proxy)
+    effectiveRiskPct = marginFrac * 100;
+    notes.push(
+      `miroir paper ${(marginFrac * 100).toFixed(2)}% marge · ${marginUsd.toFixed(2)}$ sur ${equityUsd.toFixed(2)}$ HL`,
+    );
+  } else {
+    const slDist = Math.abs(input.entry - input.sl) / input.entry;
+    const dist = Math.max(0.0015, slDist);
+    notional = riskUsd / dist;
+    notes.push(
+      `${riskPct}% de ${equityUsd.toFixed(2)}$ = ${riskUsd.toFixed(2)}$ risqués`,
+    );
+    leverage = Math.min(
+      input.maxLeverage,
+      Math.max(1, Math.ceil(notional / (equityUsd * 0.25))),
+    );
+    leverage = Math.min(input.maxLeverage, Math.max(1, leverage));
+  }
 
-  // Plafond sécurité env (optionnel) — ne définit PAS le risque 2%
+  // Plafond sécurité env (optionnel)
   if (notional > input.maxNotionalUsd) {
     notional = input.maxNotionalUsd;
     notes.push(`plafond HL_MAX_NOTIONAL_USD ${input.maxNotionalUsd}$`);
   }
 
-  // Ne pas consommer toute la marge disponible
   const free =
     input.freeCollateralUsd != null && input.freeCollateralUsd > 0
       ? input.freeCollateralUsd
       : equityUsd;
-  const marginCap = free * 0.45;
+  const marginCap = free * freeFrac;
   const notionalCap = marginCap * leverage;
   if (notional > notionalCap) {
     notional = notionalCap;
     notes.push(`marge libre ${free.toFixed(0)}$`);
   }
 
-  const marginUsd = notional / leverage;
-  if (notional < 8 || marginUsd < 2) {
+  const marginUsd = notional / Math.max(1, leverage);
+  if (notional < minNotional || marginUsd < minMargin) {
     return {
       ok: false,
       reason: `Taille live trop petite (notionnel ${notional.toFixed(2)}$, marge ${marginUsd.toFixed(2)}$).`,
       equityUsd,
-      riskPct,
+      riskPct: effectiveRiskPct,
       riskUsd,
       notionalUsd: 0,
       leverage,
@@ -553,7 +598,7 @@ export function sizeLiveFromRealEquity(input: {
   return {
     ok: true,
     equityUsd,
-    riskPct,
+    riskPct: effectiveRiskPct,
     riskUsd: Math.round(riskUsd * 100) / 100,
     notionalUsd: Math.round(notional * 100) / 100,
     leverage,
@@ -587,6 +632,7 @@ export async function placeBoriazLiveTrade(
   }
 
   const user = cfg.accountAddress!;
+  const mirror = Boolean(req.mirrorPaper);
   const portfolio = await fetchLivePortfolio();
   if (!portfolio.ok || !(portfolio.accountValueUsd > 0)) {
     return {
@@ -594,21 +640,25 @@ export async function placeBoriazLiveTrade(
       skipped: true,
       reason:
         portfolio.reason ||
-        "Equity HL réelle indisponible — live sizing 2% impossible.",
+        "Equity HL réelle indisponible — live sizing impossible.",
     };
   }
   const openN = portfolio.ok
     ? portfolio.openPositionCount
     : await countOpenPositions(cfg.testnet, user);
-  if (openN >= cfg.maxOpenPositions) {
+  // Miroir paper Boriaz : on tente quand même (cap soft élevé). Sinon cap strict.
+  const softCap = mirror
+    ? Math.max(cfg.maxOpenPositions, 8)
+    : cfg.maxOpenPositions;
+  if (openN >= softCap) {
     return {
       ok: false,
       skipped: true,
-      reason: `Déjà ${openN} positions ≥ cap ${cfg.maxOpenPositions}`,
+      reason: `Déjà ${openN} positions ≥ cap ${softCap}`,
     };
   }
 
-  // LIVE size = 2% du solde HL réel (paper bankroll ignoré)
+  // LIVE size = même % de marge que le paper sur l’equity HL (ou 2% risque)
   const freeCollateral = Math.max(
     0,
     portfolio.accountValueUsd - portfolio.totalMarginUsedUsd,
@@ -621,6 +671,9 @@ export async function placeBoriazLiveTrade(
     maxLeverage: Math.min(lev, cfg.maxLeverage, asset.maxLeverage),
     maxNotionalUsd: cfg.maxNotionalUsd,
     riskPct: req.riskPct ?? 2,
+    paperMarginEur: req.paperMarginEur,
+    paperBankrollEur: req.paperBankrollEur,
+    mirrorPaper: mirror,
   });
   if (!sized.ok) {
     return { ok: false, skipped: true, reason: sized.reason };
@@ -780,3 +833,30 @@ export async function placeBoriazLiveTrade(
     raw: result,
   };
 }
+
+/** Retry soft : un paper Boriaz doit tenter le live même si equity/API lag. */
+export async function placeBoriazLiveTradeMirrored(
+  req: LiveTradeRequest,
+): Promise<LiveTradeResult> {
+  const payload: LiveTradeRequest = { ...req, mirrorPaper: true };
+  let last: LiveTradeResult = {
+    ok: false,
+    skipped: true,
+    reason: "LIVE miroir non tenté",
+  };
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    last = await placeBoriazLiveTrade(payload);
+    if (last.ok) return last;
+    // Échec HL dur (ordre rejeté) → stop ; skip soft → retry
+    if (!last.skipped) return last;
+    console.info(
+      `LIVE Boriaz mirror attempt ${attempt}/3 skipped:`,
+      last.reason,
+    );
+    if (attempt < 3) {
+      await new Promise((r) => setTimeout(r, 1500 * attempt));
+    }
+  }
+  return last;
+}
+

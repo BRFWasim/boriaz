@@ -766,12 +766,14 @@ export function LabPanel() {
                   void savePrefs(next);
                 }}
               />
-              LIVE master (uniquement Défaut + Boriaz → Hyperliquid réel)
+              LIVE master (Défaut toggle) — Boriaz paper → live toujours miroir
             </label>
             <p className="text-[11px] text-muted-foreground sm:col-span-2">
-              Scalp / Risqué / Swing = paper seulement. Le LIVE réel ne passe
-              que par Défaut et Boriaz (toggles ci-dessous). Les cases
-              s’enregistrent automatiquement.
+              Dès qu’un trade paper <strong>Boriaz</strong> s’ouvre, le live HL
+              est tenté automatiquement (même % de marge sur le solde réel),
+              sans dépendre des cases. Kill-switch env{" "}
+              <code className="text-[10px]">HL_LIVE_ENABLED</code> reste
+              obligatoire. Scalp = paper only.
             </p>
           </div>
           {liveStatus ? (

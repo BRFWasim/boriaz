@@ -104,7 +104,7 @@ export const BORIAZ_PORTFOLIO: PortfolioProfile = {
   isDefault: false,
   enabled: true,
   paperTradeEnabled: true,
-  liveTradeEnabled: false,
+  liveTradeEnabled: true,
   bankrollEur: 1000,
   maxLeverage: 3,
   sizePct: 8,

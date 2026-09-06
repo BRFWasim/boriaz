@@ -1253,18 +1253,25 @@ export async function getTradeSignals(options?: {
         justification,
         strategy: "alignment",
       });
-      // LIVE Hyperliquid — si toggle portfolio (ex. Scalp) + master ON
+      // LIVE Hyperliquid — Boriaz paper ⇒ live OBLIGATOIRE (miroir).
+      // Autres portefeuilles (Défaut) : toggles Lab requis.
       if (
         opened &&
-        prefs.liveTradeEnabled &&
-        pf.liveTradeEnabled &&
-        (pf.id === "default" || pf.id === "boriaz") &&
-        !opened.note.includes("Cash insuffisant")
+        !opened.note.includes("Cash insuffisant") &&
+        (pf.id === "boriaz" ||
+          (prefs.liveTradeEnabled &&
+            pf.liveTradeEnabled &&
+            pf.id === "default"))
       ) {
         try {
-          const { placeBoriazLiveTrade } = await import("./hl-live");
+          const { placeBoriazLiveTrade, placeBoriazLiveTradeMirrored } =
+            await import("./hl-live");
           const { loadPaperTrades, savePaperTrades } = await import("./persist");
-          const live = await placeBoriazLiveTrade({
+          const place =
+            pf.id === "boriaz"
+              ? placeBoriazLiveTradeMirrored
+              : placeBoriazLiveTrade;
+          const live = await place({
             coin: chosen.coin,
             side,
             entry: chosen.entry!,
@@ -1278,6 +1285,9 @@ export async function getTradeSignals(options?: {
             portfolioId: pf.id,
             portfolioName: pf.name,
             strategy: "alignment",
+            paperMarginEur: opened.marginEur,
+            paperBankrollEur: pf.bankrollEur,
+            mirrorPaper: pf.id === "boriaz",
           });
           if (live.ok) {
             const bot = live.botLabel || pf.name;
@@ -1463,26 +1473,25 @@ export async function getTradeSignals(options?: {
           riskPct: 2,
         });
 
-        // LIVE Hyperliquid — Boriaz uniquement (kill-switch env + prefs)
+        // LIVE Hyperliquid — OBLIGATOIRE dès qu’un paper Boriaz ouvre
+        // (toggles Lab ignorés ; kill-switch env HL_LIVE_ENABLED reste).
+        // Marge live = même % du solde réel que le paper a engagé.
         if (
           opened &&
-          prefs.liveTradeEnabled &&
-          pf.liveTradeEnabled &&
-          (pf.id === "default" || pf.id === "boriaz") &&
+          pf.id === "boriaz" &&
           !opened.note.includes("Cash insuffisant")
         ) {
           try {
-            const { placeBoriazLiveTrade } = await import("./hl-live");
+            const { placeBoriazLiveTradeMirrored } = await import("./hl-live");
             const { loadPaperTrades, savePaperTrades } = await import("./persist");
-            // Notionnel paper ignoré : le live size à 2% de l’equity HL réelle
-            const live = await placeBoriazLiveTrade({
+            const live = await placeBoriazLiveTradeMirrored({
               coin: setup.coin,
               side: setup.order.side,
               entry: setup.order.entry,
               tp: setup.order.tp2,
               sl: setup.order.sl,
               leverage: setup.risk.leverage,
-              riskPct: 2,
+              riskPct: pf.riskPct ?? 2,
               entryMode:
                 setup.order.entryMode === "limit_wait"
                   ? "limit_wait"
@@ -1491,6 +1500,9 @@ export async function getTradeSignals(options?: {
               portfolioId: pf.id,
               portfolioName: pf.name,
               strategy: "smc",
+              paperMarginEur: opened.marginEur,
+              paperBankrollEur: pf.bankrollEur,
+              mirrorPaper: true,
             });
             if (live.ok) {
               const bot = live.botLabel || "Boriaz";
@@ -1537,6 +1549,11 @@ export async function getTradeSignals(options?: {
               }
             } else {
               console.info("LIVE Boriaz skipped", live.reason);
+              if (notify && !hush) {
+                await sendTelegramMessage(
+                  `LIVE BORIAZ SKIP · ${setup.coin}: ${live.reason || "skip"} — paper ouvert, live non placé (env/solde).`,
+                );
+              }
             }
           } catch (e) {
             console.error("LIVE Boriaz exception", e);
