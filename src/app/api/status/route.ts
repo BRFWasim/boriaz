@@ -31,6 +31,7 @@ export async function GET() {
       process.env.HL_LIVE_ENABLED?.trim().toLowerCase() === "true",
     HL_AGENT_PRIVATE_KEY: Boolean(process.env.HL_AGENT_PRIVATE_KEY?.trim()),
     HL_ACCOUNT_ADDRESS: Boolean(process.env.HL_ACCOUNT_ADDRESS?.trim()),
+    SITE_PASSWORD: Boolean(process.env.SITE_PASSWORD?.trim()),
   };
   const missing = Object.entries(keys)
     .filter(([, ok]) => !ok)
@@ -53,6 +54,8 @@ export async function GET() {
         "Upstash = un petit tiroir en ligne pour le paper 1000 €. Sans ça, Vercel jette le tiroir à chaque redémarrage (/tmp). Gratuit : Redis → REST URL + TOKEN.",
       live:
         "LIVE Boriaz : HL_LIVE_ENABLED + HL_AGENT_PRIVATE_KEY (agent) + HL_ACCOUNT_ADDRESS (MASTER avec USDC) + toggles Lab. Caps HL_MAX_*.",
+      siteGate:
+        "SITE_PASSWORD = mot de passe pour ouvrir l’UI. Le cron /api/cron (CRON_SECRET) tourne en fond sans cookie — le bot n’est pas bloqué.",
     },
   });
 }

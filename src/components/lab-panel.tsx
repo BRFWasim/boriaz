@@ -40,7 +40,7 @@ export function LabPanel() {
     storage: string;
     vercelEnvUrl: string;
     upstashUrl: string;
-    howto: { where: string; upstash: string };
+    howto: { where: string; upstash: string; live?: string; siteGate?: string };
   } | null>(null);
   const [tg, setTg] = useState<{
     linked: boolean;
@@ -562,6 +562,21 @@ export function LabPanel() {
           <p className="mt-2 text-xs text-muted-foreground">
             Stockage actuel : {status.storage === "upstash" ? "Upstash (persistant)" : "/tmp (éphémère)"}
           </p>
+          <p className="mt-2 text-xs text-muted-foreground">
+            {status.howto.siteGate ??
+              "SITE_PASSWORD protège l’UI ; le cron/bot continue en fond."}
+          </p>
+          <button
+            type="button"
+            className="mt-2 text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+            onClick={() => {
+              void fetch("/api/site-auth", { method: "DELETE" }).then(() => {
+                window.location.href = "/login";
+              });
+            }}
+          >
+            Verrouiller l’accès (logout portail)
+          </button>
         </section>
       ) : null}
 
