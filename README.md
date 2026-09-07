@@ -31,7 +31,7 @@ Ouvrir [http://127.0.0.1:4317](http://127.0.0.1:4317).
 - **Tracking wallets** — bouton Suivre + auto-follow qualité + alertes TG
 - **Watchlist multi-TF** — BTC ETH SOL UNI AVAX LINK DOGE SUI RENDER ONDO HYPE TAO
 - **Upstash KV** — paper + carnet + wallets suivis persistants
-- **Cron ~1 min** — via cron-job.org (et Vercel Cron `* * * * *` si plan Pro)
+- **Cron ~1–5 min** — via **cron-job.org** (Hobby Vercel = 1×/jour natif max)
 
 ## Clés Vercel
 
