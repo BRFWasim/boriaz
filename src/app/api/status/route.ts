@@ -55,7 +55,7 @@ export async function GET() {
       live:
         "LIVE Boriaz : HL_LIVE_ENABLED + HL_AGENT_PRIVATE_KEY (agent) + HL_ACCOUNT_ADDRESS (MASTER avec USDC) + toggles Lab. Caps HL_MAX_*.",
       siteGate:
-        "SITE_PASSWORD = mot de passe pour ouvrir l’UI. Le cron /api/cron (CRON_SECRET) tourne en fond sans cookie — le bot n’est pas bloqué.",
+        "SITE_PASSWORD = mot de passe UI. /api/cron (CRON_SECRET) répond en <2s puis travaille en fond — OK timeout cron-job.org 30s.",
     },
   });
 }

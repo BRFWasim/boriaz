@@ -41,7 +41,7 @@ export async function GET() {
         "Sur app.hyperliquid.xyz → API → créer un Agent Wallet, coller UNIQUEMENT sa private key (pas la seed master).",
       arm:
         "Mettre HL_LIVE_ENABLED=true + caps HL_MAX_* puis activer les 2 toggles Lab (global + Boriaz).",
-      cron: "Le cron /api/cron (~1 min) lance getTradeSignals → SMC Boriaz → éventuel ordre live.",
+      cron: "cron-job.org → /api/cron (ACK <2s, travail en fond). Manage trades d’abord, puis signaux/live.",
     },
   });
 }
