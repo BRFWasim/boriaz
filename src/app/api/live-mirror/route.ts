@@ -4,13 +4,39 @@ import { parseNum } from "@/lib/format";
 import {
   loadPaperTrades,
   loadPrefs,
+  persistUserId,
   savePaperTrades,
+  setPersistUser,
+  type PaperTrade,
 } from "@/lib/persist";
 import { isLiveEnvReady } from "@/lib/hl-live";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 export const maxDuration = 60;
+
+async function findPaperForMirror(paperId: string): Promise<{
+  trade: PaperTrade;
+  trades: PaperTrade[];
+  scope: string;
+} | null> {
+  const scope = persistUserId();
+  const trades = await loadPaperTrades();
+  const local = trades.find((x) => x.id === paperId);
+  if (local) return { trade: local, trades, scope };
+
+  // Bot cron écrit souvent sous le scope « default » — on cherche aussi là.
+  if (scope === "default") return null;
+  try {
+    setPersistUser("default");
+    const defTrades = await loadPaperTrades();
+    const t = defTrades.find((x) => x.id === paperId);
+    if (t) return { trade: t, trades: defTrades, scope: "default" };
+  } finally {
+    setPersistUser(scope);
+  }
+  return null;
+}
 
 /**
  * Copie manuelle d’un paper Boriaz → LIVE HL au prix marché actuel.
@@ -34,11 +60,11 @@ export async function POST(request: Request) {
     }
 
     const prefs = await loadPrefs();
-    const trades = await loadPaperTrades();
-    const t = trades.find((x) => x.id === paperId);
-    if (!t) {
+    const found = await findPaperForMirror(paperId);
+    if (!found) {
       return Response.json({ error: "Paper introuvable" }, { status: 404 });
     }
+    const { trade: t, trades, scope: paperScope } = found;
     if (t.portfolioId !== "boriaz" && t.strategy !== "smc") {
       return Response.json(
         { error: "Copie LIVE réservée aux paper Boriaz / SMC" },
@@ -62,7 +88,12 @@ export async function POST(request: Request) {
       string,
       string
     >;
-    const mid = parseNum(mids[t.coin] ?? mids[t.coin.toUpperCase()] ?? "0");
+    const mid = parseNum(
+      mids[t.coin] ??
+        mids[t.coin.toUpperCase()] ??
+        mids[t.coin.toLowerCase()] ??
+        "0",
+    );
     if (!(mid > 0)) {
       return Response.json(
         { error: `Prix marché ${t.coin} indisponible` },
@@ -70,11 +101,12 @@ export async function POST(request: Request) {
       );
     }
 
-    // Setup encore possible au mid actuel ?
+    // Fenêtre SL/TP encore valide au mid (epsilon relatif pour float HL)
+    const eps = Math.max(mid * 1e-6, 1e-8);
     const stillOk =
       t.side === "long"
-        ? mid > t.sl && mid < t.tp
-        : mid < t.sl && mid > t.tp;
+        ? mid > t.sl + eps && mid < t.tp - eps
+        : mid < t.sl - eps && mid > t.tp + eps;
     if (!stillOk) {
       return Response.json(
         {
@@ -129,7 +161,25 @@ export async function POST(request: Request) {
         : "";
     t.note = `${t.note || "SMC"} · LIVE HL manuel @ mid ${mid} [${bot}] size=${live.size} entryOid=${live.entryOid ?? "?"}${tpTxt}${slTxt}`;
     t.markPx = mid;
-    await savePaperTrades(trades);
+
+    const userScope = persistUserId();
+    try {
+      setPersistUser(paperScope);
+      await savePaperTrades(trades);
+    } finally {
+      setPersistUser(userScope);
+    }
+
+    // Propage la note sur le paper du user courant si l’id existe aussi chez lui.
+    if (paperScope !== userScope) {
+      const userTrades = await loadPaperTrades();
+      const ut = userTrades.find((x) => x.id === paperId);
+      if (ut) {
+        ut.note = t.note;
+        ut.markPx = mid;
+        await savePaperTrades(userTrades);
+      }
+    }
 
     return Response.json({
       ok: true,
@@ -147,6 +197,7 @@ export async function POST(request: Request) {
       trade: t,
     });
   } catch (e) {
+    console.error("live-mirror POST", e);
     return Response.json(
       { error: e instanceof Error ? e.message : "Erreur copie LIVE" },
       { status: 500 },

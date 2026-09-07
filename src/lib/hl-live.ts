@@ -13,6 +13,7 @@ import {
   HttpTransport,
   InfoClient,
 } from "@nktkas/hyperliquid";
+import { formatPrice, formatSize } from "@nktkas/hyperliquid/utils";
 import { privateKeyToAccount } from "viem/accounts";
 
 export type LiveSide = "long" | "short";
@@ -207,23 +208,51 @@ export function isLiveEnvReady(): { ok: boolean; reason?: string } {
   return { ok: true };
 }
 
-function formatPx(value: number): string {
+/**
+ * Prix HL valides : ≤5 sig figs + ≤ (6 - szDecimals) décimales (perps).
+ * L’ancien arrondi « 1 décimale si ≥1000 » cassait BTC (tick = 1$).
+ */
+function formatPx(value: number, szDecimals: number): string {
   if (!Number.isFinite(value) || value <= 0) return "0";
-  const decimals = value >= 1000 ? 1 : value >= 100 ? 2 : value >= 1 ? 3 : 5;
-  const f = 10 ** decimals;
-  return String(Math.round(value * f) / f);
+  try {
+    return formatPrice(value, szDecimals, "perp");
+  } catch {
+    // Secours : prix >100k → entier (toujours accepté par HL)
+    if (value > 100_000) return String(Math.round(value));
+    const maxDec = Math.max(0, 6 - szDecimals);
+    const f = 10 ** maxDec;
+    const n = Math.round(value * f) / f;
+    return n > 0 ? String(n) : "0";
+  }
 }
 
 function formatSz(value: number, szDecimals: number): string {
   if (!Number.isFinite(value) || value <= 0) return "0";
-  const f = 10 ** Math.max(0, szDecimals);
-  const rounded = Math.floor(value * f + 1e-12) / f;
-  return rounded <= 0 ? "0" : String(rounded);
+  try {
+    return formatSize(value, szDecimals);
+  } catch {
+    const f = 10 ** Math.max(0, szDecimals);
+    const rounded = Math.floor(value * f + 1e-12) / f;
+    return rounded <= 0 ? "0" : String(rounded);
+  }
 }
 
-function aggressivePx(side: LiveSide, mid: number, entry: number): string {
+function aggressivePx(
+  side: LiveSide,
+  mid: number,
+  entry: number,
+  szDecimals: number,
+): string {
   const base = mid > 0 ? mid : entry;
-  return formatPx(side === "long" ? base * 1.0015 : base * 0.9985);
+  return formatPx(
+    side === "long" ? base * 1.0015 : base * 0.9985,
+    szDecimals,
+  );
+}
+
+function hlErrMessage(e: unknown): string {
+  if (e instanceof Error && e.message) return e.message;
+  return String(e || "Erreur Hyperliquid");
 }
 
 async function loadAssetMap(testnet: boolean): Promise<Map<string, AssetMeta>> {
@@ -696,18 +725,26 @@ export async function placeBoriazLiveTrade(
 
   const entryPx =
     req.entryMode === "market_now"
-      ? aggressivePx(req.side, mid, req.entry)
-      : formatPx(req.entry);
-  const tpPx = formatPx(req.tp);
-  const slPx = formatPx(req.sl);
+      ? aggressivePx(req.side, mid, req.entry, asset.szDecimals)
+      : formatPx(req.entry, asset.szDecimals);
+  const tpPx = formatPx(req.tp, asset.szDecimals);
+  const slPx = formatPx(req.sl, asset.szDecimals);
 
   const client = getExchangeClient(cfg.testnet);
 
-  await client.updateLeverage({
-    asset: asset.id,
-    isCross: true,
-    leverage: Math.min(liveLev, asset.maxLeverage),
-  });
+  try {
+    await client.updateLeverage({
+      asset: asset.id,
+      isCross: true,
+      leverage: Math.min(liveLev, asset.maxLeverage),
+    });
+  } catch (e) {
+    return {
+      ok: false,
+      skipped: /429|Too Many|timeout/i.test(hlErrMessage(e)),
+      reason: `Levier HL: ${hlErrMessage(e)}`,
+    };
+  }
 
   const sizeNum = Number(size);
   const useSmcSplit =
@@ -717,178 +754,193 @@ export async function placeBoriazLiveTrade(
     Math.abs(Number(req.tp1) - req.tp) > 1e-12;
 
   const halfSz = formatSz(sizeNum / 2, asset.szDecimals);
-  const tp1Px = useSmcSplit ? formatPx(Number(req.tp1)) : tpPx;
-  const tp2Px = useSmcSplit ? formatPx(req.tp2 ?? req.tp) : tpPx;
+  const tp1Px = useSmcSplit
+    ? formatPx(Number(req.tp1), asset.szDecimals)
+    : tpPx;
+  const tp2Px = useSmcSplit
+    ? formatPx(req.tp2 ?? req.tp, asset.szDecimals)
+    : tpPx;
 
   let result: Awaited<ReturnType<typeof client.order>>;
   let entryOid: number | null = null;
   let tpOid: number | null = null;
   let slOid: number | null = null;
-  let tp1Oid: number | null = null;
 
-  if (useSmcSplit && halfSz && Number(halfSz) > 0) {
-    // Comme paper : entrée pleine, TP1 50%, TP2 50%, SL 100%.
-    const entryRes = await client.order({
-      orders: [
-        {
-          a: asset.id,
-          b: isBuy,
-          p: entryPx,
-          s: size,
-          r: false,
-          t: {
-            limit: {
-              tif: req.entryMode === "market_now" ? "FrontendMarket" : "Gtc",
+  try {
+    if (useSmcSplit && halfSz && Number(halfSz) > 0) {
+      // Comme paper : entrée pleine, TP1 50%, TP2 50%, SL 100%.
+      const entryRes = await client.order({
+        orders: [
+          {
+            a: asset.id,
+            b: isBuy,
+            p: entryPx,
+            s: size,
+            r: false,
+            t: {
+              limit: {
+                tif: req.entryMode === "market_now" ? "FrontendMarket" : "Gtc",
+              },
             },
           },
-        },
-      ],
-      grouping: "na",
-    });
-    const entryStatuses = entryRes.response?.data?.statuses ?? [];
-    const entryErr = entryStatuses.find(
-      (s) => s && typeof s === "object" && "error" in s,
-    ) as { error?: string } | undefined;
-    if (entryErr?.error) {
-      return {
-        ok: false,
-        reason: entryErr.error,
-        coin: asset.name,
-        assetId: asset.id,
-        size,
-        raw: entryRes,
-      };
-    }
-    entryOid = readOid(entryStatuses[0]);
+        ],
+        grouping: "na",
+      });
+      const entryStatuses = entryRes.response?.data?.statuses ?? [];
+      const entryErr = entryStatuses.find(
+        (s) => s && typeof s === "object" && "error" in s,
+      ) as { error?: string } | undefined;
+      if (entryErr?.error) {
+        return {
+          ok: false,
+          reason: entryErr.error,
+          coin: asset.name,
+          assetId: asset.id,
+          size,
+          raw: entryRes,
+        };
+      }
+      entryOid = readOid(entryStatuses[0]);
 
-    result = await client.order({
-      orders: [
-        {
-          a: asset.id,
-          b: !isBuy,
-          p: tp1Px,
-          s: halfSz,
-          r: true,
-          t: {
-            trigger: {
-              isMarket: true,
-              triggerPx: tp1Px,
-              tpsl: "tp",
+      result = await client.order({
+        orders: [
+          {
+            a: asset.id,
+            b: !isBuy,
+            p: tp1Px,
+            s: halfSz,
+            r: true,
+            t: {
+              trigger: {
+                isMarket: true,
+                triggerPx: tp1Px,
+                tpsl: "tp",
+              },
             },
           },
-        },
-        {
-          a: asset.id,
-          b: !isBuy,
-          p: tp2Px,
-          s: halfSz,
-          r: true,
-          t: {
-            trigger: {
-              isMarket: true,
-              triggerPx: tp2Px,
-              tpsl: "tp",
+          {
+            a: asset.id,
+            b: !isBuy,
+            p: tp2Px,
+            s: halfSz,
+            r: true,
+            t: {
+              trigger: {
+                isMarket: true,
+                triggerPx: tp2Px,
+                tpsl: "tp",
+              },
             },
           },
-        },
-        {
-          a: asset.id,
-          b: !isBuy,
-          p: slPx,
-          s: size,
-          r: true,
-          t: {
-            trigger: {
-              isMarket: true,
-              triggerPx: slPx,
-              tpsl: "sl",
+          {
+            a: asset.id,
+            b: !isBuy,
+            p: slPx,
+            s: size,
+            r: true,
+            t: {
+              trigger: {
+                isMarket: true,
+                triggerPx: slPx,
+                tpsl: "sl",
+              },
             },
           },
-        },
-      ],
-      grouping: "na",
-    });
-    const statuses = result.response?.data?.statuses ?? [];
-    const err = statuses.find(
-      (s) => s && typeof s === "object" && "error" in s,
-    ) as { error?: string } | undefined;
-    if (err?.error) {
-      return {
-        ok: false,
-        reason: err.error,
-        coin: asset.name,
-        assetId: asset.id,
-        size,
-        entryOid,
-        raw: result,
-      };
+        ],
+        grouping: "na",
+      });
+      const statuses = result.response?.data?.statuses ?? [];
+      const err = statuses.find(
+        (s) => s && typeof s === "object" && "error" in s,
+      ) as { error?: string } | undefined;
+      if (err?.error) {
+        return {
+          ok: false,
+          reason: err.error,
+          coin: asset.name,
+          assetId: asset.id,
+          size,
+          entryOid,
+          raw: result,
+        };
+      }
+      tpOid = readOid(statuses[1]);
+      slOid = readOid(statuses[2]);
+    } else {
+      result = await client.order({
+        orders: [
+          {
+            a: asset.id,
+            b: isBuy,
+            p: entryPx,
+            s: size,
+            r: false,
+            t: {
+              limit: {
+                tif: req.entryMode === "market_now" ? "FrontendMarket" : "Gtc",
+              },
+            },
+          },
+          {
+            a: asset.id,
+            b: !isBuy,
+            p: tpPx,
+            s: size,
+            r: true,
+            t: {
+              trigger: {
+                isMarket: true,
+                triggerPx: tpPx,
+                tpsl: "tp",
+              },
+            },
+          },
+          {
+            a: asset.id,
+            b: !isBuy,
+            p: slPx,
+            s: size,
+            r: true,
+            t: {
+              trigger: {
+                isMarket: true,
+                triggerPx: slPx,
+                tpsl: "sl",
+              },
+            },
+          },
+        ],
+        grouping: "normalTpsl",
+      });
+      const statuses = result.response?.data?.statuses ?? [];
+      const err = statuses.find(
+        (s) => s && typeof s === "object" && "error" in s,
+      ) as { error?: string } | undefined;
+      if (err?.error) {
+        return {
+          ok: false,
+          reason: err.error,
+          coin: asset.name,
+          assetId: asset.id,
+          size,
+          raw: result,
+        };
+      }
+      entryOid = readOid(statuses[0]);
+      tpOid = readOid(statuses[1]);
+      slOid = readOid(statuses[2]);
     }
-    tp1Oid = readOid(statuses[0]);
-    tpOid = readOid(statuses[1]);
-    slOid = readOid(statuses[2]);
-  } else {
-    result = await client.order({
-      orders: [
-        {
-          a: asset.id,
-          b: isBuy,
-          p: entryPx,
-          s: size,
-          r: false,
-          t: {
-            limit: {
-              tif: req.entryMode === "market_now" ? "FrontendMarket" : "Gtc",
-            },
-          },
-        },
-        {
-          a: asset.id,
-          b: !isBuy,
-          p: tpPx,
-          s: size,
-          r: true,
-          t: {
-            trigger: {
-              isMarket: true,
-              triggerPx: tpPx,
-              tpsl: "tp",
-            },
-          },
-        },
-        {
-          a: asset.id,
-          b: !isBuy,
-          p: slPx,
-          s: size,
-          r: true,
-          t: {
-            trigger: {
-              isMarket: true,
-              triggerPx: slPx,
-              tpsl: "sl",
-            },
-          },
-        },
-      ],
-      grouping: "normalTpsl",
-    });
-    const statuses = result.response?.data?.statuses ?? [];
-    const err = statuses.find(
-      (s) => s && typeof s === "object" && "error" in s,
-    ) as { error?: string } | undefined;
-    if (err?.error) {
-      return {
-        ok: false,
-        reason: err.error,
-        coin: asset.name,
-        assetId: asset.id,
-        size,
-        raw: result,
-      };
-    }
-    entryOid = readOid(statuses[0]);
-    tpOid = readOid(statuses[1]);
-    slOid = readOid(statuses[2]);
+  } catch (e) {
+    const msg = hlErrMessage(e);
+    const soft = /429|Too Many|timeout|timed out/i.test(msg);
+    return {
+      ok: false,
+      skipped: soft,
+      reason: msg,
+      coin: asset.name,
+      assetId: asset.id,
+      size,
+    };
   }
 
   // Labels / Si TP-SL toujours calculés (même si journal échoue)
@@ -1042,6 +1094,7 @@ export async function manageLiveSmcPositions(): Promise<{
             entry.side === "long" ? "short" : "long",
             px,
             px,
+            asset.szDecimals,
           );
           await client.order({
             orders: [
@@ -1071,8 +1124,8 @@ export async function manageLiveSmcPositions(): Promise<{
         continue;
       }
 
-      const bePx = formatPx(entry.entry);
-      const tp2Px = formatPx(Number(entry.tp2 ?? entry.tp));
+      const bePx = formatPx(entry.entry, asset.szDecimals);
+      const tp2Px = formatPx(Number(entry.tp2 ?? entry.tp), asset.szDecimals);
       const isBuy = entry.side === "long";
       const tpsl = await client.order({
         orders: [

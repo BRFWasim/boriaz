@@ -37,6 +37,7 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
   const [paperLive, setPaperLive] = useState<PaperTrade[]>([]);
   const [user, setUser] = useState<SessionUser | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [liveAt, setLiveAt] = useState<number | null>(null);
   const [lsPortfolios, setLsPortfolios] = useState<PortfolioProfile[]>([]);
@@ -77,6 +78,7 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
   }
 
   async function mirrorTradeToLive(id: string) {
+    setActionMsg("Copie paper → LIVE au marché…");
     try {
       const res = await fetch("/api/live-mirror", {
         method: "POST",
@@ -86,15 +88,21 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
       const json = await readResponseJson<{
         error?: string;
         ok?: boolean;
+        mid?: number;
+        live?: { size?: string; entryOid?: number | null; botLabel?: string };
         trade?: PaperTrade;
       }>(res);
       if (res.ok && json.ok && json.trade) {
         mergePaper([json.trade]);
+        setActionMsg(
+          `LIVE HL ✓ @ mid ${json.mid} · size ${json.live?.size ?? "?"} · oid ${json.live?.entryOid ?? "—"}`,
+        );
       } else {
-        setError(json.error || "Copie LIVE échouée");
+        const err = json.error || "Copie LIVE échouée";
+        setActionMsg(err);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Copie LIVE impossible");
+      setActionMsg(e instanceof Error ? e.message : "Copie LIVE impossible");
     }
   }
 
@@ -284,6 +292,29 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
 
   return (
     <div className="space-y-6">
+      {actionMsg ? (
+        <div
+          className={`rounded-xl border px-3 py-2 text-sm ${
+            /LIVE HL ✓/i.test(actionMsg)
+              ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-100"
+              : /Copie paper/i.test(actionMsg)
+                ? "border-amber-400/30 bg-amber-400/10 text-amber-100"
+                : "border-destructive/40 bg-destructive/10 text-destructive"
+          }`}
+        >
+          <div className="flex items-start justify-between gap-2">
+            <p className="text-xs sm:text-sm">{actionMsg}</p>
+            <button
+              type="button"
+              className="shrink-0 text-[11px] opacity-70 hover:opacity-100"
+              onClick={() => setActionMsg(null)}
+            >
+              Fermer
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       {data.warning || data.degraded || data.signalsPending ? (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-sm text-amber-100">
           <div>
