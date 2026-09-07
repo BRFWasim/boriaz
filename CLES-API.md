@@ -24,7 +24,7 @@ Sans ça, le compte simu peut revenir à 1000 € après un cold start (le navig
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN` | Oui pour TG | Bot @BoriazBot |
 | `TELEGRAM_CHAT_ID` | Oui pour TG | Ton chat (ex. déjà 846787235) |
-| `CRON_SECRET` | Oui pour cron 15 min | Même secret que dans l’URL cron |
+| `CRON_SECRET` | Oui pour cron ~1 min | Même secret que dans l’URL cron |
 | `OPENAI_API_KEY` | Fortement | IA toutes cryptos |
 | `ANTHROPIC_API_KEY` | Fortement | IA Claude (batch watchlist) |
 | `NANSEN_API_KEY` | Utile | Smart money / Alignement |
@@ -35,6 +35,6 @@ Sans ça, le compte simu peut revenir à 1000 € après un cold start (le navig
 
 `OPENAI_MODEL` / `ANTHROPIC_MODEL` = configuration (pas secret).
 
-## Cron 15 min
+## Cron ~1 min
 
-GET `https://boriazbot-v4.vercel.app/api/cron?secret=TON_CRON_SECRET` toutes les 15 min (cron-job.org).
+GET `https://boriazbot-v4.vercel.app/api/cron?secret=TON_CRON_SECRET` toutes les **1–2 minutes** (cron-job.org). Sur Vercel Pro, `vercel.json` lance aussi `/api/cron` chaque minute.

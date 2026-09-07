@@ -448,7 +448,7 @@ export function WhalesDashboard() {
           <p className="rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-xs text-primary">
             {followed.size} wallet{followed.size > 1 ? "s" : ""} suivi
             {followed.size > 1 ? "s" : ""} — alertes TG à chaque ouverture /
-            fermeture (cron 15 min + auto-follow wallets qualité).
+            fermeture (cron ~1 min + auto-follow wallets qualité).
           </p>
         ) : null}
 

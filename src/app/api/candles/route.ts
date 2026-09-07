@@ -17,7 +17,7 @@ type CacheEntry = {
 };
 
 const cache = new Map<string, CacheEntry>();
-const CACHE_TTL_MS = 45_000;
+const CACHE_TTL_MS = 20_000;
 
 export async function GET(request: Request) {
   try {

@@ -58,7 +58,7 @@ const LOOKBACK: Record<CandleInterval, number> = {
 };
 
 /** Cache mémoire court — évite de re-frapper HL à chaque onglet / force AI. */
-const CANDLE_CACHE_TTL_MS = 90_000;
+const CANDLE_CACHE_TTL_MS = 25_000;
 const candleCache = new Map<
   string,
   { at: number; candles: Candle[] }

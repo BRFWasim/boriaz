@@ -11,7 +11,7 @@ import { WATCHLIST } from "./price-watch";
 
 const CLAUDE_MODEL = "claude-haiku-4-5-20251001";
 
-const SCAN_CACHE_TTL = 4 * 60_000;
+const SCAN_CACHE_TTL = 30_000;
 let scanCache: { key: string; at: number; value: SmcScanResult } | null = null;
 
 export interface SmcScanResult {

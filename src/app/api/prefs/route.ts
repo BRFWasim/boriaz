@@ -50,7 +50,7 @@ function sanitizePortfolio(raw: Record<string, unknown>): PortfolioProfile | nul
     minRR: Math.min(10, Math.max(0.5, Number(raw.minRR) || 1.5)),
     targetEur: Math.max(10, Number(raw.targetEur) || 200),
     maxLossEur: Math.max(10, Number(raw.maxLossEur) || 150),
-    tradesPerDay: Math.min(50, Math.max(0, Math.floor(Number(raw.tradesPerDay) || 5))),
+    tradesPerDay: 0,
     timeframe,
     riskLevel: Math.min(5, Math.max(1, Math.floor(Number(raw.riskLevel) || 2))),
     requireAiGate: Boolean(raw.requireAiGate ?? true),

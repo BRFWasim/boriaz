@@ -132,7 +132,7 @@ export const DEFAULT_PORTFOLIO: PortfolioProfile = {
   minRR: 1.5,
   targetEur: 200,
   maxLossEur: 150,
-  tradesPerDay: 5,
+  tradesPerDay: 0,
   timeframe: "4h",
   riskLevel: 2,
   requireAiGate: true,
@@ -155,7 +155,7 @@ export const BORIAZ_PORTFOLIO: PortfolioProfile = {
   minRR: 2,
   targetEur: 300,
   maxLossEur: 100,
-  tradesPerDay: 4,
+  tradesPerDay: 0,
   timeframe: "15m",
   riskLevel: 2,
   requireAiGate: false,
@@ -177,6 +177,8 @@ export function ensurePortfolios(
       ...p,
       id: p.id,
       isDefault: p.id === "default" || p.isDefault === true,
+      // Illimité : une bonne opportunité = trade (plus de plafond /jour)
+      tradesPerDay: 0,
       strategy:
         p.id === "boriaz"
           ? "smc"
@@ -267,7 +269,7 @@ export function makeCustomPortfolio(
     minRR: partial?.minRR ?? 1.2,
     targetEur: partial?.targetEur ?? (scalp ? 40 : 150),
     maxLossEur: partial?.maxLossEur ?? (scalp ? 30 : 200),
-    tradesPerDay: partial?.tradesPerDay ?? (scalp ? 8 : 8),
+    tradesPerDay: partial?.tradesPerDay ?? 0,
     timeframe: partial?.timeframe ?? "1h",
     riskLevel: partial?.riskLevel ?? (scalp ? 3 : 3),
     requireAiGate: partial?.requireAiGate ?? true,

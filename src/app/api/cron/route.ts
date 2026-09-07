@@ -19,7 +19,7 @@ function authorized(request: Request): boolean {
 }
 
 /**
- * À appeler toutes les 15 min (cron-job.org) :
+ * À appeler toutes les 1–2 min (cron-job.org ou Vercel Cron Pro) :
  * prix + analyse multi-TF+IA + signaux corrélés wallets WR + macro T−30.
  * N’envoie Telegram que pour certitude haute / confiance ≥70.
  */
@@ -29,7 +29,7 @@ export async function GET(request: Request) {
   }
   bindCronRequest();
 
-  const results: Record<string, unknown> = { at: Date.now(), tick: "15m" };
+  const results: Record<string, unknown> = { at: Date.now(), tick: "1m" };
 
   try {
     results.priceWatch = await runPriceWatch();

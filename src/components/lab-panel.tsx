@@ -299,7 +299,7 @@ export function LabPanel() {
             riskLevel: 3,
             maxLeverage: 2,
             minRR: 1.2,
-            tradesPerDay: 8,
+            tradesPerDay: 0,
             sizePct: 1,
             riskPct: 0.25,
             maxLossEur: 30,
@@ -314,7 +314,7 @@ export function LabPanel() {
               riskLevel: 4,
               maxLeverage: 5,
               minRR: 1.8,
-              tradesPerDay: 6,
+              tradesPerDay: 0,
               sizePct: 8,
               maxLossEur: 120,
               targetEur: 250,
@@ -328,7 +328,7 @@ export function LabPanel() {
               riskLevel: 2,
               maxLeverage: 2,
               minRR: 2,
-              tradesPerDay: 3,
+              tradesPerDay: 0,
               sizePct: 10,
               maxSafetyMode: true,
               liveTradeEnabled: false,
@@ -825,7 +825,7 @@ export function LabPanel() {
               <p className="mt-2 text-muted-foreground">
                 Paper et live = <strong className="text-foreground">même cerveau</strong>,
                 même passage : dès qu’un setup est pris en paper, le live part
-                juste après (pas 15 min plus tard). Le cron ne fait que
+                juste après (pas 1 min plus tard). Le cron ne fait que
                 <em> rescanner</em> ; avec LIVE armé le scan auto passe à ~1 min
                 (Lab ouvert / accueil).
               </p>
@@ -1237,18 +1237,18 @@ export function LabPanel() {
                     />
                   </div>
                   <div>
-                    <Label>Trades / jour</Label>
+                    <Label>Trades / jour (0 = illimité)</Label>
                     <Input
                       type="number"
                       min={0}
-                      max={50}
-                      value={pf.tradesPerDay}
-                      onChange={(e) =>
-                        updatePortfolio(pf.id, {
-                          tradesPerDay: Number(e.target.value),
-                        })
-                      }
+                      max={0}
+                      disabled
+                      value={0}
+                      title="Illimité : le bot prend chaque bonne opportunité"
                     />
+                    <p className="mt-1 text-[10px] text-muted-foreground">
+                      Plus de plafond journalier — analyses inchangées.
+                    </p>
                   </div>
                   <div>
                     <Label>Perte max (€)</Label>
@@ -1523,7 +1523,7 @@ export function LabPanel() {
           limite pas encore touchée. <strong className="font-medium text-foreground">open</strong> =
           position simulée ouverte, PnL € (net de frais) mis à jour au prix live.
           TP/SL ferment automatiquement. « Relecture IA » = les 2 IA décident
-          fermer / basculer / attendre / laisser (auto toutes les 15 min).
+          fermer / basculer / attendre / laisser (auto ~toutes les 1 min).
         </p>
         {paper.length === 0 ? (
           <p className="mt-2 text-sm text-muted-foreground">

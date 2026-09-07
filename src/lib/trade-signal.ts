@@ -89,11 +89,11 @@ export interface TradeSignalPayload {
   smc: import("./smc-scan").SmcScanResult | null;
 }
 
-/** Cache lecture seule (UI). */
-const CACHE_TTL_IDLE = 5 * 60_000;
-/** Quand LIVE est armé : rescanner ~1×/min pour paper+live ensemble. */
-const CACHE_TTL_LIVE = 60_000;
-const TG_COOLDOWN = 25 * 60_000;
+/** Cache lecture seule (UI). Scans fréquents pour suivre les tendances. */
+const CACHE_TTL_IDLE = 20_000;
+/** LIVE armé : rescanner ~toutes les 15–20 s (paper + live). */
+const CACHE_TTL_LIVE = 15_000;
+const TG_COOLDOWN = 8 * 60_000;
 let cache: { at: number; value: TradeSignalPayload } | null = null;
 let lastTgKey = "";
 let lastTgAt = 0;
@@ -1167,16 +1167,8 @@ export async function getTradeSignals(options?: {
         return { ok: false, why: `Perte max ${pf.maxLossEur} € atteinte` };
       }
     }
-    if (pf.tradesPerDay > 0) {
-      const today = paperForCheck.filter(
-        (t) =>
-          (t.portfolioId || "default") === pf.id &&
-          Date.now() - t.openedAt < 24 * 3600_000,
-      ).length;
-      if (today >= pf.tradesPerDay) {
-        return { ok: false, why: `Limite ${pf.tradesPerDay} trades/jour` };
-      }
-    }
+    // Plus de plafond trades/jour : dès qu’une bonne opportunité passe les
+    // analyses (alignement / SMC), on prend le trade (0 = illimité).
     return { ok: true, why: "OK" };
   }
 
@@ -1429,14 +1421,6 @@ export async function getTradeSignals(options?: {
           pf.bankrollEur - acc.equityEur >= pf.maxLossEur
         ) {
           continue;
-        }
-        if (pf.tradesPerDay > 0) {
-          const today = paperForCheck.filter(
-            (t) =>
-              (t.portfolioId || "default") === pf.id &&
-              Date.now() - t.openedAt < 24 * 3600_000,
-          ).length;
-          if (today >= pf.tradesPerDay) continue;
         }
 
         const justification: TradeJustification = {
