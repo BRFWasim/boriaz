@@ -37,4 +37,4 @@ Sans ça, le compte simu peut revenir à 1000 € après un cold start (le navig
 
 ## Cron ~1 min
 
-GET `https://boriazbot-v4.vercel.app/api/cron?secret=TON_CRON_SECRET` toutes les **1–2 minutes** (cron-job.org). Sur Vercel Pro, `vercel.json` lance aussi `/api/cron` chaque minute.
+GET `https://boriazbot-v4.vercel.app/api/cron?secret=TON_CRON_SECRET` toutes les **1–5 minutes** (cron-job.org). Sur Hobby, le cron Vercel natif est limité à **1×/jour** — ne pas mettre `* * * * *` dans `vercel.json` sinon le deploy échoue.
