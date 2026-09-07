@@ -1142,7 +1142,7 @@ export function LabPanel() {
                   <p className="mt-2 text-xs text-muted-foreground">
                     Bot SMC : D1→H4→H1→M15 · paper size sur capital simu · LIVE =
                     2% du solde HL réel · TP1 1R (50 %+BE) · TP2 2R · gate
-                    ChatGPT (+ Claude).
+                    ChatGPT (Claude off).
                   </p>
                 ) : null}
                 {(() => {
@@ -1358,7 +1358,7 @@ export function LabPanel() {
               Analyse top-down D1→H4→H1→M15. Entrée si structure SMC (sweep /
               BOS + ÔTE, FVG recommandé). Risque exact 2 %. TP1 1R (50 %+
               break-even) puis TP2 2R. Gate IA :{" "}
-              <code className="text-xs">ChatGPT + Claude</code> (si clés).
+              <code className="text-xs">ChatGPT</code> (Claude commenté / off).
             </p>
           </div>
           <Button
@@ -1419,7 +1419,7 @@ export function LabPanel() {
         ) : (
           <p className="mt-3 text-sm text-muted-foreground">
             Clique « Scanner SMC » pour analyser la watchlist avec le bot
-            Boriaz (ChatGPT + Claude si clé).
+            Boriaz (ChatGPT — Claude off).
           </p>
         )}
       </section>

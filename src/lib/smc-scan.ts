@@ -1,5 +1,6 @@
 /**
- * Scan SMC multi-coins + gate ChatGPT (+ Claude si clé) pour Boriaz.
+ * Scan SMC multi-coins + gate ChatGPT pour Boriaz.
+ * Claude Haiku : code conservé mais commenté / non appelé.
  */
 import { loadCandles } from "./market-analysis";
 import {
@@ -91,6 +92,10 @@ Réponds d'abord avec le format [ANALYSE...] complet, puis UNE ligne JSON : {"ap
 }
 
 async function askClaudeSmcGate(setup: SmcSetup): Promise<GateResult | null> {
+  // Claude désactivé — non appelé (gardé pour réactivation future).
+  void setup;
+  return null;
+  /*
   const anthropic = process.env.ANTHROPIC_API_KEY?.trim();
   if (!anthropic) return null;
 
@@ -134,6 +139,7 @@ async function askClaudeSmcGate(setup: SmcSetup): Promise<GateResult | null> {
       provider: "claude",
     };
   }
+  */
 }
 
 async function askGptSmcGate(setup: SmcSetup): Promise<GateResult | null> {
@@ -189,10 +195,9 @@ async function askGptSmcGate(setup: SmcSetup): Promise<GateResult | null> {
 }
 
 /**
- * Validation Boriaz : ChatGPT + Claude si clé dispo.
- * - Les deux clés → les deux doivent approve
- * - Une seule → celle-là décide
- * - Aucune → gate mécanique checklist
+ * Validation Boriaz : ChatGPT uniquement.
+ * Claude Haiku reste commenté / désactivé.
+ * Sans OPENAI_API_KEY → gate mécanique checklist.
  */
 async function runSmcAiGates(setup: SmcSetup): Promise<{
   approved: boolean;
@@ -201,18 +206,18 @@ async function runSmcAiGates(setup: SmcSetup): Promise<{
   model: string;
   confidence: number;
 }> {
-  const [gpt, claude] = await Promise.all([
-    askGptSmcGate(setup),
-    askClaudeSmcGate(setup),
-  ]);
-  const gates = [gpt, claude].filter(Boolean) as GateResult[];
+  const gpt = await askGptSmcGate(setup);
+  // --- Claude Haiku désactivé (commenté) ---
+  // const claude = await askClaudeSmcGate(setup);
+  // const gates = [gpt, claude].filter(Boolean) as GateResult[];
+  const gates = [gpt].filter(Boolean) as GateResult[];
 
   if (!gates.length) {
     const approved = setup.checklist.allPass && setup.status !== "ANNULÉ";
     return {
       approved,
       note: approved
-        ? "Gate mécanique SMC 6/6 (pas de clé ChatGPT/Claude)."
+        ? "Gate mécanique SMC 6/6 (pas de clé ChatGPT)."
         : "Checklist SMC incomplète — bloqué.",
       report: setup.report,
       model: "mechanical-smc",
