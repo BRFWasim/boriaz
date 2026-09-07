@@ -16,6 +16,7 @@ import {
 const PRIVATE_API_PREFIXES = [
   "/api/live-account",
   "/api/live-status",
+  "/api/live-mirror",
   "/api/live",
   "/api/paper",
   "/api/prefs",
