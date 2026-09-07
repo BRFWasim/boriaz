@@ -501,6 +501,39 @@ export function LabPanel() {
     }
   }
 
+  async function mirrorPaperToLive(id: string) {
+    setMsg("Copie paper → LIVE au marché…");
+    try {
+      const res = await fetch("/api/live-mirror", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paperId: id }),
+      });
+      const json = await readResponseJson<{
+        error?: string;
+        ok?: boolean;
+        mid?: number;
+        live?: { size?: string; entryOid?: number | null; botLabel?: string };
+        trade?: PaperTrade;
+      }>(res);
+      if (!res.ok || !json.ok) {
+        setMsg(json.error || "Copie LIVE échouée");
+        return;
+      }
+      if (json.trade) {
+        setPaper((prev) =>
+          prev.map((t) => (t.id === id ? { ...t, ...json.trade! } : t)),
+        );
+      }
+      setMsg(
+        `LIVE HL ✓ @ mid ${json.mid} · size ${json.live?.size ?? "?"} · oid ${json.live?.entryOid ?? "—"}`,
+      );
+      await refresh();
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Copie LIVE impossible");
+    }
+  }
+
   async function runBacktest(days: number) {
     setMsg("Backtest en cours…");
     const res = await fetch(`/api/backtest?days=${days}`, { cache: "no-store" });
@@ -1108,7 +1141,8 @@ export function LabPanel() {
                 {pf.strategy === "smc" ? (
                   <p className="mt-2 text-xs text-muted-foreground">
                     Bot SMC : D1→H4→H1→M15 · paper size sur capital simu · LIVE =
-                    2% du solde HL réel · TP1 1R (50 %+BE) · TP2 2R · gate mécanique.
+                    2% du solde HL réel · TP1 1R (50 %+BE) · TP2 2R · gate
+                    ChatGPT (+ Claude).
                   </p>
                 ) : null}
                 {(() => {
@@ -1323,8 +1357,8 @@ export function LabPanel() {
             <p className="mt-1 text-sm text-muted-foreground">
               Analyse top-down D1→H4→H1→M15. Entrée si structure SMC (sweep /
               BOS + ÔTE, FVG recommandé). Risque exact 2 %. TP1 1R (50 %+
-              break-even) puis TP2 2R. Gate mécanique —{" "}
-              <code className="text-xs">Claude commenté / off</code>.
+              break-even) puis TP2 2R. Gate IA :{" "}
+              <code className="text-xs">ChatGPT + Claude</code> (si clés).
             </p>
           </div>
           <Button
@@ -1340,7 +1374,7 @@ export function LabPanel() {
             <div className="flex flex-wrap gap-2 text-xs">
               <Badge variant="outline">modèle {smc.model}</Badge>
               <Badge variant="outline">
-                Claude {smc.aiApproved ? "✓" : "✗"}
+                Gate IA {smc.aiApproved ? "✓" : "✗"}
               </Badge>
               {smc.best ? (
                 <>
@@ -1385,7 +1419,7 @@ export function LabPanel() {
         ) : (
           <p className="mt-3 text-sm text-muted-foreground">
             Clique « Scanner SMC » pour analyser la watchlist avec le bot
-            Boriaz (Claude Haiku).
+            Boriaz (ChatGPT + Claude si clé).
           </p>
         )}
       </section>
@@ -1601,13 +1635,25 @@ export function LabPanel() {
                     </span>
                   </div>
                   {t.status === "open" || t.status === "pending" ? (
-                    <button
-                      type="button"
-                      onClick={() => void closeLabTrade(t.id)}
-                      className="mt-1 rounded-md border border-short/40 px-2 py-0.5 text-[11px] text-short transition-colors hover:bg-short/10"
-                    >
-                      Fermer
-                    </button>
+                    <div className="mt-1 flex flex-wrap justify-end gap-1.5">
+                      {(t.portfolioId === "boriaz" || t.strategy === "smc") &&
+                      !/LIVE HL/i.test(t.note || "") ? (
+                        <button
+                          type="button"
+                          onClick={() => void mirrorPaperToLive(t.id)}
+                          className="rounded-md border border-amber-500/50 px-2 py-0.5 text-[11px] text-amber-700 transition-colors hover:bg-amber-500/10 dark:text-amber-400"
+                        >
+                          Copier → LIVE (marché)
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() => void closeLabTrade(t.id)}
+                        className="rounded-md border border-short/40 px-2 py-0.5 text-[11px] text-short transition-colors hover:bg-short/10"
+                      >
+                        Fermer
+                      </button>
+                    </div>
                   ) : null}
                 </div>
                 </div>

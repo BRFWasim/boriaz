@@ -1,5 +1,5 @@
 /**
- * Scan SMC multi-coins + gate Claude Haiku pour le portefeuille Boriaz.
+ * Scan SMC multi-coins + gate ChatGPT (+ Claude si clé) pour Boriaz.
  */
 import { loadCandles } from "./market-analysis";
 import {
@@ -10,6 +10,7 @@ import {
 import { WATCHLIST } from "./price-watch";
 
 const CLAUDE_MODEL = "claude-haiku-4-5-20251001";
+const GPT_MODEL_DEFAULT = "gpt-4o-mini";
 
 const SCAN_CACHE_TTL = 30_000;
 let scanCache: { key: string; at: number; value: SmcScanResult } | null = null;
@@ -24,23 +25,59 @@ export interface SmcScanResult {
   fetchedAt: number;
 }
 
-async function askClaudeSmcGate(
-  setup: SmcSetup,
-): Promise<{ approved: boolean; confidence: number; note: string; report: string | null }> {
-  const anthropic = process.env.ANTHROPIC_API_KEY?.trim();
-  if (!anthropic) {
-    // Sans clé : on autorise uniquement si checklist 6/6 mécanique
-    return {
-      approved: setup.checklist.allPass && setup.status !== "ANNULÉ",
-      confidence: setup.confidence,
-      note: setup.checklist.allPass
-        ? "Gate mécanique SMC 6/6 (Claude indisponible)."
-        : "Checklist SMC incomplète — bloqué.",
-      report: setup.report,
-    };
-  }
+type GateResult = {
+  approved: boolean;
+  confidence: number;
+  note: string;
+  report: string | null;
+  provider: string;
+};
 
-  const prompt = `${BORIAZ_SMC_SYSTEM_PROMPT}
+function parseGateJson(
+  text: string,
+  setup: SmcSetup,
+  provider: string,
+): GateResult {
+  const match = text.match(/\{[\s\S]*\}/);
+  let approved = false;
+  let confidence = 0;
+  let note = `Réponse ${provider} illisible`;
+  if (match) {
+    try {
+      const obj = JSON.parse(match[0]) as Record<string, unknown>;
+      approved = Boolean(obj.approve);
+      confidence = Number(obj.confidence ?? 0);
+      note = String(obj.note || "");
+      if (approved && confidence < 62) {
+        approved = false;
+        note = note || `Confiance ${provider} < 62 — bloqué.`;
+      }
+    } catch {
+      approved = false;
+    }
+  }
+  if (approved && !setup.checklist.allPass) {
+    approved = false;
+    note = `${provider} OK mais checklist SMC mécanique incomplète.`;
+  }
+  const reportBlock = text.includes("[ANALYSE")
+    ? text.replace(/\n?\s*\{[\s\S]*\}\s*$/, "").trim()
+    : setup.report;
+  return {
+    approved,
+    confidence,
+    note:
+      note ||
+      (approved
+        ? `${provider} valide le setup SMC.`
+        : `${provider} refuse.`),
+    report: reportBlock || setup.report,
+    provider,
+  };
+}
+
+function smcGatePrompt(setup: SmcSetup): string {
+  return `${BORIAZ_SMC_SYSTEM_PROMPT}
 
 Coin: ${setup.coin}
 Prix: ${setup.price}
@@ -51,7 +88,13 @@ ${setup.report}
 Si TOUTE la checklist 6/6 est VALIDÉE et le statut est ORDRE PRÊT ou EN ATTENTE DE RETRACEMENT, approve=true.
 Sinon approve=false.
 Réponds d'abord avec le format [ANALYSE...] complet, puis UNE ligne JSON : {"approve":true|false,"confidence":0-100,"note":"..."}`;
+}
 
+async function askClaudeSmcGate(setup: SmcSetup): Promise<GateResult | null> {
+  const anthropic = process.env.ANTHROPIC_API_KEY?.trim();
+  if (!anthropic) return null;
+
+  const prompt = smcGatePrompt(setup);
   try {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -76,50 +119,123 @@ Réponds d'abord avec le format [ANALYSE...] complet, puis UNE ligne JSON : {"ap
         confidence: 0,
         note: json.error?.message || `Claude HTTP ${res.status}`,
         report: setup.report,
+        provider: "claude",
       };
     }
     const text =
       json.content?.find((c) => c.type === "text")?.text?.trim() || "";
-    const match = text.match(/\{[\s\S]*\}/);
-    let approved = false;
-    let confidence = 0;
-    let note = "Réponse Claude illisible";
-    if (match) {
-      try {
-        const obj = JSON.parse(match[0]) as Record<string, unknown>;
-        approved = Boolean(obj.approve);
-        confidence = Number(obj.confidence ?? 0);
-        note = String(obj.note || "");
-        if (approved && confidence < 62) {
-          approved = false;
-          note = note || "Confiance Claude < 62 — bloqué.";
-        }
-      } catch {
-        approved = false;
-      }
-    }
-    // Exige aussi la checklist mécanique
-    if (approved && !setup.checklist.allPass) {
-      approved = false;
-      note = "Claude OK mais checklist SMC mécanique incomplète.";
-    }
-    const reportBlock = text.includes("[ANALYSE")
-      ? text.replace(/\n?\s*\{[\s\S]*\}\s*$/, "").trim()
-      : setup.report;
-    return {
-      approved,
-      confidence,
-      note: note || (approved ? "Claude Haiku valide le setup SMC." : "Claude refuse."),
-      report: reportBlock || setup.report,
-    };
+    return parseGateJson(text, setup, "Claude");
   } catch (e) {
     return {
       approved: false,
       confidence: 0,
       note: e instanceof Error ? e.message : "Erreur Claude",
       report: setup.report,
+      provider: "claude",
     };
   }
+}
+
+async function askGptSmcGate(setup: SmcSetup): Promise<GateResult | null> {
+  const openai = process.env.OPENAI_API_KEY?.trim();
+  if (!openai) return null;
+
+  const prompt = smcGatePrompt(setup);
+  try {
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${openai}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: process.env.OPENAI_MODEL?.trim() || GPT_MODEL_DEFAULT,
+        temperature: 0.2,
+        max_tokens: 1200,
+        messages: [
+          {
+            role: "system",
+            content:
+              "Tu valides des setups SMC crypto. Réponds en FR. JSON approve à la fin.",
+          },
+          { role: "user", content: prompt },
+        ],
+      }),
+    });
+    const json = (await res.json()) as {
+      choices?: { message?: { content?: string } }[];
+      error?: { message?: string };
+    };
+    if (!res.ok) {
+      return {
+        approved: false,
+        confidence: 0,
+        note: json.error?.message || `ChatGPT HTTP ${res.status}`,
+        report: setup.report,
+        provider: "chatgpt",
+      };
+    }
+    const text = json.choices?.[0]?.message?.content?.trim() || "";
+    return parseGateJson(text, setup, "ChatGPT");
+  } catch (e) {
+    return {
+      approved: false,
+      confidence: 0,
+      note: e instanceof Error ? e.message : "Erreur ChatGPT",
+      report: setup.report,
+      provider: "chatgpt",
+    };
+  }
+}
+
+/**
+ * Validation Boriaz : ChatGPT + Claude si clé dispo.
+ * - Les deux clés → les deux doivent approve
+ * - Une seule → celle-là décide
+ * - Aucune → gate mécanique checklist
+ */
+async function runSmcAiGates(setup: SmcSetup): Promise<{
+  approved: boolean;
+  note: string;
+  report: string | null;
+  model: string;
+  confidence: number;
+}> {
+  const [gpt, claude] = await Promise.all([
+    askGptSmcGate(setup),
+    askClaudeSmcGate(setup),
+  ]);
+  const gates = [gpt, claude].filter(Boolean) as GateResult[];
+
+  if (!gates.length) {
+    const approved = setup.checklist.allPass && setup.status !== "ANNULÉ";
+    return {
+      approved,
+      note: approved
+        ? "Gate mécanique SMC 6/6 (pas de clé ChatGPT/Claude)."
+        : "Checklist SMC incomplète — bloqué.",
+      report: setup.report,
+      model: "mechanical-smc",
+      confidence: setup.confidence,
+    };
+  }
+
+  const approved = gates.every((g) => g.approved);
+  const notes = gates.map((g) => `${g.provider}: ${g.note}`).join(" · ");
+  const report =
+    gates.find((g) => g.report)?.report || setup.report;
+  const confidence = Math.max(...gates.map((g) => g.confidence), 0);
+  const model = gates.map((g) => g.provider).join("+");
+
+  return {
+    approved,
+    note: approved
+      ? `Validé (${model}) — ${notes}`
+      : `Refusé (${model}) — ${notes}`,
+    report,
+    model,
+    confidence,
+  };
 }
 
 export async function scanSmcWatchlist(input: {
@@ -158,7 +274,6 @@ export async function scanSmcWatchlist(input: {
             loadCandles(coin, "15m"),
             loadCandles(coin, "30m"),
           ]);
-          // Exécution : privilégie M15, fallback M30 si trop court
           const exec =
             m15.length >= 40 ? m15 : m30.length >= 30 ? m30 : m15;
           if (d1.length < 30 || h4.length < 30 || h1.length < 30 || exec.length < 25) {
@@ -197,25 +312,26 @@ export async function scanSmcWatchlist(input: {
     )
     .sort((a, b) => b.confidence - a.confidence);
 
-  const best = actionable[0] ?? setups.sort((a, b) => b.confidence - a.confidence)[0] ?? null;
+  const best =
+    actionable[0] ??
+    setups.sort((a, b) => b.confidence - a.confidence)[0] ??
+    null;
 
   let aiApproved = false;
   let aiNote: string | null = null;
   let aiReport: string | null = null;
+  let model = "mechanical-smc";
 
   if (best && best.checklist.allPass && best.order) {
-    // --- Claude Haiku désactivé (commenté) : gate mécanique uniquement ---
-    // const gate = await askClaudeSmcGate(best);
-    // aiApproved = gate.approved;
-    // aiNote = gate.note;
-    // aiReport = gate.report;
-    // if (gate.report) best.report = gate.report;
-    // if (gate.approved) {
-    //   best.confidence = Math.max(best.confidence, gate.confidence);
-    // }
-    aiApproved = true;
-    aiNote = "Claude désactivé — validation mécanique SMC uniquement.";
-    aiReport = best.report;
+    const gate = await runSmcAiGates(best);
+    aiApproved = gate.approved;
+    aiNote = gate.note;
+    aiReport = gate.report;
+    model = gate.model;
+    if (gate.report) best.report = gate.report;
+    if (gate.approved) {
+      best.confidence = Math.max(best.confidence, gate.confidence);
+    }
   } else if (best) {
     aiNote = best.cancelReason || "Setup SMC non actionnable";
   }
@@ -226,8 +342,7 @@ export async function scanSmcWatchlist(input: {
     aiApproved,
     aiNote,
     aiReport,
-    // model: process.env.ANTHROPIC_MODEL?.trim() || CLAUDE_MODEL,
-    model: "mechanical-smc",
+    model,
     fetchedAt: Date.now(),
   };
   scanCache = { key: cacheKey, at: Date.now(), value };

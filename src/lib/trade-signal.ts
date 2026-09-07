@@ -1424,7 +1424,7 @@ export async function getTradeSignals(options?: {
         }
 
         const justification: TradeJustification = {
-          summary: `SMC Boriaz ${setup.order.side.toUpperCase()} ${setup.coin} · structure OK · risque ${setup.risk.riskPct}% · gate mécanique`,
+          summary: `SMC Boriaz ${setup.order.side.toUpperCase()} ${setup.coin} · structure OK · risque ${setup.risk.riskPct}% · gate ChatGPT/Claude`,
           bullets: [
             `Stratégie SMC top-down D1→H4→H1→M15`,
             `MTF ${setup.bias.d1}/${setup.bias.h4}/${setup.bias.h1}`,
@@ -1442,7 +1442,7 @@ export async function getTradeSignals(options?: {
               : "ÔTE",
             `Risque ${setup.risk.riskEur.toFixed(2)} € (2%) · notionnel ${setup.risk.notionalEur} €`,
             `TP1 1R 50%+BE · TP2 2R`,
-            smcScan.aiNote || "Gate mécanique",
+            smcScan.aiNote || "Gate ChatGPT/Claude",
           ],
           alignmentScore: setup.confidence,
           aiVerified: smcScan.aiApproved,

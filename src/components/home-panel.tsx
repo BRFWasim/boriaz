@@ -76,6 +76,28 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
     }
   }
 
+  async function mirrorTradeToLive(id: string) {
+    try {
+      const res = await fetch("/api/live-mirror", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paperId: id }),
+      });
+      const json = await readResponseJson<{
+        error?: string;
+        ok?: boolean;
+        trade?: PaperTrade;
+      }>(res);
+      if (res.ok && json.ok && json.trade) {
+        mergePaper([json.trade]);
+      } else {
+        setError(json.error || "Copie LIVE échouée");
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Copie LIVE impossible");
+    }
+  }
+
   useEffect(() => {
     let alive = true;
     async function loadFull() {
@@ -489,11 +511,23 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
                           title="En attente d’entrée"
                           trades={pending}
                           onClose={closeTrade}
+                          onMirrorLive={
+                            pf.profile.id === "boriaz" ||
+                            pf.profile.strategy === "smc"
+                              ? mirrorTradeToLive
+                              : undefined
+                          }
                         />
                         <TradeCategory
                           title="En cours"
                           trades={running}
                           onClose={closeTrade}
+                          onMirrorLive={
+                            pf.profile.id === "boriaz" ||
+                            pf.profile.strategy === "smc"
+                              ? mirrorTradeToLive
+                              : undefined
+                          }
                         />
                         <TradeCategory
                           title="TP"
@@ -1100,10 +1134,12 @@ function TradeCategory({
   title,
   trades,
   onClose,
+  onMirrorLive,
 }: {
   title: string;
   trades: PaperTrade[];
   onClose?: (id: string) => void;
+  onMirrorLive?: (id: string) => void;
 }) {
   if (trades.length === 0) return null;
   return (
@@ -1114,7 +1150,12 @@ function TradeCategory({
       </p>
       <div className="space-y-2">
         {trades.map((t) => (
-          <PortfolioTradeRow key={t.id} trade={t} onClose={onClose} />
+          <PortfolioTradeRow
+            key={t.id}
+            trade={t}
+            onClose={onClose}
+            onMirrorLive={onMirrorLive}
+          />
         ))}
       </div>
     </div>
@@ -1124,13 +1165,21 @@ function TradeCategory({
 function PortfolioTradeRow({
   trade: t,
   onClose,
+  onMirrorLive,
 }: {
   trade: PaperTrade;
   onClose?: (id: string) => void;
+  onMirrorLive?: (id: string) => void;
 }) {
   const [openWhy, setOpenWhy] = useState(false);
   const [closing, setClosing] = useState(false);
+  const [mirroring, setMirroring] = useState(false);
   const canClose = t.status === "open" || t.status === "pending";
+  const canMirror =
+    Boolean(onMirrorLive) &&
+    canClose &&
+    (t.portfolioId === "boriaz" || t.strategy === "smc") &&
+    !/LIVE HL/i.test(t.note || "");
   const takenAt = t.filledAt ?? t.openedAt;
   const tpEur = (() => {
     const move =
@@ -1209,18 +1258,37 @@ function PortfolioTradeRow({
             {" · "}
             <span className="text-short">Si SL {slEur.toFixed(2)} €</span>
           </p>
-          {canClose && onClose ? (
-            <button
-              type="button"
-              disabled={closing}
-              onClick={() => {
-                setClosing(true);
-                onClose(t.id);
-              }}
-              className="mt-1 rounded-md border border-short/40 px-2 py-0.5 text-[11px] text-short transition-colors hover:bg-short/10 disabled:opacity-50"
-            >
-              {closing ? "Clôture…" : "Fermer maintenant"}
-            </button>
+          {canClose ? (
+            <div className="mt-1 flex flex-wrap justify-end gap-1.5">
+              {canMirror ? (
+                <button
+                  type="button"
+                  disabled={mirroring}
+                  onClick={() => {
+                    setMirroring(true);
+                    void Promise.resolve(onMirrorLive?.(t.id)).finally(() =>
+                      setMirroring(false),
+                    );
+                  }}
+                  className="rounded-md border border-amber-500/50 px-2 py-0.5 text-[11px] text-amber-400 transition-colors hover:bg-amber-500/10 disabled:opacity-50"
+                >
+                  {mirroring ? "LIVE…" : "Copier → LIVE (marché)"}
+                </button>
+              ) : null}
+              {onClose ? (
+                <button
+                  type="button"
+                  disabled={closing}
+                  onClick={() => {
+                    setClosing(true);
+                    onClose(t.id);
+                  }}
+                  className="rounded-md border border-short/40 px-2 py-0.5 text-[11px] text-short transition-colors hover:bg-short/10 disabled:opacity-50"
+                >
+                  {closing ? "Clôture…" : "Fermer maintenant"}
+                </button>
+              ) : null}
+            </div>
           ) : null}
         </div>
       </div>
