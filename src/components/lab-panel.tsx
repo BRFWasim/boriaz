@@ -20,7 +20,9 @@ import {
   DEFAULT_PREFS,
   computePaperAccount,
   ensurePortfolios,
+  isScalpPortfolio,
   makeCustomPortfolio,
+  portfolioAllowsLive,
 } from "@/lib/user-types";
 import { syncPaperFromBrowser, writeLocalPaper } from "@/lib/paper-local";
 import { readResponseJson } from "@/lib/safe-json";
@@ -261,14 +263,18 @@ export function LabPanel() {
 
   function updatePortfolio(id: string, patch: Partial<PortfolioProfile>) {
     if (!prefs) return;
-    // LIVE réservé à Défaut + Boriaz — Scalp / autres forcé paper-only
-    const safePatch =
-      id === "default" || id === "boriaz"
-        ? patch
-        : { ...patch, liveTradeEnabled: false };
+    // LIVE : Défaut + Boriaz + Scalp. Risqué / autres forcé paper-only.
+    const target = ensurePortfolios(prefs.portfolios).find((p) => p.id === id);
+    const allowsLive = target ? portfolioAllowsLive(target) : false;
+    const finalPatch =
+      "liveTradeEnabled" in patch && patch.liveTradeEnabled && !allowsLive
+        ? { ...patch, liveTradeEnabled: false }
+        : allowsLive
+          ? patch
+          : { ...patch, liveTradeEnabled: false };
     const portfolios = ensurePortfolios(prefs.portfolios).map((p) =>
       p.id === id
-        ? { ...p, ...safePatch, id: p.id, isDefault: p.isDefault }
+        ? { ...p, ...finalPatch, id: p.id, isDefault: p.isDefault }
         : p,
     );
     const next = { ...prefs, portfolios };
@@ -290,12 +296,16 @@ export function LabPanel() {
         ? makeCustomPortfolio({
             name: "Scalp 1h",
             timeframe: "1h",
-            riskLevel: 4,
-            maxLeverage: 5,
+            riskLevel: 3,
+            maxLeverage: 2,
             minRR: 1.2,
-            tradesPerDay: 12,
-            sizePct: 8,
+            tradesPerDay: 8,
+            sizePct: 1,
+            riskPct: 0.25,
+            maxLossEur: 30,
+            targetEur: 40,
             maxSafetyMode: false,
+            liveTradeEnabled: false,
           })
         : kind === "risky"
           ? makeCustomPortfolio({
@@ -310,6 +320,7 @@ export function LabPanel() {
               targetEur: 250,
               maxSafetyMode: false,
               requireAiGate: true,
+              liveTradeEnabled: false,
             })
           : makeCustomPortfolio({
               name: "Swing 1d",
@@ -320,6 +331,7 @@ export function LabPanel() {
               tradesPerDay: 3,
               sizePct: 10,
               maxSafetyMode: true,
+              liveTradeEnabled: false,
             });
     patchPrefs({
       ...prefs,
@@ -766,14 +778,14 @@ export function LabPanel() {
                   void savePrefs(next);
                 }}
               />
-              LIVE master (Défaut toggle) — Boriaz paper → live toujours miroir
+              LIVE master (Défaut / Scalp toggles) — Boriaz paper → live miroir
             </label>
             <p className="text-[11px] text-muted-foreground sm:col-span-2">
-              Dès qu’un trade paper <strong>Boriaz</strong> s’ouvre, le live HL
-              est tenté automatiquement (même % de marge sur le solde réel),
-              sans dépendre des cases. Kill-switch env{" "}
-              <code className="text-[10px]">HL_LIVE_ENABLED</code> reste
-              obligatoire. Scalp = paper only.
+              LIVE réel : <strong>Défaut</strong>, <strong>Boriaz</strong>,{" "}
+              <strong>Scalp</strong> (petites mises ~0,25 % equity).{" "}
+              <strong>Risqué</strong> = paper only, jamais HL. Scalp se
+              désactive via sa case LIVE HL ci-dessous. Kill-switch env{" "}
+              <code className="text-[10px]">HL_LIVE_ENABLED</code> obligatoire.
             </p>
           </div>
           {liveStatus ? (
@@ -1050,7 +1062,7 @@ export function LabPanel() {
                       />
                       Paper auto
                     </label>
-                    {pf.id === "default" || pf.id === "boriaz" ? (
+                    {portfolioAllowsLive(pf) ? (
                       <label className="flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-400">
                         <input
                           type="checkbox"
@@ -1062,19 +1074,24 @@ export function LabPanel() {
                           }
                         />
                         LIVE HL
-                        {pf.isDefault ? (
+                        {pf.id === "default" ? (
                           <span className="text-[10px] text-muted-foreground">
                             (Défaut)
                           </span>
-                        ) : (
+                        ) : pf.id === "boriaz" ? (
                           <span className="text-[10px] text-muted-foreground">
                             (Boriaz)
                           </span>
-                        )}
+                        ) : isScalpPortfolio(pf) ? (
+                          <span className="text-[10px] text-muted-foreground">
+                            (Scalp · petites mises)
+                          </span>
+                        ) : null}
                       </label>
                     ) : (
                       <span className="text-[10px] text-muted-foreground">
-                        LIVE HL : non (paper only)
+                        LIVE HL : non (paper only
+                        {/risqu/i.test(pf.name) ? " — Risqué bloqué" : ""})
                       </span>
                     )}
                   </div>

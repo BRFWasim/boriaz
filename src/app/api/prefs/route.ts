@@ -8,6 +8,12 @@ import {
   savePrefs,
   type PortfolioProfile,
 } from "@/lib/persist";
+import {
+  isRiskyPortfolio,
+  isScalpPortfolio,
+  portfolioAllowsLive,
+  scalpLiveRiskPct,
+} from "@/lib/user-types";
 import { bindUserRequest } from "@/lib/bind-request";
 
 export const dynamic = "force-dynamic";
@@ -15,12 +21,13 @@ export const dynamic = "force-dynamic";
 function sanitizePortfolio(raw: Record<string, unknown>): PortfolioProfile | null {
   const id = String(raw.id || "").trim();
   if (!id) return null;
+  const name = String(raw.name || "").slice(0, 48);
   const base =
     id === "default"
       ? { ...DEFAULT_PORTFOLIO }
       : id === "boriaz"
         ? { ...BORIAZ_PORTFOLIO }
-        : makeCustomPortfolio({ id });
+        : makeCustomPortfolio({ id, name: name || undefined });
   const tf = String(raw.timeframe || base.timeframe);
   const timeframe =
     tf === "15m" || tf === "1h" || tf === "4h" || tf === "1d" ? tf : base.timeframe;
@@ -30,20 +37,16 @@ function sanitizePortfolio(raw: Record<string, unknown>): PortfolioProfile | nul
       : String(raw.strategy || base.strategy) === "smc"
         ? "smc"
         : "alignment";
-  return {
+  const draft: PortfolioProfile = {
     ...base,
-    name: String(raw.name || base.name).slice(0, 48),
+    name: name || base.name,
     isDefault: id === "default",
     enabled: id === "default" || id === "boriaz" ? true : Boolean(raw.enabled ?? true),
     paperTradeEnabled: Boolean(raw.paperTradeEnabled ?? true),
-    // LIVE uniquement Défaut + Boriaz (Scalp / customs = paper only)
-    liveTradeEnabled:
-      id === "default" || id === "boriaz"
-        ? Boolean(raw.liveTradeEnabled ?? false)
-        : false,
+    liveTradeEnabled: Boolean(raw.liveTradeEnabled ?? false),
     bankrollEur: Math.min(100000, Math.max(100, Number(raw.bankrollEur) || 1000)),
     maxLeverage: Math.min(10, Math.max(1, Number(raw.maxLeverage) || 3)),
-    sizePct: Math.min(25, Math.max(1, Number(raw.sizePct) || 10)),
+    sizePct: Math.min(25, Math.max(0.5, Number(raw.sizePct) || 10)),
     minRR: Math.min(10, Math.max(0.5, Number(raw.minRR) || 1.5)),
     targetEur: Math.max(10, Number(raw.targetEur) || 200),
     maxLossEur: Math.max(10, Number(raw.maxLossEur) || 150),
@@ -55,8 +58,23 @@ function sanitizePortfolio(raw: Record<string, unknown>): PortfolioProfile | nul
       raw.maxSafetyMode ?? (id === "default" || id === "boriaz"),
     ),
     strategy,
-    riskPct: id === "boriaz" ? 2 : Math.min(5, Math.max(0.5, Number(raw.riskPct) || 2)),
+    riskPct:
+      id === "boriaz"
+        ? 2
+        : isScalpPortfolio({ id, name: name || base.name })
+          ? scalpLiveRiskPct(Number(raw.riskPct) || undefined)
+          : Math.min(5, Math.max(0.5, Number(raw.riskPct) || 2)),
   };
+  // LIVE : Défaut + Boriaz + Scalp. Risqué = jamais.
+  if (isRiskyPortfolio(draft) || !portfolioAllowsLive(draft)) {
+    draft.liveTradeEnabled = false;
+  }
+  if (isScalpPortfolio(draft)) {
+    draft.sizePct = Math.min(2, Math.max(0.5, draft.sizePct));
+    draft.maxLeverage = Math.min(3, draft.maxLeverage);
+    draft.riskPct = scalpLiveRiskPct(draft.riskPct);
+  }
+  return draft;
 }
 
 export async function GET() {

@@ -30,6 +30,11 @@ import {
 
 import type { BookTrade } from "./user-types";
 import type { EntryMode } from "./user-types";
+import {
+  isScalpPortfolio,
+  portfolioAllowsLive,
+  scalpLiveRiskPct,
+} from "./user-types";
 import type { BuyTimingAction, SignalBias } from "./types";
 
 export interface DirectionSignal {
@@ -472,8 +477,7 @@ export async function getTradeSignals(options?: {
     liveArmed =
       Boolean(prefs.liveTradeEnabled) &&
       prefs.portfolios.some(
-        (p) =>
-          p.liveTradeEnabled && (p.id === "default" || p.id === "boriaz"),
+        (p) => p.liveTradeEnabled && portfolioAllowsLive(p),
       ) &&
       isLiveEnvReady().ok;
   } catch {
@@ -1264,39 +1268,45 @@ export async function getTradeSignals(options?: {
         justification,
         strategy: "alignment",
       });
-      // LIVE Hyperliquid — Boriaz paper ⇒ live OBLIGATOIRE (miroir).
-      // Autres portefeuilles (Défaut) : toggles Lab requis.
+      // LIVE Hyperliquid — Défaut / Boriaz / Scalp (toggle Lab).
+      // Risqué & autres = jamais. Scalp = petites mises (riskPct ~0.25%).
       if (
         opened &&
         !opened.note.includes("Cash insuffisant") &&
+        portfolioAllowsLive(pf) &&
         (pf.id === "boriaz" ||
-          (prefs.liveTradeEnabled &&
-            pf.liveTradeEnabled &&
-            pf.id === "default"))
+          (prefs.liveTradeEnabled && pf.liveTradeEnabled))
       ) {
         try {
           const { placeBoriazLiveTrade, placeBoriazLiveTradeMirrored } =
             await import("./hl-live");
           const { loadPaperTrades, savePaperTrades } = await import("./persist");
+          const scalp = isScalpPortfolio(pf);
           const place =
             pf.id === "boriaz"
               ? placeBoriazLiveTradeMirrored
               : placeBoriazLiveTrade;
+          const liveRiskPct = scalp
+            ? scalpLiveRiskPct(pf.riskPct)
+            : (pf.riskPct ?? 2);
+          // Scalp : taille paper déjà petite ; live = riskPct minuscule (pas miroir plein)
           const live = await place({
             coin: chosen.coin,
             side,
             entry: chosen.entry!,
             tp: chosen.tp!,
             sl: chosen.sl!,
-            leverage: levNum,
-            riskPct: pf.riskPct ?? 2,
+            leverage: scalp ? Math.min(levNum, 3) : levNum,
+            riskPct: liveRiskPct,
             entryMode:
               chosen.entryMode === "limit_wait" ? "limit_wait" : "market_now",
             paperId: opened.id,
             portfolioId: pf.id,
             portfolioName: pf.name,
             strategy: "alignment",
-            paperMarginEur: opened.marginEur,
+            paperMarginEur: scalp
+              ? Math.min(opened.marginEur, pf.bankrollEur * 0.01)
+              : opened.marginEur,
             paperBankrollEur: pf.bankrollEur,
             mirrorPaper: pf.id === "boriaz",
           });

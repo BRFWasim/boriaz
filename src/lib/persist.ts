@@ -5,6 +5,7 @@ import {
   makeCustomPortfolio,
   computePaperAccount,
   estimateRoundTripFeesEur,
+  portfolioAllowsLive,
   type EntryMode,
   type JournalEntry,
   type PaperAccount,
@@ -31,6 +32,12 @@ export {
   makeCustomPortfolio,
   computePaperAccount,
   aggregatePaperAccount,
+  isScalpPortfolio,
+  isRiskyPortfolio,
+  portfolioAllowsLive,
+  scalpLiveRiskPct,
+  SCALP_LIVE_RISK_PCT_DEFAULT,
+  SCALP_LIVE_RISK_PCT_MAX,
 } from "./user-types";
 export type {
   PortfolioProfile,
@@ -156,13 +163,9 @@ export async function loadPrefs(): Promise<UserPrefs> {
       portfolios.find((p) => p.isDefault)?.bankrollEur ||
       merged.paperBankrollEur ||
       1000;
-    // Purge persistée : Scalp/autres ne doivent plus rester LIVE en storage
+    // Purge persistée : Risqué / non-autorisés ne doivent plus rester LIVE
     const hadForbiddenLive = (parsed.portfolios ?? []).some(
-      (p) =>
-        p &&
-        p.id !== "default" &&
-        p.id !== "boriaz" &&
-        Boolean(p.liveTradeEnabled),
+      (p) => p && Boolean(p.liveTradeEnabled) && !portfolioAllowsLive(p),
     );
     if (hadForbiddenLive) {
       try {

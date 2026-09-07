@@ -35,6 +35,50 @@ export interface PortfolioProfile {
   riskPct: number;
 }
 
+/** Scalp = nom/id contenant "scalp" (portefeuille Lab custom). */
+export function isScalpPortfolio(
+  p: Pick<PortfolioProfile, "id" | "name"> | null | undefined,
+): boolean {
+  if (!p) return false;
+  return /scalp/i.test(p.id || "") || /scalp/i.test(p.name || "");
+}
+
+/** Risqué = nom contenant "risqu" — jamais de LIVE. */
+export function isRiskyPortfolio(
+  p: Pick<PortfolioProfile, "id" | "name"> | null | undefined,
+): boolean {
+  if (!p) return false;
+  return /risqu/i.test(p.id || "") || /risqu/i.test(p.name || "");
+}
+
+/**
+ * LIVE HL autorisé uniquement pour : Défaut, Boriaz, Scalp.
+ * Risqué / Swing / autres = paper only.
+ */
+export function portfolioAllowsLive(
+  p: Pick<PortfolioProfile, "id" | "name"> | null | undefined,
+): boolean {
+  if (!p) return false;
+  if (isRiskyPortfolio(p)) return false;
+  if (p.id === "default" || p.id === "boriaz") return true;
+  return isScalpPortfolio(p);
+}
+
+/** Risque live Scalp plafonné très bas (petites mises). */
+export const SCALP_LIVE_RISK_PCT_MAX = 0.35;
+export const SCALP_LIVE_RISK_PCT_DEFAULT = 0.25;
+
+export function scalpLiveRiskPct(pfRiskPct?: number | null): number {
+  const raw =
+    pfRiskPct != null && Number.isFinite(pfRiskPct)
+      ? Number(pfRiskPct)
+      : SCALP_LIVE_RISK_PCT_DEFAULT;
+  return Math.min(
+    SCALP_LIVE_RISK_PCT_MAX,
+    Math.max(0.1, raw),
+  );
+}
+
 export interface TradeJustification {
   summary: string;
   bullets: string[];
@@ -142,9 +186,11 @@ export function ensurePortfolios(
       riskPct:
         p.id === "boriaz"
           ? 2
-          : Number.isFinite(p.riskPct)
-            ? Math.min(5, Math.max(0.5, Number(p.riskPct)))
-            : base.riskPct,
+          : isScalpPortfolio(p)
+            ? scalpLiveRiskPct(p.riskPct)
+            : Number.isFinite(p.riskPct)
+              ? Math.min(5, Math.max(0.5, Number(p.riskPct)))
+              : base.riskPct,
     });
   }
   if (!byId.has("default")) {
@@ -176,10 +222,25 @@ export function ensurePortfolios(
     });
   }
   // Ordre : défaut, boriaz, puis les autres
-  // LIVE HL uniquement pour Défaut + Boriaz (Scalp / autres = paper only)
+  // LIVE HL : Défaut + Boriaz + Scalp (toggle). Risqué / reste = paper only.
   const rest = [...byId.values()]
     .filter((p) => p.id !== "default" && p.id !== "boriaz")
-    .map((p) => ({ ...p, liveTradeEnabled: false }));
+    .map((p) => {
+      if (isRiskyPortfolio(p) || !portfolioAllowsLive(p)) {
+        return { ...p, liveTradeEnabled: false };
+      }
+      // Scalp : petites mises (paper + live)
+      if (isScalpPortfolio(p)) {
+        return {
+          ...p,
+          liveTradeEnabled: Boolean(p.liveTradeEnabled),
+          riskPct: scalpLiveRiskPct(p.riskPct),
+          sizePct: Math.min(2, Math.max(0.5, Number(p.sizePct) || 1)),
+          maxLeverage: Math.min(3, Math.max(1, Number(p.maxLeverage) || 2)),
+        };
+      }
+      return { ...p, liveTradeEnabled: false };
+    });
   return [
     byId.get("default")!,
     byId.get("boriaz")!,
@@ -190,27 +251,31 @@ export function ensurePortfolios(
 export function makeCustomPortfolio(
   partial?: Partial<PortfolioProfile>,
 ): PortfolioProfile {
-  const id = partial?.id || `pf_${Date.now().toString(36)}`;
+  const id = partial?.id || `pf_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+  const name = partial?.name || "Perso";
+  const scalp = isScalpPortfolio({ id, name });
   return {
     id,
-    name: partial?.name || "Perso",
+    name,
     isDefault: false,
     enabled: partial?.enabled ?? true,
     paperTradeEnabled: partial?.paperTradeEnabled ?? true,
     liveTradeEnabled: false,
     bankrollEur: partial?.bankrollEur ?? 1000,
-    maxLeverage: partial?.maxLeverage ?? 4,
-    sizePct: partial?.sizePct ?? 8,
+    maxLeverage: partial?.maxLeverage ?? (scalp ? 2 : 4),
+    sizePct: partial?.sizePct ?? (scalp ? 1 : 8),
     minRR: partial?.minRR ?? 1.2,
-    targetEur: partial?.targetEur ?? 150,
-    maxLossEur: partial?.maxLossEur ?? 200,
-    tradesPerDay: partial?.tradesPerDay ?? 8,
+    targetEur: partial?.targetEur ?? (scalp ? 40 : 150),
+    maxLossEur: partial?.maxLossEur ?? (scalp ? 30 : 200),
+    tradesPerDay: partial?.tradesPerDay ?? (scalp ? 8 : 8),
     timeframe: partial?.timeframe ?? "1h",
-    riskLevel: partial?.riskLevel ?? 3,
+    riskLevel: partial?.riskLevel ?? (scalp ? 3 : 3),
     requireAiGate: partial?.requireAiGate ?? true,
     maxSafetyMode: partial?.maxSafetyMode ?? false,
     strategy: partial?.strategy ?? "alignment",
-    riskPct: partial?.riskPct ?? 2,
+    riskPct: scalp
+      ? scalpLiveRiskPct(partial?.riskPct)
+      : (partial?.riskPct ?? 2),
   };
 }
 
