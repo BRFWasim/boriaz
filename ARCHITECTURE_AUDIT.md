@@ -444,5 +444,41 @@ Default remains today’s Upstash REST so production keeps working.
 - `/api/live` is mark-to-market, not execution (naming trap).
 - Price-watch state not in Upstash (lost on cold start).
 - Missing `CRON_SECRET` ⇒ open cron endpoint.
-- No Docker/CI; reliance on Vercel + external cron.
+- No Docker/CI historically; reliance on Vercel + external cron — **Docker Compose ajouté** (postgres/redis/workers).
 - SMC comments still say “Claude Haiku” in places; runtime gate is ChatGPT / mechanical.
+
+---
+
+## 17. Checklist de migration (implémentation démarrée)
+
+Voir aussi `docs/MIGRATION_CHECKLIST.md`.
+
+### Livré
+
+1. PostgreSQL schema + migrations réversibles `db/migrations/001_*`
+2. Redis client multi-backend + locks/heartbeats
+3. Modes shadow/paper/live + kill switch (défaut shadow)
+4. Gate live sur `placeBoriazLiveTrade`
+5. Réconciliation HL↔journal
+6. APIs bot status/health/control
+7. Docker Compose + workers scaffolds
+8. Documentation ops/risk/AI/architecture
+9. Tests vitest money + defaults mode
+
+### Hypothèses
+
+- Workers H24 en **Node/tsx** (pas Python) pour réutiliser `src/lib`.
+- Upstash REST compte comme Redis durable pour Vercel.
+- Sorties manuelles HL restent possibles si `HL_LIVE_ENABLED` (réduction risque).
+- Cron externe conservé en parallèle des workers (compat Hobby).
+
+### Rollback
+
+- `npm run db:migrate:down`
+- Redeploy sans `assertLiveEntryAllowed` (revert commit gate) si urgence trading
+- `docker compose down`
+
+### Validation avant live
+
+Shadow → Paper → reconcile → confirmLive UI/API → `LIVE_TRADING_ENABLED` + `HL_LIVE_ENABLED` + kill off.
+

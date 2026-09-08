@@ -1,0 +1,10 @@
+FROM node:22-bookworm-slim
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev=false
+COPY . .
+ENV NODE_ENV=production
+ENV TRADING_MODE=shadow
+ENV LIVE_TRADING_ENABLED=false
+ENV GLOBAL_KILL_SWITCH=true
+CMD ["npx", "tsx", "workers/scheduler-worker.ts"]
