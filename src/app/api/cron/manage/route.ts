@@ -16,8 +16,9 @@ function authorized(request: Request): boolean {
 
 /**
  * Job léger dédié aux trades déjà ouverts (paper + live SMC).
- * À appeler toutes les 2–3 min en plus du cron principal si tu veux plus de réactivité.
+ * À appeler toutes les 1–2 min (cron-job.org) en plus du cron principal.
  * ACK immédiat → compatible timeout cron-job.org 30s.
+ * Relecture PnL live + structure + snapshot sous chaque trade.
  */
 export async function GET(request: Request) {
   if (!authorized(request)) {
