@@ -31,6 +31,7 @@ import {
   PaperTradeLiveReview,
   TradeLiveReview,
 } from "@/components/trade-live-review";
+import { LiveCloseButtons } from "@/components/live-close-buttons";
 
 const PREFS_LS_KEY = "boriazbot-prefs-v1";
 
@@ -1050,6 +1051,12 @@ export function LabPanel() {
                         snapshot={p.manageSnapshot}
                         pending={!p.manageSnapshot}
                         currency="$"
+                      />
+                      <LiveCloseButtons
+                        coin={p.coin}
+                        side={p.side}
+                        unrealizedPnlUsd={p.unrealizedPnlUsd}
+                        onClosed={() => void refresh()}
                       />
                     </li>
                   ))}

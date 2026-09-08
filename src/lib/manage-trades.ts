@@ -567,6 +567,8 @@ export async function evaluateTradeManage(opts: {
   price: number;
   pnl: { pnlPct: number; pnlEur: number; movePct?: number };
   skipAi?: boolean;
+  /** Skip relecture SMC (FVG/BOS) — utile si déjà fournie. */
+  skipSmc?: boolean;
   lastSnapshotAt?: number;
   currency?: "€" | "$";
 }): Promise<{
@@ -620,23 +622,72 @@ export async function evaluateTradeManage(opts: {
     }
   }
 
-  return {
+  const snapshot = buildSnapshot(
+    opts.trade,
+    opts.frames,
+    opts.price,
+    pnl,
     action,
     reason,
     outlook,
     providers,
+    currency,
+  );
+
+  // SMC FVG / BOS / Sweep / ÔTE pendant le trade (sauf skip explicite)
+  if (!opts.skipSmc) {
+    try {
+      const { reviewOpenTradeSmc } = await import("./smc-open-review");
+      const smc = await reviewOpenTradeSmc({
+        coin: opts.trade.coin,
+        side: opts.trade.side,
+        price: opts.price,
+        walletEur: opts.trade.marginEur || 1000,
+      });
+      if (smc) {
+        snapshot.smc = {
+          mtf: smc.mtf,
+          marketSide: smc.marketSide,
+          sweep: smc.withPosition.sweep,
+          chochBos: smc.withPosition.chochBos,
+          fvg: smc.withPosition.fvg,
+          ote: smc.withPosition.ote,
+          fvgLabel: smc.withPosition.fvgLabel,
+          oteLabel: smc.withPosition.oteLabel,
+          against: smc.against,
+        };
+        const base = snapshot.bullets ?? [];
+        snapshot.bullets = [...smc.bullets, ...base].slice(0, 12);
+        if (!providers.includes("SMC")) providers = [...providers, "SMC"];
+        snapshot.providers = providers;
+        // Structure SMC clairement contre → pousse close/wait si règles étaient hold
+        if (smc.against && (action === "hold" || action === "wait")) {
+          if (smc.againstPosition.chochBos && smc.againstPosition.sweep) {
+            action = "close";
+            reason = `SMC contre ${opts.trade.side} (Sweep+BOS adverses) · ${reason}`;
+            outlook = `Structure SMC adverse — sortie ${opts.trade.side} recommandée.`;
+            snapshot.action = action;
+            snapshot.reason = reason.slice(0, 280);
+            snapshot.outlook = outlook.slice(0, 280);
+            snapshot.bullets = [
+              `À faire : clôturer le ${opts.trade.side} (SMC adverse)`,
+              ...(snapshot.bullets ?? []),
+            ].slice(0, 12);
+          }
+        }
+      }
+    } catch {
+      /* SMC optionnel */
+    }
+  }
+
+  return {
+    action: snapshot.action,
+    reason: snapshot.reason,
+    outlook: snapshot.outlook,
+    providers: snapshot.providers,
     aiUsed,
-    snapshot: buildSnapshot(
-      opts.trade,
-      opts.frames,
-      opts.price,
-      pnl,
-      action,
-      reason,
-      outlook,
-      providers,
-      currency,
-    ),
+    snapshot,
   };
 }
 

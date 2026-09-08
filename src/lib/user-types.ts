@@ -457,6 +457,18 @@ export interface TradeManageSnapshot {
    * viabilité, rebond/rechute, distance TP/SL, structure TF.
    */
   bullets?: string[];
+  /** Checklist SMC live (FVG / BOS / Sweep / ÔTE) pendant le trade. */
+  smc?: {
+    mtf: string;
+    marketSide: "long" | "short" | null;
+    sweep: boolean;
+    chochBos: boolean;
+    fvg: boolean;
+    ote: boolean;
+    fvgLabel: string | null;
+    oteLabel: string | null;
+    against: boolean;
+  } | null;
 }
 
 export interface BookTrade {

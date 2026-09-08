@@ -29,6 +29,26 @@ function actionClass(a: TradeManageSnapshot["action"]): string {
   }
 }
 
+function SmcChip({
+  label,
+  ok,
+}: {
+  label: string;
+  ok: boolean;
+}) {
+  return (
+    <span
+      className={`rounded border px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${
+        ok
+          ? "border-long/40 bg-long/10 text-long"
+          : "border-border/60 bg-muted/30 text-muted-foreground"
+      }`}
+    >
+      {label} {ok ? "✓" : "✗"}
+    </span>
+  );
+}
+
 type Props = {
   snapshot?: TradeManageSnapshot | null;
   /** Affiche le placeholder « relecture en cours » si pas encore de snapshot. */
@@ -47,8 +67,8 @@ export function TradeLiveReview({
   if (!s) {
     return (
       <div className="mt-2 rounded-lg border border-dashed border-white/10 bg-muted/10 px-2.5 py-2 text-[11px] text-muted-foreground">
-        Relecture en cours… PnL et structure (long/short) seront publiés ici dès
-        le prochain scan (~1 min).
+        Relecture en cours… PnL, FVG/BOS et structure seront publiés ici dès le
+        prochain scan (~1 min).
       </div>
     );
   }
@@ -58,6 +78,7 @@ export function TradeLiveReview({
     ageSec < 60 ? `${ageSec}s` : `${Math.round(ageSec / 60)} min`;
   const cur = s.currency ?? currency;
   const bullets = s.bullets?.length ? s.bullets : null;
+  const smc = s.smc;
 
   return (
     <div className="mt-2 space-y-1.5 rounded-lg border border-primary/20 bg-primary/5 px-2.5 py-2 text-[11px]">
@@ -73,10 +94,32 @@ export function TradeLiveReview({
         </span>
       </div>
       <p className="text-foreground/90">{s.outlook || s.reason}</p>
+      {smc ? (
+        <div className="flex flex-wrap gap-1">
+          <span className="rounded border border-border/50 px-1 py-0.5 text-[9px] text-muted-foreground">
+            MTF {smc.mtf}
+            {smc.marketSide ? ` · marché ${smc.marketSide}` : ""}
+          </span>
+          <SmcChip label="Sweep" ok={smc.sweep} />
+          <SmcChip label="BOS" ok={smc.chochBos} />
+          <SmcChip label="FVG" ok={smc.fvg} />
+          <SmcChip label="ÔTE" ok={smc.ote} />
+          {smc.against ? (
+            <span className="rounded border border-short/40 bg-short/10 px-1 py-0.5 text-[9px] font-semibold text-short">
+              Contre position
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+      {smc?.fvgLabel || smc?.oteLabel ? (
+        <p className="text-[10px] text-muted-foreground">
+          {[smc.fvgLabel, smc.oteLabel].filter(Boolean).join(" · ")}
+        </p>
+      ) : null}
       {bullets ? (
         <ul className="list-disc space-y-0.5 pl-4 text-muted-foreground">
           {bullets.map((b) => (
-            <li key={b.slice(0, 48)}>{b}</li>
+            <li key={b.slice(0, 64)}>{b}</li>
           ))}
         </ul>
       ) : null}

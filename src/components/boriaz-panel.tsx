@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { signedClass } from "@/lib/format";
 import { readResponseJson } from "@/lib/safe-json";
 import { TradeLiveReview } from "@/components/trade-live-review";
+import { LiveCloseButtons } from "@/components/live-close-buttons";
 import type { TradeManageSnapshot } from "@/lib/user-types";
 
 type LivePosition = {
@@ -282,6 +283,12 @@ export function BoriazPanel({ onOpenLab }: { onOpenLab?: () => void }) {
                         snapshot={p.manageSnapshot}
                         pending={!p.manageSnapshot}
                         currency="$"
+                      />
+                      <LiveCloseButtons
+                        coin={p.coin}
+                        side={p.side}
+                        unrealizedPnlUsd={p.unrealizedPnlUsd}
+                        onClosed={() => void load()}
                       />
                     </li>
                   ))}

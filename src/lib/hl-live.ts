@@ -1217,3 +1217,152 @@ export async function placeBoriazLiveTradeMirrored(
   return last;
 }
 
+/**
+ * Clôture manuelle d’une position LIVE (market reduce-only).
+ * Annule d’abord les TP/SL ouverts sur le coin, puis flatten.
+ */
+export async function closeLivePosition(opts: {
+  coin: string;
+  side?: LiveSide;
+  /** 1 = tout, 0.5 = moitié, etc. */
+  fraction?: number;
+}): Promise<{
+  ok: boolean;
+  reason?: string;
+  coin?: string;
+  side?: LiveSide;
+  sizeClosed?: string;
+  pnlUsd?: number;
+  raw?: unknown;
+}> {
+  const ready = isLiveEnvReady();
+  if (!ready.ok) {
+    return { ok: false, reason: ready.reason || "LIVE HL non prêt" };
+  }
+  const coin = String(opts.coin || "").trim().toUpperCase();
+  if (!coin) return { ok: false, reason: "coin requis" };
+
+  const fraction =
+    opts.fraction == null
+      ? 1
+      : Math.min(1, Math.max(0.01, Number(opts.fraction) || 1));
+
+  const cfg = getLiveConfig();
+  const portfolio = await fetchLivePortfolio();
+  if (!portfolio.ok) {
+    return { ok: false, reason: portfolio.reason || "Portfolio illisible" };
+  }
+
+  const pos = portfolio.positions.find(
+    (p) =>
+      p.coin.toUpperCase() === coin &&
+      (opts.side == null || p.side === opts.side),
+  );
+  if (!pos) {
+    return {
+      ok: false,
+      reason: opts.side
+        ? `Pas de position ${opts.side} ${coin} ouverte`
+        : `Pas de position ${coin} ouverte`,
+    };
+  }
+
+  const assets = await loadAssetMap(cfg.testnet);
+  const asset = assets.get(coin);
+  if (!asset) return { ok: false, reason: `Asset ${coin} inconnu sur HL` };
+
+  const info = new InfoClient({ transport: makeTransport(cfg.testnet) });
+  const client = getExchangeClient(cfg.testnet);
+  const mids = await info.allMids();
+  const mid = Number(mids[coin] ?? mids[pos.coin] ?? 0);
+  const px = mid > 0 ? mid : pos.entryPx;
+
+  try {
+    // Annuler TP/SL restants sur ce coin
+    try {
+      const opens = await info.frontendOpenOrders({
+        user: cfg.accountAddress as `0x${string}`,
+      });
+      const cancels = (opens ?? [])
+        .filter((o) => String(o.coin || "").toUpperCase() === coin)
+        .map((o) => ({ a: asset.id, o: Number(o.oid) }))
+        .filter((c) => Number.isFinite(c.o));
+      if (cancels.length) {
+        await client.cancel({ cancels });
+      }
+    } catch (e) {
+      console.info("closeLivePosition cancel", e);
+    }
+
+    const sizeAbs = Math.abs(pos.size) * fraction;
+    const closeSz = formatSz(sizeAbs, asset.szDecimals);
+    if (!closeSz || Number(closeSz) <= 0) {
+      return { ok: false, reason: "Taille à clôturer nulle" };
+    }
+
+    // Close long = sell ; close short = buy
+    const isBuy = pos.side === "short";
+    const closePx = aggressivePx(
+      pos.side === "long" ? "short" : "long",
+      px,
+      pos.entryPx,
+      asset.szDecimals,
+    );
+
+    const result = await client.order({
+      orders: [
+        {
+          a: asset.id,
+          b: isBuy,
+          p: closePx,
+          s: closeSz,
+          r: true,
+          t: { limit: { tif: "FrontendMarket" } },
+        },
+      ],
+      grouping: "na",
+    });
+
+    // Journal : fermer si flatten complet
+    try {
+      const {
+        loadLiveJournal,
+        matchJournalToPosition,
+        updateLiveJournalEntry,
+        syncLiveJournalWithPositions,
+      } = await import("./live-journal");
+      if (fraction >= 0.99) {
+        const open = (await loadLiveJournal()).filter((e) => e.status === "open");
+        const j = matchJournalToPosition(open, pos.coin, pos.side);
+        if (j) {
+          await updateLiveJournalEntry(j.id, {
+            status: "closed",
+            closedAt: Date.now(),
+          });
+        }
+        // Resync au cas où d’autres entrées orphelines
+        const after = await fetchLivePortfolio();
+        if (after.ok) {
+          await syncLiveJournalWithPositions(
+            after.positions.map((p) => ({ coin: p.coin, side: p.side })),
+          );
+        }
+      }
+    } catch (e) {
+      console.info("closeLivePosition journal", e);
+    }
+
+    return {
+      ok: true,
+      coin: pos.coin,
+      side: pos.side,
+      sizeClosed: closeSz,
+      pnlUsd: pos.unrealizedPnlUsd * fraction,
+      raw: result,
+    };
+  } catch (e) {
+    return { ok: false, reason: hlErrMessage(e) };
+  }
+}
+
+
