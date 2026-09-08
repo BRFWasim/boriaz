@@ -1,5 +1,6 @@
 import { bindUserRequest } from "@/lib/bind-request";
 import { manageOpenTrades } from "@/lib/manage-trades";
+import { manageLivePositionReviews } from "@/lib/manage-live-positions";
 import {
   aggregatePaperAccount,
   ensurePortfolios,
@@ -13,6 +14,7 @@ export const maxDuration = 90;
 /**
  * POST /api/manage
  * body: { fast?: boolean } — fast=true : relecture PnL+structure sans IA (poll UI ~45s)
+ * Relit paper + positions LIVE (advisory).
  */
 export async function POST(request: Request) {
   try {
@@ -29,6 +31,23 @@ export async function POST(request: Request) {
       skipAi: fast,
       max: fast ? 8 : 12,
     });
+    let live: Awaited<ReturnType<typeof manageLivePositionReviews>> | null =
+      null;
+    try {
+      live = await manageLivePositionReviews({
+        notify: !fast,
+        skipAi: fast,
+        max: fast ? 8 : 12,
+      });
+    } catch {
+      live = {
+        reviewed: 0,
+        decisions: [],
+        telegramSent: false,
+        aiUsed: false,
+        snapshots: {},
+      };
+    }
     const prefs = await loadPrefs();
     return Response.json({
       ...result,
@@ -37,6 +56,14 @@ export async function POST(request: Request) {
         result.trades ?? [],
         ensurePortfolios(prefs.portfolios),
       ),
+      live: live
+        ? {
+            reviewed: live.reviewed,
+            decisions: live.decisions,
+            snapshots: live.snapshots,
+            aiUsed: live.aiUsed,
+          }
+        : null,
       fetchedAt: Date.now(),
       mode: fast ? "fast" : "full",
     });

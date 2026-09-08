@@ -10,6 +10,7 @@ import {
   matchJournalToPosition,
   syncLiveJournalWithPositions,
 } from "@/lib/live-journal";
+import { loadLiveManageSnapshots } from "@/lib/manage-live-positions";
 import {
   botLabelFromPortfolio,
   tradeOutcomesUsd,
@@ -39,6 +40,7 @@ export async function GET() {
   let openJournal = await loadLiveJournal().then((all) =>
     all.filter((e) => e.status === "open"),
   );
+  const manageSnaps = await loadLiveManageSnapshots();
 
   if (portfolio.ok) {
     openJournal = await syncLiveJournalWithPositions(
@@ -46,6 +48,9 @@ export async function GET() {
     );
     positions = portfolio.positions.map((p) => {
       const j = matchJournalToPosition(openJournal, p.coin, p.side);
+      const snapKey = `${p.coin.toUpperCase()}:${p.side}`;
+      const manageSnapshot =
+        j?.manageSnapshot ?? manageSnaps[snapKey] ?? null;
       // Fallback paper (même coin+side) si journal manquant — bot / Si TP-SL
       const paper = !j
         ? paperOpen.find(
@@ -68,6 +73,7 @@ export async function GET() {
           slPnlUsd: null,
           riskUsd: null,
           paperId: null,
+          manageSnapshot,
         };
       }
 
@@ -94,6 +100,7 @@ export async function GET() {
           slPnlUsd: outcomes?.slPnlUsd ?? j.slPnlUsd ?? null,
           riskUsd: j.riskUsd,
           paperId: j.paperId ?? null,
+          manageSnapshot,
         };
       }
 
@@ -123,6 +130,7 @@ export async function GET() {
         slPnlUsd: outcomes.slPnlUsd,
         riskUsd: null,
         paperId: paper!.id,
+        manageSnapshot: manageSnapshot ?? paper!.manageSnapshot ?? null,
       };
     });
   }

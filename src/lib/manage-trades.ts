@@ -438,6 +438,77 @@ function buildSnapshot(
   };
 }
 
+/** Évalue un trade ouvert (paper ou stub live) → snapshot close/flip/wait/hold. */
+export async function evaluateTradeManage(opts: {
+  trade: PaperTrade;
+  frames: TimeframeFrame[];
+  price: number;
+  pnl: { pnlPct: number; pnlEur: number; movePct?: number };
+  skipAi?: boolean;
+  lastSnapshotAt?: number;
+}): Promise<{
+  action: ManageAction;
+  reason: string;
+  outlook: string;
+  providers: string[];
+  snapshot: TradeManageSnapshot;
+  aiUsed: boolean;
+}> {
+  const pnl = {
+    pnlPct: opts.pnl.pnlPct,
+    pnlEur: opts.pnl.pnlEur,
+    movePct: opts.pnl.movePct ?? opts.pnl.pnlPct / Math.max(1, opts.trade.leverage),
+  };
+  const det = deterministicDecision(opts.trade, opts.frames, opts.price, pnl);
+  let action = det.action;
+  let reason = det.reason;
+  let outlook = det.outlook;
+  let providers = ["règles+PnL"];
+  let aiUsed = false;
+
+  const lastAt = opts.lastSnapshotAt ?? 0;
+  const stale = Date.now() - lastAt > 3 * 60_000;
+  const critical = det.action === "close" || det.action === "flip";
+  if (!opts.skipAi && (stale || critical)) {
+    const ai = await aiDecision(opts.trade, opts.frames, opts.price, pnl);
+    if (ai) {
+      aiUsed = true;
+      if (ai.action === "close" || ai.action === "flip") {
+        action = ai.action;
+        reason = ai.reason;
+        providers = ai.providers;
+        outlook =
+          ai.action === "close"
+            ? "IA + structure : sortie recommandée."
+            : "IA + structure : retournement — bascule.";
+      } else if (det.action === "hold" || det.action === "wait") {
+        action = ai.action;
+        reason = `${det.reason} · ${ai.reason}`;
+        providers = [...ai.providers, "règles+PnL"];
+        outlook = det.outlook;
+      }
+    }
+  }
+
+  return {
+    action,
+    reason,
+    outlook,
+    providers,
+    aiUsed,
+    snapshot: buildSnapshot(
+      opts.trade,
+      opts.frames,
+      opts.price,
+      pnl,
+      action,
+      reason,
+      outlook,
+      providers,
+    ),
+  };
+}
+
 /**
  * Relit chaque trade ouvert : prix mid HL + TF + PnL live → close/flip/wait/hold.
  * skipAi=true : chemin rapide pour poll UI (règles + PnL, sans LLM).
@@ -484,48 +555,17 @@ export async function manageOpenTrades(opts?: {
     trade.pnlPct = pnl.pnlPct;
     trade.pnlEur = pnl.pnlEur;
 
-    const det = deterministicDecision(trade, frames, price, pnl);
-    let action = det.action;
-    let reason = det.reason;
-    let outlook = det.outlook;
-    let providers = ["règles+PnL"];
-
-    // IA seulement si pas skip, et (pas de snapshot récent < 3 min OU action critique)
-    const lastAt = trade.manageSnapshot?.at ?? 0;
-    const stale = Date.now() - lastAt > 3 * 60_000;
-    const critical = det.action === "close" || det.action === "flip";
-    if (!opts?.skipAi && (stale || critical)) {
-      const ai = await aiDecision(trade, frames, price, pnl);
-      if (ai) {
-        aiUsed = true;
-        // L’IA peut confirmer close/flip ; pour hold/wait on garde le plus prudent
-        if (ai.action === "close" || ai.action === "flip") {
-          action = ai.action;
-          reason = ai.reason;
-          providers = ai.providers;
-          outlook =
-            ai.action === "close"
-              ? "IA + structure : sortie recommandée."
-              : "IA + structure : retournement — bascule.";
-        } else if (det.action === "hold" || det.action === "wait") {
-          action = ai.action;
-          reason = `${det.reason} · ${ai.reason}`;
-          providers = [...ai.providers, "règles+PnL"];
-          outlook = det.outlook;
-        }
-      }
-    }
-
-    const snap = buildSnapshot(
+    const evaluated = await evaluateTradeManage({
       trade,
       frames,
       price,
       pnl,
-      action,
-      reason,
-      outlook,
-      providers,
-    );
+      skipAi: opts?.skipAi,
+      lastSnapshotAt: trade.manageSnapshot?.at,
+    });
+    if (evaluated.aiUsed) aiUsed = true;
+    const { action, reason, outlook, providers } = evaluated;
+    const snap = evaluated.snapshot;
     trade.manageSnapshot = snap;
 
     decisions.push({

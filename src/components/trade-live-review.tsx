@@ -1,6 +1,6 @@
 "use client";
 
-import type { PaperTrade, TradeManageSnapshot } from "@/lib/user-types";
+import type { TradeManageSnapshot } from "@/lib/user-types";
 import { formatParisDateTime } from "@/lib/format";
 
 function actionLabel(a: TradeManageSnapshot["action"]): string {
@@ -29,10 +29,21 @@ function actionClass(a: TradeManageSnapshot["action"]): string {
   }
 }
 
-/** Bloc analyse live sous chaque trade ouvert. */
-export function TradeLiveReview({ trade: t }: { trade: PaperTrade }) {
-  const s = t.manageSnapshot;
-  if (!s && t.status !== "open" && t.status !== "pending") return null;
+type Props = {
+  snapshot?: TradeManageSnapshot | null;
+  /** Affiche le placeholder « relecture en cours » si pas encore de snapshot. */
+  pending?: boolean;
+  /** Unité du PnL snapshot (paper = €, live = $). */
+  currency?: "€" | "$";
+};
+
+/** Bloc analyse live sous chaque trade / position ouverte. */
+export function TradeLiveReview({
+  snapshot: s,
+  pending = false,
+  currency = "€",
+}: Props) {
+  if (!s && !pending) return null;
   if (!s) {
     return (
       <div className="mt-2 rounded-lg border border-dashed border-white/10 bg-muted/10 px-2.5 py-2 text-[11px] text-muted-foreground">
@@ -63,7 +74,7 @@ export function TradeLiveReview({ trade: t }: { trade: PaperTrade }) {
         Spot {s.price} · PnL{" "}
         <span className={s.pnlEur >= 0 ? "text-long" : "text-short"}>
           {s.pnlEur >= 0 ? "+" : ""}
-          {s.pnlEur.toFixed(2)} € ({s.pnlPct >= 0 ? "+" : ""}
+          {s.pnlEur.toFixed(2)} {currency} ({s.pnlPct >= 0 ? "+" : ""}
           {s.pnlPct.toFixed(2)}%)
         </span>
         {" · "}1h {s.bias1h} / 4h {s.bias4h}
@@ -76,5 +87,22 @@ export function TradeLiveReview({ trade: t }: { trade: PaperTrade }) {
         {formatParisDateTime(s.at)} · {s.providers.join("+")}
       </p>
     </div>
+  );
+}
+
+/** Raccourci paper : lit `trade.manageSnapshot`. */
+export function PaperTradeLiveReview({
+  trade,
+}: {
+  trade: { status: string; manageSnapshot?: TradeManageSnapshot | null };
+}) {
+  const open = trade.status === "open" || trade.status === "pending";
+  if (!open && !trade.manageSnapshot) return null;
+  return (
+    <TradeLiveReview
+      snapshot={trade.manageSnapshot}
+      pending={open && !trade.manageSnapshot}
+      currency="€"
+    />
   );
 }

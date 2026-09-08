@@ -9,7 +9,7 @@ import { dataPath, ensureDataDir } from "./data-dir";
 import { kvBackend, kvGet, kvSet } from "./kv";
 import { persistUserId } from "./persist";
 import type { LiveSide } from "./hl-live";
-import type { PortfolioStrategy } from "./user-types";
+import type { PortfolioStrategy, TradeManageSnapshot } from "./user-types";
 import { botLabelFromPortfolio, tradeOutcomesUsd } from "./trade-outcomes";
 
 export type LiveJournalEntry = {
@@ -40,6 +40,8 @@ export type LiveJournalEntry = {
   entryOid?: number | null;
   tpOid?: number | null;
   slOid?: number | null;
+  /** Dernière relecture (PnL / conseil) — comme paper. */
+  manageSnapshot?: TradeManageSnapshot | null;
 };
 
 const mem = new Map<string, string>();

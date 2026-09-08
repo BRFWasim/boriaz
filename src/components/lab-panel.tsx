@@ -12,6 +12,7 @@ import type {
   PaperAccount,
   PaperTrade,
   PortfolioProfile,
+  TradeManageSnapshot,
   UserPrefs,
 } from "@/lib/user-types";
 import type { BacktestPayload } from "@/lib/backtest";
@@ -26,7 +27,10 @@ import {
 } from "@/lib/user-types";
 import { syncPaperFromBrowser, writeLocalPaper } from "@/lib/paper-local";
 import { readResponseJson } from "@/lib/safe-json";
-import { TradeLiveReview } from "@/components/trade-live-review";
+import {
+  PaperTradeLiveReview,
+  TradeLiveReview,
+} from "@/components/trade-live-review";
 
 const PREFS_LS_KEY = "boriazbot-prefs-v1";
 
@@ -97,6 +101,7 @@ export function LabPanel() {
       tpPnlUsd?: number | null;
       slPnlUsd?: number | null;
       riskUsd?: number | null;
+      manageSnapshot?: TradeManageSnapshot | null;
     }[];
   } | null>(null);
   const [smcBusy, setSmcBusy] = useState(false);
@@ -235,12 +240,28 @@ export function LabPanel() {
         const json = await readResponseJson<{
           trades?: PaperTrade[];
           account?: PaperAccount;
+          live?: {
+            snapshots?: Record<string, TradeManageSnapshot>;
+          };
         }>(res);
         if (res.ok && Array.isArray(json.trades)) {
           setPaper(json.trades);
           writeLocalPaper(json.trades);
         }
         if (json.account) setAccount(json.account);
+        // Rafraîchir positions live pour attacher les snapshots
+        if (res.ok) {
+          try {
+            const liveAcc = await fetch("/api/live-account").then((r) =>
+              readResponseJson<{
+                portfolio?: NonNullable<typeof livePortfolio>;
+              }>(r),
+            );
+            if (liveAcc?.portfolio) setLivePortfolio(liveAcc.portfolio);
+          } catch {
+            /* ignore */
+          }
+        }
       } catch {
         /* ignore */
       }
@@ -1025,6 +1046,11 @@ export function LabPanel() {
                           </span>
                         ) : null}
                       </p>
+                      <TradeLiveReview
+                        snapshot={p.manageSnapshot}
+                        pending={!p.manageSnapshot}
+                        currency="$"
+                      />
                     </li>
                   ))}
                 </ul>
@@ -1693,7 +1719,7 @@ export function LabPanel() {
                 </div>
                 </div>
                   {t.status === "open" || t.status === "pending" ? (
-                    <TradeLiveReview trade={t} />
+                    <PaperTradeLiveReview trade={t} />
                   ) : null}
                 <div className="w-full">
                   <PriceChart

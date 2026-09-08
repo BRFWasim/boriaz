@@ -21,7 +21,7 @@ import {
 import { syncPaperFromBrowser, writeLocalPaper } from "@/lib/paper-local";
 import { readResponseJson } from "@/lib/safe-json";
 import { PriceChart } from "@/components/price-chart";
-import { TradeLiveReview } from "@/components/trade-live-review";
+import { PaperTradeLiveReview } from "@/components/trade-live-review";
 
 const PREFS_LS_KEY = "boriazbot-prefs-v1";
 
@@ -1367,7 +1367,7 @@ function PortfolioTradeRow({
         />
       </div>
       {(t.status === "open" || t.status === "pending") && (
-        <TradeLiveReview trade={t} />
+        <PaperTradeLiveReview trade={t} />
       )}
       {(t.justification?.summary || t.note) && (
         <div className="mt-2">

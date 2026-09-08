@@ -39,6 +39,14 @@ export async function runCronWork(phase: CronPhase = "all"): Promise<{
       } catch (e) {
         manage.liveSmcError = e instanceof Error ? e.message : "liveSmc";
       }
+      try {
+        const { manageLivePositionReviews } = await import(
+          "@/lib/manage-live-positions"
+        );
+        manage.liveReview = await manageLivePositionReviews({ notify: true });
+      } catch (e) {
+        manage.liveReviewError = e instanceof Error ? e.message : "liveReview";
+      }
       const ids = await listUserIds(40);
       for (const id of ids) {
         setPersistUser(id);

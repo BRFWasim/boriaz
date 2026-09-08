@@ -4,6 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { signedClass } from "@/lib/format";
 import { readResponseJson } from "@/lib/safe-json";
+import { TradeLiveReview } from "@/components/trade-live-review";
+import type { TradeManageSnapshot } from "@/lib/user-types";
 
 type LivePosition = {
   coin: string;
@@ -19,6 +21,7 @@ type LivePosition = {
   tpPnlUsd?: number | null;
   slPnlUsd?: number | null;
   riskUsd?: number | null;
+  manageSnapshot?: TradeManageSnapshot | null;
 };
 
 type LiveHl = {
@@ -120,7 +123,27 @@ export function BoriazPanel({ onOpenLab }: { onOpenLab?: () => void }) {
   useEffect(() => {
     void load();
     const id = window.setInterval(() => void load(), 20_000);
-    return () => window.clearInterval(id);
+
+    async function reviewLiveFast() {
+      try {
+        await fetch("/api/manage", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ fast: true }),
+        });
+        await load();
+      } catch {
+        /* ignore */
+      }
+    }
+    const reviewSoon = window.setTimeout(() => void reviewLiveFast(), 8_000);
+    const reviewId = window.setInterval(() => void reviewLiveFast(), 45_000);
+
+    return () => {
+      window.clearInterval(id);
+      window.clearTimeout(reviewSoon);
+      window.clearInterval(reviewId);
+    };
   }, [load]);
 
   return (
@@ -255,6 +278,11 @@ export function BoriazPanel({ onOpenLab }: { onOpenLab?: () => void }) {
                             : "—"}
                         </span>
                       </p>
+                      <TradeLiveReview
+                        snapshot={p.manageSnapshot}
+                        pending={!p.manageSnapshot}
+                        currency="$"
+                      />
                     </li>
                   ))}
                 </ul>
