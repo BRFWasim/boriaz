@@ -3,7 +3,6 @@ import { manageOpenTrades } from "@/lib/manage-trades";
 import {
   aggregatePaperAccount,
   ensurePortfolios,
-  loadPaperTrades,
   loadPrefs,
 } from "@/lib/persist";
 
@@ -11,17 +10,35 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 export const maxDuration = 90;
 
-/** Relit chaque trade ouvert de l'utilisateur avec les 2 IA (+ repli règles). */
-export async function POST() {
+/**
+ * POST /api/manage
+ * body: { fast?: boolean } — fast=true : relecture PnL+structure sans IA (poll UI ~45s)
+ */
+export async function POST(request: Request) {
   try {
     await bindUserRequest();
-    const result = await manageOpenTrades({ notify: true });
-    const [prefs, trades] = await Promise.all([loadPrefs(), loadPaperTrades()]);
+    let fast = false;
+    try {
+      const body = (await request.json()) as { fast?: boolean };
+      fast = Boolean(body?.fast);
+    } catch {
+      /* no body */
+    }
+    const result = await manageOpenTrades({
+      notify: !fast,
+      skipAi: fast,
+      max: fast ? 8 : 12,
+    });
+    const prefs = await loadPrefs();
     return Response.json({
       ...result,
-      trades: trades.slice(0, 40),
-      account: aggregatePaperAccount(trades, ensurePortfolios(prefs.portfolios)),
+      trades: result.trades ?? [],
+      account: aggregatePaperAccount(
+        result.trades ?? [],
+        ensurePortfolios(prefs.portfolios),
+      ),
       fetchedAt: Date.now(),
+      mode: fast ? "fast" : "full",
     });
   } catch (e) {
     return Response.json(

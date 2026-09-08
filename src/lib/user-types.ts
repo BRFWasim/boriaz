@@ -424,6 +424,28 @@ export interface PaperTrade {
   portfolioId: string;
   portfolioName: string;
   justification: TradeJustification | null;
+  /**
+   * Dernière relecture live (manage) — PnL, conseil, niveaux.
+   * Mis à jour aussi souvent que possible (cron + poll UI).
+   */
+  manageSnapshot?: TradeManageSnapshot | null;
+}
+
+/** Snapshot affiché sous chaque trade ouvert. */
+export interface TradeManageSnapshot {
+  at: number;
+  action: "close" | "flip" | "wait" | "hold";
+  reason: string;
+  price: number;
+  pnlEur: number;
+  pnlPct: number;
+  bias1h: string;
+  bias4h: string;
+  support: number | null;
+  resistance: number | null;
+  providers: string[];
+  /** Conseil lisible FR. */
+  outlook: string;
 }
 
 export interface BookTrade {

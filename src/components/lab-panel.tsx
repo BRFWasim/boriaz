@@ -26,6 +26,7 @@ import {
 } from "@/lib/user-types";
 import { syncPaperFromBrowser, writeLocalPaper } from "@/lib/paper-local";
 import { readResponseJson } from "@/lib/safe-json";
+import { TradeLiveReview } from "@/components/trade-live-review";
 
 const PREFS_LS_KEY = "boriazbot-prefs-v1";
 
@@ -223,7 +224,35 @@ export function LabPanel() {
     }
     void syncPaperFromBrowser().then(() => void refresh());
     const id = window.setInterval(() => void refresh(), 12_000);
-    return () => window.clearInterval(id);
+
+    async function reviewFast() {
+      try {
+        const res = await fetch("/api/manage", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ fast: true }),
+        });
+        const json = await readResponseJson<{
+          trades?: PaperTrade[];
+          account?: PaperAccount;
+        }>(res);
+        if (res.ok && Array.isArray(json.trades)) {
+          setPaper(json.trades);
+          writeLocalPaper(json.trades);
+        }
+        if (json.account) setAccount(json.account);
+      } catch {
+        /* ignore */
+      }
+    }
+    const reviewSoon = window.setTimeout(() => void reviewFast(), 6_000);
+    const reviewId = window.setInterval(() => void reviewFast(), 45_000);
+
+    return () => {
+      window.clearInterval(id);
+      window.clearTimeout(reviewSoon);
+      window.clearInterval(reviewId);
+    };
   }, []);
 
   async function savePrefs(nextPrefs?: UserPrefs) {
@@ -1663,6 +1692,9 @@ export function LabPanel() {
                   ) : null}
                 </div>
                 </div>
+                  {t.status === "open" || t.status === "pending" ? (
+                    <TradeLiveReview trade={t} />
+                  ) : null}
                 <div className="w-full">
                   <PriceChart
                     coin={t.coin}

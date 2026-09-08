@@ -275,6 +275,7 @@ function normalizeTrade(raw: Partial<PaperTrade> & PaperTrade): PaperTrade {
     portfolioId: raw.portfolioId || "default",
     portfolioName: raw.portfolioName || "Défaut (sûr)",
     justification: raw.justification ?? null,
+    manageSnapshot: raw.manageSnapshot ?? null,
   };
 }
 

@@ -21,6 +21,7 @@ import {
 import { syncPaperFromBrowser, writeLocalPaper } from "@/lib/paper-local";
 import { readResponseJson } from "@/lib/safe-json";
 import { PriceChart } from "@/components/price-chart";
+import { TradeLiveReview } from "@/components/trade-live-review";
 
 const PREFS_LS_KEY = "boriazbot-prefs-v1";
 
@@ -202,10 +203,37 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
     void loadFull();
     const fullId = window.setInterval(() => void loadFull(), 60_000);
     const liveId = window.setInterval(() => void loadLive(), 4_000);
+
+    // Relecture rapide des trades ouverts (PnL + structure, sans IA lourde)
+    async function reviewOpenFast() {
+      try {
+        const res = await fetch("/api/manage", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ fast: true }),
+        });
+        if (!res.ok) return;
+        const json = await readResponseJson<{
+          trades?: PaperTrade[];
+          account?: PaperAccount;
+        }>(res);
+        if (Array.isArray(json.trades) && json.trades.length) {
+          mergePaper(json.trades);
+        }
+        if (json.account) setAccount(json.account);
+      } catch {
+        /* ignore — login / rate */
+      }
+    }
+    const reviewSoon = window.setTimeout(() => void reviewOpenFast(), 8_000);
+    const reviewId = window.setInterval(() => void reviewOpenFast(), 45_000);
+
     return () => {
       alive = false;
       window.clearInterval(fullId);
       window.clearInterval(liveId);
+      window.clearTimeout(reviewSoon);
+      window.clearInterval(reviewId);
     };
   }, []);
 
@@ -1338,6 +1366,9 @@ function PortfolioTradeRow({
           sl={t.sl}
         />
       </div>
+      {(t.status === "open" || t.status === "pending") && (
+        <TradeLiveReview trade={t} />
+      )}
       {(t.justification?.summary || t.note) && (
         <div className="mt-2">
           <button
