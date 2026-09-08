@@ -132,7 +132,7 @@ export const DEFAULT_PORTFOLIO: PortfolioProfile = {
   minRR: 1.5,
   targetEur: 200,
   maxLossEur: 150,
-  tradesPerDay: 0,
+  tradesPerDay: 5,
   timeframe: "4h",
   riskLevel: 2,
   requireAiGate: true,
@@ -155,7 +155,7 @@ export const BORIAZ_PORTFOLIO: PortfolioProfile = {
   minRR: 2,
   targetEur: 300,
   maxLossEur: 100,
-  tradesPerDay: 0,
+  tradesPerDay: 5,
   timeframe: "15m",
   riskLevel: 2,
   requireAiGate: false,
@@ -163,6 +163,14 @@ export const BORIAZ_PORTFOLIO: PortfolioProfile = {
   strategy: "smc",
   riskPct: 2,
 };
+
+/** 0 = illimité ; sinon 1–20. */
+export function clampTradesPerDay(n: unknown, fallback = 5): number {
+  const v = Number(n);
+  if (!Number.isFinite(v) || v < 0) return fallback;
+  if (v === 0) return 0;
+  return Math.min(20, Math.max(1, Math.floor(v)));
+}
 
 export function ensurePortfolios(
   list: PortfolioProfile[] | null | undefined,
@@ -177,8 +185,19 @@ export function ensurePortfolios(
       ...p,
       id: p.id,
       isDefault: p.id === "default" || p.isDefault === true,
-      // Illimité : une bonne opportunité = trade (plus de plafond /jour)
-      tradesPerDay: 0,
+      // Défaut/Boriaz : 5/jour (migration depuis l’ancien force-0). Autres : 0=illimité OK.
+      tradesPerDay:
+        p.id === "boriaz" || p.id === "default"
+          ? Math.max(
+              1,
+              clampTradesPerDay(
+                p.tradesPerDay === 0 || p.tradesPerDay == null
+                  ? 5
+                  : p.tradesPerDay,
+                5,
+              ),
+            )
+          : clampTradesPerDay(p.tradesPerDay, 5),
       strategy:
         p.id === "boriaz"
           ? "smc"
@@ -269,7 +288,7 @@ export function makeCustomPortfolio(
     minRR: partial?.minRR ?? 1.2,
     targetEur: partial?.targetEur ?? (scalp ? 40 : 150),
     maxLossEur: partial?.maxLossEur ?? (scalp ? 30 : 200),
-    tradesPerDay: partial?.tradesPerDay ?? 0,
+    tradesPerDay: clampTradesPerDay(partial?.tradesPerDay, 5),
     timeframe: partial?.timeframe ?? "1h",
     riskLevel: partial?.riskLevel ?? (scalp ? 3 : 3),
     requireAiGate: partial?.requireAiGate ?? true,

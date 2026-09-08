@@ -19,11 +19,15 @@ let scanCache: { key: string; at: number; value: SmcScanResult } | null = null;
 export interface SmcScanResult {
   setups: SmcSetup[];
   best: SmcSetup | null;
+  /** Setups actionnables (checklist OK) avant gate IA. */
+  actionable: SmcSetup[];
   aiApproved: boolean;
   aiNote: string | null;
   aiReport: string | null;
   model: string;
   fetchedAt: number;
+  /** Combien de candidats ont été testés au gate. */
+  gatedTried: number;
 }
 
 type GateResult = {
@@ -34,24 +38,37 @@ type GateResult = {
   provider: string;
 };
 
+function minGateConfidence(setup: SmcSetup): number {
+  // Shorts structurels : seuil un peu plus bas (modèles trop « bull-biased »)
+  if (
+    setup.order?.side === "short" &&
+    setup.bias.d1 === "baissier" &&
+    setup.checklist.allPass
+  ) {
+    return 58;
+  }
+  return 62;
+}
+
 function parseGateJson(
   text: string,
   setup: SmcSetup,
   provider: string,
 ): GateResult {
-  const match = text.match(/\{[\s\S]*\}/);
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
   let approved = false;
   let confidence = 0;
   let note = `Réponse ${provider} illisible`;
-  if (match) {
+  if (jsonMatch) {
     try {
-      const obj = JSON.parse(match[0]) as Record<string, unknown>;
+      const obj = JSON.parse(jsonMatch[0]) as Record<string, unknown>;
       approved = Boolean(obj.approve);
       confidence = Number(obj.confidence ?? 0);
       note = String(obj.note || "");
-      if (approved && confidence < 62) {
+      const minConf = minGateConfidence(setup);
+      if (approved && confidence < minConf) {
         approved = false;
-        note = note || `Confiance ${provider} < 62 — bloqué.`;
+        note = note || `Confiance ${provider} < ${minConf} — bloqué.`;
       }
     } catch {
       approved = false;
@@ -78,15 +95,17 @@ function parseGateJson(
 }
 
 function smcGatePrompt(setup: SmcSetup): string {
+  const side = setup.order?.side?.toUpperCase() ?? "?";
   return `${BORIAZ_SMC_SYSTEM_PROMPT}
 
 Coin: ${setup.coin}
+Sens proposé: ${side}
 Prix: ${setup.price}
 Analyse déterministe déjà calculée (à valider ou corriger) :
 
 ${setup.report}
 
-Si TOUTE la checklist 6/6 est VALIDÉE et le statut est ORDRE PRÊT ou EN ATTENTE DE RETRACEMENT, approve=true.
+Si TOUTE la checklist structure est VALIDÉE et le statut est ORDRE PRÊT ou EN ATTENTE DE RETRACEMENT, approve=true — y compris pour un SHORT baissier.
 Sinon approve=false.
 Réponds d'abord avec le format [ANALYSE...] complet, puis UNE ligne JSON : {"approve":true|false,"confidence":0-100,"note":"..."}`;
 }
@@ -98,91 +117,47 @@ async function askClaudeSmcGate(setup: SmcSetup): Promise<GateResult | null> {
   /*
   const anthropic = process.env.ANTHROPIC_API_KEY?.trim();
   if (!anthropic) return null;
-
-  const prompt = smcGatePrompt(setup);
-  try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key": anthropic,
-        "anthropic-version": "2023-06-01",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: process.env.ANTHROPIC_MODEL?.trim() || CLAUDE_MODEL,
-        max_tokens: 1200,
-        messages: [{ role: "user", content: prompt }],
-      }),
-    });
-    const json = (await res.json()) as {
-      content?: { type: string; text?: string }[];
-      error?: { message?: string };
-    };
-    if (!res.ok) {
-      return {
-        approved: false,
-        confidence: 0,
-        note: json.error?.message || `Claude HTTP ${res.status}`,
-        report: setup.report,
-        provider: "claude",
-      };
-    }
-    const text =
-      json.content?.find((c) => c.type === "text")?.text?.trim() || "";
-    return parseGateJson(text, setup, "Claude");
-  } catch (e) {
-    return {
-      approved: false,
-      confidence: 0,
-      note: e instanceof Error ? e.message : "Erreur Claude",
-      report: setup.report,
-      provider: "claude",
-    };
-  }
+  ...
   */
 }
 
 async function askGptSmcGate(setup: SmcSetup): Promise<GateResult | null> {
-  const openai = process.env.OPENAI_API_KEY?.trim();
-  if (!openai) return null;
-
-  const prompt = smcGatePrompt(setup);
+  const key = process.env.OPENAI_API_KEY?.trim();
+  if (!key) return null;
+  const model = process.env.OPENAI_MODEL?.trim() || GPT_MODEL_DEFAULT;
   try {
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${openai}`,
+        Authorization: `Bearer ${key}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: process.env.OPENAI_MODEL?.trim() || GPT_MODEL_DEFAULT,
-        temperature: 0.2,
-        max_tokens: 1200,
+        model,
+        temperature: 0.1,
+        max_tokens: 1400,
         messages: [
-          {
-            role: "system",
-            content:
-              "Tu valides des setups SMC crypto. Réponds en FR. JSON approve à la fin.",
-          },
-          { role: "user", content: prompt },
+          { role: "system", content: BORIAZ_SMC_SYSTEM_PROMPT },
+          { role: "user", content: smcGatePrompt(setup) },
         ],
       }),
+      signal: AbortSignal.timeout(45_000),
     });
-    const json = (await res.json()) as {
-      choices?: { message?: { content?: string } }[];
-      error?: { message?: string };
-    };
     if (!res.ok) {
+      const errTxt = await res.text().catch(() => "");
       return {
         approved: false,
         confidence: 0,
-        note: json.error?.message || `ChatGPT HTTP ${res.status}`,
+        note: `ChatGPT HTTP ${res.status} ${errTxt.slice(0, 80)}`,
         report: setup.report,
         provider: "chatgpt",
       };
     }
-    const text = json.choices?.[0]?.message?.content?.trim() || "";
-    return parseGateJson(text, setup, "ChatGPT");
+    const json = (await res.json()) as {
+      choices?: { message?: { content?: string } }[];
+    };
+    const text = json.choices?.[0]?.message?.content || "";
+    return parseGateJson(text, setup, "chatgpt");
   } catch (e) {
     return {
       approved: false,
@@ -196,7 +171,6 @@ async function askGptSmcGate(setup: SmcSetup): Promise<GateResult | null> {
 
 /**
  * Validation Boriaz : ChatGPT uniquement.
- * Claude Haiku reste commenté / désactivé.
  * Sans OPENAI_API_KEY → gate mécanique checklist.
  */
 async function runSmcAiGates(setup: SmcSetup): Promise<{
@@ -207,9 +181,8 @@ async function runSmcAiGates(setup: SmcSetup): Promise<{
   confidence: number;
 }> {
   const gpt = await askGptSmcGate(setup);
-  // --- Claude Haiku désactivé (commenté) ---
-  // const claude = await askClaudeSmcGate(setup);
-  // const gates = [gpt, claude].filter(Boolean) as GateResult[];
+  void askClaudeSmcGate;
+  void CLAUDE_MODEL;
   const gates = [gpt].filter(Boolean) as GateResult[];
 
   if (!gates.length) {
@@ -227,8 +200,7 @@ async function runSmcAiGates(setup: SmcSetup): Promise<{
 
   const approved = gates.every((g) => g.approved);
   const notes = gates.map((g) => `${g.provider}: ${g.note}`).join(" · ");
-  const report =
-    gates.find((g) => g.report)?.report || setup.report;
+  const report = gates.find((g) => g.report)?.report || setup.report;
   const confidence = Math.max(...gates.map((g) => g.confidence), 0);
   const model = gates.map((g) => g.provider).join("+");
 
@@ -241,6 +213,39 @@ async function runSmcAiGates(setup: SmcSetup): Promise<{
     model,
     confidence,
   };
+}
+
+/** Ordre des candidats : meilleur, meilleur côté opposé, puis suivants. */
+function pickGateCandidates(actionable: SmcSetup[]): SmcSetup[] {
+  if (!actionable.length) return [];
+  const out: SmcSetup[] = [];
+  const seen = new Set<string>();
+  const push = (s: SmcSetup | undefined) => {
+    if (!s?.order) return;
+    const k = `${s.coin}:${s.order.side}`;
+    if (seen.has(k)) return;
+    seen.add(k);
+    out.push(s);
+  };
+  push(actionable[0]);
+  const topSide = actionable[0]?.order?.side;
+  if (topSide) {
+    push(actionable.find((s) => s.order?.side && s.order.side !== topSide));
+  }
+  // Favoriser un short structurel s’il n’est pas déjà en tête
+  push(
+    actionable.find(
+      (s) =>
+        s.order?.side === "short" &&
+        s.bias.d1 === "baissier" &&
+        s.checklist.allPass,
+    ),
+  );
+  for (const s of actionable) {
+    if (out.length >= 4) break;
+    push(s);
+  }
+  return out;
 }
 
 export async function scanSmcWatchlist(input: {
@@ -281,7 +286,12 @@ export async function scanSmcWatchlist(input: {
           ]);
           const exec =
             m15.length >= 40 ? m15 : m30.length >= 30 ? m30 : m15;
-          if (d1.length < 30 || h4.length < 30 || h1.length < 30 || exec.length < 25) {
+          if (
+            d1.length < 30 ||
+            h4.length < 30 ||
+            h1.length < 30 ||
+            exec.length < 25
+          ) {
             return null;
           }
           const price =
@@ -317,38 +327,58 @@ export async function scanSmcWatchlist(input: {
     )
     .sort((a, b) => b.confidence - a.confidence);
 
-  const best =
+  let best: SmcSetup | null =
     actionable[0] ??
-    setups.sort((a, b) => b.confidence - a.confidence)[0] ??
+    setups.slice().sort((a, b) => b.confidence - a.confidence)[0] ??
     null;
 
   let aiApproved = false;
   let aiNote: string | null = null;
   let aiReport: string | null = null;
   let model = "mechanical-smc";
+  let gatedTried = 0;
 
-  if (best && best.checklist.allPass && best.order) {
-    const gate = await runSmcAiGates(best);
-    aiApproved = gate.approved;
+  const candidates = pickGateCandidates(actionable);
+  const refusals: string[] = [];
+
+  for (const cand of candidates) {
+    if (!cand.order || !cand.checklist.allPass) continue;
+    gatedTried += 1;
+    const gate = await runSmcAiGates(cand);
+    if (gate.approved) {
+      best = cand;
+      aiApproved = true;
+      aiNote = gate.note;
+      aiReport = gate.report;
+      model = gate.model;
+      if (gate.report) cand.report = gate.report;
+      cand.confidence = Math.max(cand.confidence, gate.confidence);
+      break;
+    }
+    refusals.push(
+      `${cand.coin} ${cand.order.side}: ${gate.note}`.slice(0, 120),
+    );
     aiNote = gate.note;
     aiReport = gate.report;
     model = gate.model;
-    if (gate.report) best.report = gate.report;
-    if (gate.approved) {
-      best.confidence = Math.max(best.confidence, gate.confidence);
-    }
-  } else if (best) {
+  }
+
+  if (!aiApproved && candidates.length) {
+    aiNote = `Aucun candidat validé (${gatedTried}) — ${refusals.slice(0, 3).join(" · ")}`;
+  } else if (!candidates.length && best) {
     aiNote = best.cancelReason || "Setup SMC non actionnable";
   }
 
   const value: SmcScanResult = {
     setups: setups.sort((a, b) => b.confidence - a.confidence),
     best,
+    actionable,
     aiApproved,
     aiNote,
     aiReport,
     model,
     fetchedAt: Date.now(),
+    gatedTried,
   };
   scanCache = { key: cacheKey, at: Date.now(), value };
   return value;

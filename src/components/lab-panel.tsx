@@ -299,7 +299,7 @@ export function LabPanel() {
             riskLevel: 3,
             maxLeverage: 2,
             minRR: 1.2,
-            tradesPerDay: 0,
+            tradesPerDay: 8,
             sizePct: 1,
             riskPct: 0.25,
             maxLossEur: 30,
@@ -314,7 +314,7 @@ export function LabPanel() {
               riskLevel: 4,
               maxLeverage: 5,
               minRR: 1.8,
-              tradesPerDay: 0,
+              tradesPerDay: 5,
               sizePct: 8,
               maxLossEur: 120,
               targetEur: 250,
@@ -328,7 +328,7 @@ export function LabPanel() {
               riskLevel: 2,
               maxLeverage: 2,
               minRR: 2,
-              tradesPerDay: 0,
+              tradesPerDay: 3,
               sizePct: 10,
               maxSafetyMode: true,
               liveTradeEnabled: false,
@@ -1275,13 +1275,19 @@ export function LabPanel() {
                     <Input
                       type="number"
                       min={0}
-                      max={0}
-                      disabled
-                      value={0}
-                      title="Illimité : le bot prend chaque bonne opportunité"
+                      max={20}
+                      value={pf.tradesPerDay}
+                      onChange={(e) =>
+                        updatePortfolio(pf.id, {
+                          tradesPerDay: Math.min(
+                            20,
+                            Math.max(0, Math.floor(Number(e.target.value) || 0)),
+                          ),
+                        })
+                      }
                     />
                     <p className="mt-1 text-[10px] text-muted-foreground">
-                      Plus de plafond journalier — analyses inchangées.
+                      Défaut 5 — le bot s’arrête après N ouvertures / 24 h.
                     </p>
                   </div>
                   <div>

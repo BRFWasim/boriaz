@@ -490,9 +490,13 @@ export function analyzeSmcSetup(input: {
   const h1 = trendFromStructure(input.candlesH1, 40);
   const exec = trendFromStructure(input.candlesExec, 30);
 
-  // MTF : D1 mène ; H4 aligné OU neutre (pas contraire)
+  // MTF : D1 mène ; H4 aligné OU neutre.
+  // Soft SHORT : D1+H1 baissiers même si H4 encore un peu haussier (transition baissière).
   const mtfAligned =
-    d1 !== "neutre" && (h4 === d1 || h4 === "neutre");
+    d1 !== "neutre" &&
+    (h4 === d1 ||
+      h4 === "neutre" ||
+      (d1 === "baissier" && h1 === "baissier"));
   const side: SmcSide | null = mtfAligned
     ? d1 === "haussier"
       ? "long"
@@ -606,6 +610,15 @@ export function analyzeSmcSetup(input: {
   if (checklist.fvg) confidence += 8;
   if (checklist.ote) confidence += 8;
   if (checklist.allPass) confidence += 10;
+  // Bonus short bien confirmé (évite le biais long-only des marchés crypto)
+  if (
+    side === "short" &&
+    d1 === "baissier" &&
+    h1 === "baissier" &&
+    checklist.allPass
+  ) {
+    confidence += 4;
+  }
   confidence = Math.min(95, confidence);
 
   const setup: SmcSetup = {
@@ -645,5 +658,6 @@ Règles :
 3. Risque exact 2% du solde wallet
 4. SL sous swing low (long) / au-dessus swing high (short)
 5. TP1 = 1R (clôturer 50% + BE), TP2 = 2R (50% restants)
-6. PAS un conseil financier. FR uniquement.
-7. Réponds UNIQUEMENT avec le format d'analyse SMC demandé, puis un JSON compact sur une ligne : {"approve":true|false,"confidence":0-100}`;
+6. SHORTS : si D1 baissier (+ H4 baissier ou neutre, ou H1 baissier en transition) et checklist structure OK, approve=true. Ne refuse PAS un short valide juste parce que le récit macro crypto est « bullish ». Long et short sont égaux.
+7. PAS un conseil financier. FR uniquement.
+8. Réponds UNIQUEMENT avec le format d'analyse SMC demandé, puis un JSON compact sur une ligne : {"approve":true|false,"confidence":0-100}`;

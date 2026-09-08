@@ -1167,8 +1167,16 @@ export async function getTradeSignals(options?: {
         return { ok: false, why: `Perte max ${pf.maxLossEur} € atteinte` };
       }
     }
-    // Plus de plafond trades/jour : dès qu’une bonne opportunité passe les
-    // analyses (alignement / SMC), on prend le trade (0 = illimité).
+    if (pf.tradesPerDay > 0) {
+      const today = paperForCheck.filter(
+        (t) =>
+          (t.portfolioId || "default") === pf.id &&
+          Date.now() - t.openedAt < 24 * 3600_000,
+      ).length;
+      if (today >= pf.tradesPerDay) {
+        return { ok: false, why: `Limite ${pf.tradesPerDay} trades/jour` };
+      }
+    }
     return { ok: true, why: "OK" };
   }
 
@@ -1421,6 +1429,14 @@ export async function getTradeSignals(options?: {
           pf.bankrollEur - acc.equityEur >= pf.maxLossEur
         ) {
           continue;
+        }
+        if (pf.tradesPerDay > 0) {
+          const today = paperForCheck.filter(
+            (t) =>
+              (t.portfolioId || "default") === pf.id &&
+              Date.now() - t.openedAt < 24 * 3600_000,
+          ).length;
+          if (today >= pf.tradesPerDay) continue;
         }
 
         const justification: TradeJustification = {
