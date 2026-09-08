@@ -343,8 +343,10 @@ async function aiDecision(
   frames: TimeframeFrame[],
   price: number,
   pnl: { pnlPct: number; pnlEur: number },
+  currency: "€" | "$" = "€",
 ): Promise<{ action: ManageAction; reason: string; providers: string[] } | null> {
   const ind = (frames.find((f) => f.interval === "1h") ?? frames[0])?.indicators;
+  const u = unitLabel(currency);
   const ctx = {
     coin: trade.coin,
     side: trade.side,
@@ -353,19 +355,22 @@ async function aiDecision(
     tp: trade.tp,
     sl: trade.sl,
     pnlPct: Math.round(pnl.pnlPct * 100) / 100,
-    pnlEur: Math.round(pnl.pnlEur * 100) / 100,
+    pnl: Math.round(pnl.pnlEur * 100) / 100,
+    currency: u,
     tf: frames.map((f) => ({ i: f.interval, bias: f.bias, score: f.score })),
     rsi1h: ind?.rsi14 ?? null,
     resistance: ind?.resistance ?? null,
     support: ind?.support ?? null,
   };
-  const prompt = `Tu gères un trade paper OUVERT avec PnL live. FR. PAS un conseil financier.
+  const prompt = `Tu gères un trade OUVERT (${trade.side.toUpperCase()} — long OU short, même rigueur). PnL live en ${u}. FR. PAS un conseil financier.
+Analyse EN DIRECT pendant le trade (comme avant l'entrée, mais pour décider maintenant) :
+viabilité du setup, rebond (long) ou rechute (short), zones S/R, alignement 15m/1h/4h.
 Actions:
-- "close" : sortir (setup mort, zone majeure, perte qui empire, TP proche)
-- "flip" : sortir + sens inverse (retournement 1h+4h)
+- "close" : sortir (setup mort, zone majeure, perte qui empire, TP proche) — long ET short
+- "flip" : sortir + sens inverse (retournement 1h+4h confirmé)
 - "wait" : garder, attendre confirmation
-- "hold" : laisser courir (rebond/rechute encore probable dans le sens du trade)
-JSON: {"action":"close|flip|wait|hold","reason":"1 phrase avec PnL"}
+- "hold" : laisser courir (rebond/rechute encore probable DANS le sens du trade)
+JSON: {"action":"close|flip|wait|hold","reason":"1 phrase avec PnL ${u} et le côté ${trade.side}"}
 Trade: ${JSON.stringify(ctx)}`;
 
   const opinions: { provider: string; action: ManageAction; reason: string }[] = [];
@@ -409,6 +414,115 @@ async function loadMids(): Promise<Record<string, number>> {
   }
 }
 
+function unitLabel(currency: "€" | "$"): string {
+  return currency === "$" ? "$" : "€";
+}
+
+/**
+ * Analyse pendant le trade (long ET short) — même esprit que la justification
+ * pré-entrée : viabilité, structure, rebond/rechute, distance TP/SL.
+ */
+export function buildManageBullets(
+  trade: PaperTrade,
+  frames: TimeframeFrame[],
+  price: number,
+  pnl: { pnlPct: number; pnlEur: number },
+  action: ManageAction,
+  currency: "€" | "$" = "€",
+): string[] {
+  const u = unitLabel(currency);
+  const f15 = frames.find((f) => f.interval === "15m");
+  const f1h = frames.find((f) => f.interval === "1h") ?? frames[0];
+  const f4h = frames.find((f) => f.interval === "4h") ?? f1h;
+  const ind = f1h?.indicators;
+  const s1h = f1h ? sideFromBias(f1h.bias, f1h.score) : "wait";
+  const s4h = f4h ? sideFromBias(f4h.bias, f4h.score) : "wait";
+  const aligned =
+    (trade.side === "long" && s1h !== "short" && s4h !== "short") ||
+    (trade.side === "short" && s1h !== "long" && s4h !== "long");
+  const against =
+    s1h !== "wait" &&
+    s4h !== "wait" &&
+    s1h === s4h &&
+    ((trade.side === "long" && s1h === "short") ||
+      (trade.side === "short" && s1h === "long"));
+
+  const toTp = distPct(price, trade.tp);
+  const toSl = distPct(price, trade.sl);
+  const res = ind
+    ? [ind.resistance, ind.bbUpper]
+        .filter((v): v is number => v != null && v > 0 && v >= price)
+        .sort((a, b) => a - b)[0]
+    : undefined;
+  const sup = ind
+    ? [ind.support, ind.bbLower]
+        .filter((v): v is number => v != null && v > 0 && v <= price)
+        .sort((a, b) => b - a)[0]
+    : undefined;
+
+  const bullets: string[] = [
+    `${trade.side.toUpperCase()} ${trade.coin} · PnL ${pnl.pnlEur >= 0 ? "+" : ""}${pnl.pnlEur.toFixed(2)} ${u} (${pnl.pnlPct >= 0 ? "+" : ""}${pnl.pnlPct.toFixed(2)}%) · levier ${trade.leverage}×`,
+    `Multi-TF 15m/1h/4h : ${f15?.bias ?? "—"} / ${f1h?.bias ?? "—"} / ${f4h?.bias ?? "—"}`,
+    against
+      ? `Structure CONTRE le ${trade.side} (1h+4h alignés adverses) — viabilité faible`
+      : aligned
+        ? `Structure encore AVEC le ${trade.side} — setup vivant`
+        : `Structure mixte — ${trade.side} en surveillance`,
+  ];
+
+  if (trade.side === "long") {
+    if (sup != null) {
+      const d = ((price - sup) / price) * 100;
+      bullets.push(
+        d <= 0.8
+          ? `Rebond long encore probable près support ~${sup.toFixed(4)} (−${d.toFixed(2)}%)`
+          : `Support ~${sup.toFixed(4)} (−${d.toFixed(2)}%) — rebond moins immédiat`,
+      );
+    }
+    if (res != null) {
+      const d = ((res - price) / price) * 100;
+      bullets.push(
+        d <= 0.6
+          ? `Résistance ~${res.toFixed(4)} proche (+${d.toFixed(2)}%) — risque de rejet / take profit`
+          : `Résistance ~${res.toFixed(4)} (+${d.toFixed(2)}%)`,
+      );
+    }
+  } else {
+    if (res != null) {
+      const d = ((res - price) / price) * 100;
+      bullets.push(
+        d <= 0.8
+          ? `Rechute short encore probable sous résistance ~${res.toFixed(4)} (+${d.toFixed(2)}%)`
+          : `Résistance ~${res.toFixed(4)} (+${d.toFixed(2)}%) — rejet moins immédiat`,
+      );
+    }
+    if (sup != null) {
+      const d = ((price - sup) / price) * 100;
+      bullets.push(
+        d <= 0.6
+          ? `Support ~${sup.toFixed(4)} proche (−${d.toFixed(2)}%) — risque de rebond / take profit short`
+          : `Support ~${sup.toFixed(4)} (−${d.toFixed(2)}%)`,
+      );
+    }
+  }
+
+  bullets.push(
+    `Distance TP ${(toTp * 100).toFixed(2)}% · SL ${(toSl * 100).toFixed(2)}% (entry ${trade.entry} → spot ${price})`,
+  );
+
+  const actionHint =
+    action === "close"
+      ? `À faire : clôturer le ${trade.side} (sécuriser / couper)`
+      : action === "flip"
+        ? `À faire : sortir le ${trade.side} puis envisager le sens inverse`
+        : action === "wait"
+          ? `À faire : attendre confirmation multi-TF avant de bouger`
+          : `À faire : laisser courir le ${trade.side} — rebond/rechute encore possible dans le sens`;
+  bullets.push(actionHint);
+
+  return bullets.slice(0, 8);
+}
+
 function buildSnapshot(
   trade: PaperTrade,
   frames: TimeframeFrame[],
@@ -418,27 +532,35 @@ function buildSnapshot(
   reason: string,
   outlook: string,
   providers: string[],
+  currency: "€" | "$" = "€",
 ): TradeManageSnapshot {
+  const f15 = frames.find((f) => f.interval === "15m");
   const f1h = frames.find((f) => f.interval === "1h") ?? frames[0];
   const f4h = frames.find((f) => f.interval === "4h") ?? f1h;
   const ind = f1h?.indicators;
+  const u = unitLabel(currency);
+  const reasonU = reason.replace(/ €/g, ` ${u}`).replace(/euros?/gi, u);
   return {
     at: Date.now(),
     action,
-    reason: reason.slice(0, 280),
+    reason: reasonU.slice(0, 280),
     price,
     pnlEur: Math.round(pnl.pnlEur * 100) / 100,
     pnlPct: Math.round(pnl.pnlPct * 100) / 100,
     bias1h: f1h?.bias ?? "neutre",
     bias4h: f4h?.bias ?? "neutre",
+    bias15m: f15?.bias ?? undefined,
     support: ind?.support ?? null,
     resistance: ind?.resistance ?? null,
     providers,
     outlook: outlook.slice(0, 280),
+    side: trade.side,
+    currency,
+    bullets: buildManageBullets(trade, frames, price, pnl, action, currency),
   };
 }
 
-/** Évalue un trade ouvert (paper ou stub live) → snapshot close/flip/wait/hold. */
+/** Évalue un trade ouvert (paper ou stub live, long OU short) → snapshot. */
 export async function evaluateTradeManage(opts: {
   trade: PaperTrade;
   frames: TimeframeFrame[];
@@ -446,6 +568,7 @@ export async function evaluateTradeManage(opts: {
   pnl: { pnlPct: number; pnlEur: number; movePct?: number };
   skipAi?: boolean;
   lastSnapshotAt?: number;
+  currency?: "€" | "$";
 }): Promise<{
   action: ManageAction;
   reason: string;
@@ -454,6 +577,7 @@ export async function evaluateTradeManage(opts: {
   snapshot: TradeManageSnapshot;
   aiUsed: boolean;
 }> {
+  const currency = opts.currency ?? "€";
   const pnl = {
     pnlPct: opts.pnl.pnlPct,
     pnlEur: opts.pnl.pnlEur,
@@ -470,7 +594,13 @@ export async function evaluateTradeManage(opts: {
   const stale = Date.now() - lastAt > 3 * 60_000;
   const critical = det.action === "close" || det.action === "flip";
   if (!opts.skipAi && (stale || critical)) {
-    const ai = await aiDecision(opts.trade, opts.frames, opts.price, pnl);
+    const ai = await aiDecision(
+      opts.trade,
+      opts.frames,
+      opts.price,
+      pnl,
+      currency,
+    );
     if (ai) {
       aiUsed = true;
       if (ai.action === "close" || ai.action === "flip") {
@@ -479,8 +609,8 @@ export async function evaluateTradeManage(opts: {
         providers = ai.providers;
         outlook =
           ai.action === "close"
-            ? "IA + structure : sortie recommandée."
-            : "IA + structure : retournement — bascule.";
+            ? `IA + structure : sortie ${opts.trade.side} recommandée.`
+            : `IA + structure : retournement — bascule depuis ${opts.trade.side}.`;
       } else if (det.action === "hold" || det.action === "wait") {
         action = ai.action;
         reason = `${det.reason} · ${ai.reason}`;
@@ -505,6 +635,7 @@ export async function evaluateTradeManage(opts: {
       reason,
       outlook,
       providers,
+      currency,
     ),
   };
 }
@@ -662,6 +793,13 @@ export async function manageOpenTrades(opts?: {
               resistance: ind?.resistance ?? null,
               providers,
               outlook: "Nouveau trade après retournement — laisser se poser.",
+              side: oppSide,
+              currency: "€",
+              bullets: [
+                `${oppSide.toUpperCase()} ${trade.coin} · bascule depuis ${trade.side.toUpperCase()}`,
+                "Surveillance active — même analyse live long/short au prochain scan",
+                "À faire : laisser se poser puis relecture PnL + structure",
+              ],
             },
           };
           list.unshift(flipTrade);

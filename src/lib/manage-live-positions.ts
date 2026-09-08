@@ -257,18 +257,16 @@ export async function manageLivePositionReviews(opts?: {
       pnl: { pnlPct, pnlEur: pnlUsd, movePct },
       skipAi: opts?.skipAi,
       lastSnapshotAt: lastAt,
+      currency: "$",
     });
     if (evaluated.aiUsed) aiUsed = true;
 
-    // Remplacer le PnL du snapshot par le PnL HL exact
     const snapshot: TradeManageSnapshot = {
       ...evaluated.snapshot,
       pnlEur: Math.round(pnlUsd * 100) / 100,
       pnlPct: Math.round(pnlPct * 100) / 100,
-      reason: evaluated.snapshot.reason
-        .replace(/ €/g, " $")
-        .replace(/euros?/gi, "$"),
-      outlook: evaluated.snapshot.outlook,
+      currency: "$",
+      side: pos.side,
     };
 
     if (j) {

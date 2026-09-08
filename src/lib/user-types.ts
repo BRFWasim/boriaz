@@ -431,21 +431,32 @@ export interface PaperTrade {
   manageSnapshot?: TradeManageSnapshot | null;
 }
 
-/** Snapshot affiché sous chaque trade ouvert. */
+/** Snapshot affiché sous chaque trade ouvert (paper € ou live $). */
 export interface TradeManageSnapshot {
   at: number;
   action: "close" | "flip" | "wait" | "hold";
   reason: string;
   price: number;
+  /** PnL monétaire (paper = €, live = $ — voir currency). */
   pnlEur: number;
   pnlPct: number;
   bias1h: string;
   bias4h: string;
+  bias15m?: string;
   support: number | null;
   resistance: number | null;
   providers: string[];
   /** Conseil lisible FR. */
   outlook: string;
+  /** long | short — analyse valable pour les deux sens. */
+  side?: "long" | "short";
+  /** Unité affichée (défaut €). */
+  currency?: "€" | "$";
+  /**
+   * Points d’analyse en direct (comme avant l’entrée, mais pendant le trade) :
+   * viabilité, rebond/rechute, distance TP/SL, structure TF.
+   */
+  bullets?: string[];
 }
 
 export interface BookTrade {
