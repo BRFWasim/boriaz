@@ -68,7 +68,7 @@ function sanitizePortfolio(raw: Record<string, unknown>): PortfolioProfile | nul
           ? scalpLiveRiskPct(Number(raw.riskPct) || undefined)
           : Math.min(5, Math.max(0.5, Number(raw.riskPct) || 2)),
   };
-  // LIVE : Défaut + Boriaz + Scalp. Risqué = jamais.
+  // LIVE : Boriaz uniquement. Défaut / Scalp / Risqué = paper.
   if (isRiskyPortfolio(draft) || !portfolioAllowsLive(draft)) {
     draft.liveTradeEnabled = false;
   }

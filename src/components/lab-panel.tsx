@@ -314,7 +314,7 @@ export function LabPanel() {
 
   function updatePortfolio(id: string, patch: Partial<PortfolioProfile>) {
     if (!prefs) return;
-    // LIVE : Défaut + Boriaz + Scalp. Risqué / autres forcé paper-only.
+    // LIVE : seul Boriaz autorisé. Défaut / Scalp / autres = paper only.
     const target = ensurePortfolios(prefs.portfolios).find((p) => p.id === id);
     const allowsLive = target ? portfolioAllowsLive(target) : false;
     const finalPatch =
@@ -862,13 +862,11 @@ export function LabPanel() {
                   void savePrefs(next);
                 }}
               />
-              LIVE master (Défaut / Scalp toggles) — Boriaz paper → live miroir
+              LIVE master (legacy — n’active plus Défaut/Scalp)
             </label>
             <p className="text-[11px] text-muted-foreground sm:col-span-2">
-              LIVE réel : <strong>Défaut</strong>, <strong>Boriaz</strong>,{" "}
-              <strong>Scalp</strong> (petites mises ~0,25 % equity).{" "}
-              <strong>Risqué</strong> = paper only, jamais HL. Scalp se
-              désactive via sa case LIVE HL ci-dessous. Kill-switch env{" "}
+              LIVE réel : <strong>Boriaz uniquement</strong> (SMC). Défaut /
+              Scalp / Risqué = paper only, jamais HL. Kill-switch env{" "}
               <code className="text-[10px]">HL_LIVE_ENABLED</code> obligatoire.
             </p>
           </div>
@@ -1169,19 +1167,9 @@ export function LabPanel() {
                           }
                         />
                         LIVE HL
-                        {pf.id === "default" ? (
-                          <span className="text-[10px] text-muted-foreground">
-                            (Défaut)
-                          </span>
-                        ) : pf.id === "boriaz" ? (
-                          <span className="text-[10px] text-muted-foreground">
-                            (Boriaz)
-                          </span>
-                        ) : isScalpPortfolio(pf) ? (
-                          <span className="text-[10px] text-muted-foreground">
-                            (Scalp · petites mises)
-                          </span>
-                        ) : null}
+                        <span className="text-[10px] text-muted-foreground">
+                          (Boriaz seul · illimité)
+                        </span>
                       </label>
                     ) : (
                       <span className="text-[10px] text-muted-foreground">
@@ -1202,10 +1190,10 @@ export function LabPanel() {
                 </div>
                 {pf.strategy === "smc" ? (
                   <p className="mt-2 text-xs text-muted-foreground">
-                    Bot SMC : D1→H4→H1→M15 · paper size sur capital simu · LIVE =
-                    2% du solde HL réel · TP1 1R (50 %+BE) · TP2 2R · gate
-                    ChatGPT (Claude off).
-                  </p>
+              Bot SMC : LONG D1+H4 · SHORT counter-trend M5/M15/M30
+              (sweep+CHoCH/BOS+FVG+ÔTE) · 2 % wallet · TP1 1R 50 %+BE ·
+              TP2 2R · LIVE Boriaz illimité · gate ChatGPT.
+            </p>
                 ) : null}
                 {(() => {
                   const acc = computePaperAccount(paper, pf.bankrollEur, pf.id);
@@ -1423,10 +1411,10 @@ export function LabPanel() {
           <div>
             <h3 className="font-medium">Boriaz · Smart Money Concepts</h3>
             <p className="mt-1 text-sm text-muted-foreground">
-              Analyse top-down D1→H4→H1→M15. Entrée si structure SMC (sweep /
-              BOS + ÔTE, FVG recommandé). Risque exact 2 %. TP1 1R (50 %+
-              break-even) puis TP2 2R. Gate IA :{" "}
-              <code className="text-xs">ChatGPT</code> (Claude commenté / off).
+              LONG : D1+H4 haussiers. SHORT : counter-trend M5/M15/M30 si
+              sweep + CHoCH/BOS + FVG + ÔTE (0.618–0.786). Risque exact 2 %.
+              TP1 1R (50 %+BE) · TP2 2R. LIVE Boriaz illimité. Gate :{" "}
+              <code className="text-xs">ChatGPT</code>.
             </p>
           </div>
           <Button

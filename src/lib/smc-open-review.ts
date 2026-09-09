@@ -76,6 +76,7 @@ export async function reviewOpenTradeSmc(opts: {
       candlesExec: m15,
       walletEur: opts.walletEur ?? 1000,
       maxLeverage: 3,
+      execTimeframe: "15m",
     });
 
     const opp: SmcSide = opts.side === "long" ? "short" : "long";
@@ -116,9 +117,14 @@ export async function reviewOpenTradeSmc(opts: {
       fvg: Boolean(againstFvg),
     };
 
+    const signalHint = setup.signalType
+      ? ` · signal ${setup.signalType}`
+      : "";
     const bullets: string[] = [
       `SMC MTF D1/H4/H1 : ${setup.bias.d1}/${setup.bias.h4}/${setup.bias.h1}${
-        marketSide ? ` · biais marché ${marketSide.toUpperCase()}` : " · MTF neutre"
+        marketSide
+          ? ` · biais marché ${marketSide.toUpperCase()}${signalHint}`
+          : " · MTF neutre"
       }`,
       `Dans le sens ${opts.side.toUpperCase()} : Sweep ${mark(withPos.sweep)} · CHoCH+BOS ${mark(withPos.chochBos)} · FVG ${mark(withPos.fvg)} · ÔTE ${mark(withPos.ote)}`,
     ];

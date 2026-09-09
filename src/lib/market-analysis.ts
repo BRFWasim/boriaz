@@ -24,6 +24,7 @@ import type {
 } from "./types";
 
 export type CandleInterval =
+  | "5m"
   | "15m"
   | "30m"
   | "1h"
@@ -39,6 +40,7 @@ function fmtPx(px: number): string {
 }
 
 const INTERVAL_MS: Record<CandleInterval, number> = {
+  "5m": 5 * 60_000,
   "15m": 15 * 60_000,
   "30m": 30 * 60_000,
   "1h": 3600_000,
@@ -49,6 +51,7 @@ const INTERVAL_MS: Record<CandleInterval, number> = {
 
 /** Combien de bougies charger par TF (≥220 pour EMA200, 1w plus court). */
 const LOOKBACK: Record<CandleInterval, number> = {
+  "5m": 200,
   "15m": 200,
   "30m": 200,
   "1h": 260,

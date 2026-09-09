@@ -9,7 +9,7 @@ export interface PortfolioProfile {
   isDefault: boolean;
   enabled: boolean;
   paperTradeEnabled: boolean;
-  /** LIVE Hyperliquid — Boriaz / Scalp / Défaut si activé (requires HL_LIVE_ENABLED env). */
+  /** LIVE Hyperliquid — Boriaz uniquement (requires HL_LIVE_ENABLED env). */
   liveTradeEnabled: boolean;
   bankrollEur: number;
   maxLeverage: number;
@@ -52,16 +52,14 @@ export function isRiskyPortfolio(
 }
 
 /**
- * LIVE HL autorisé uniquement pour : Défaut, Boriaz, Scalp.
- * Risqué / Swing / autres = paper only.
+ * LIVE HL autorisé UNIQUEMENT pour Boriaz (SMC).
+ * Défaut / Scalp / Risqué / autres = paper only.
  */
 export function portfolioAllowsLive(
   p: Pick<PortfolioProfile, "id" | "name"> | null | undefined,
 ): boolean {
   if (!p) return false;
-  if (isRiskyPortfolio(p)) return false;
-  if (p.id === "default" || p.id === "boriaz") return true;
-  return isScalpPortfolio(p);
+  return p.id === "boriaz";
 }
 
 /** Risque live Scalp plafonné très bas (petites mises). */
@@ -155,7 +153,7 @@ export const BORIAZ_PORTFOLIO: PortfolioProfile = {
   minRR: 2,
   targetEur: 300,
   maxLossEur: 100,
-  tradesPerDay: 5,
+  tradesPerDay: 0,
   timeframe: "15m",
   riskLevel: 2,
   requireAiGate: false,
@@ -185,19 +183,24 @@ export function ensurePortfolios(
       ...p,
       id: p.id,
       isDefault: p.id === "default" || p.isDefault === true,
-      // Défaut/Boriaz : 5/jour (migration depuis l’ancien force-0). Autres : 0=illimité OK.
+      // Boriaz : 0 = illimité. Défaut : 5/jour (migration). Autres : 0=illimité OK.
       tradesPerDay:
-        p.id === "boriaz" || p.id === "default"
-          ? Math.max(
-              1,
-              clampTradesPerDay(
-                p.tradesPerDay === 0 || p.tradesPerDay == null
-                  ? 5
-                  : p.tradesPerDay,
-                5,
-              ),
+        p.id === "boriaz"
+          ? clampTradesPerDay(
+              p.tradesPerDay == null ? 0 : p.tradesPerDay,
+              0,
             )
-          : clampTradesPerDay(p.tradesPerDay, 5),
+          : p.id === "default"
+            ? Math.max(
+                1,
+                clampTradesPerDay(
+                  p.tradesPerDay === 0 || p.tradesPerDay == null
+                    ? 5
+                    : p.tradesPerDay,
+                  5,
+                ),
+              )
+            : clampTradesPerDay(p.tradesPerDay, 5),
       strategy:
         p.id === "boriaz"
           ? "smc"
@@ -222,8 +225,8 @@ export function ensurePortfolios(
       ...d,
       isDefault: true,
       enabled: true,
-      // LIVE possible si master + toggle Lab (plus forcé paper-only)
-      liveTradeEnabled: Boolean(d.liveTradeEnabled),
+      // LIVE uniquement Boriaz — Défaut forcé paper
+      liveTradeEnabled: false,
     });
   }
   // Boriaz toujours présent (SMC)
@@ -238,23 +241,23 @@ export function ensurePortfolios(
       name: b.name?.trim() || "Boriaz",
       strategy: "smc",
       riskPct: 2,
+      tradesPerDay: clampTradesPerDay(
+        b.tradesPerDay == null ? 0 : b.tradesPerDay,
+        0,
+      ),
       isDefault: false,
       liveTradeEnabled: Boolean(b.liveTradeEnabled),
     });
   }
   // Ordre : défaut, boriaz, puis les autres
-  // LIVE HL : Défaut + Boriaz + Scalp (toggle). Risqué / reste = paper only.
+  // LIVE HL : Boriaz uniquement. Tout le reste = paper only.
   const rest = [...byId.values()]
     .filter((p) => p.id !== "default" && p.id !== "boriaz")
     .map((p) => {
-      if (isRiskyPortfolio(p) || !portfolioAllowsLive(p)) {
-        return { ...p, liveTradeEnabled: false };
-      }
-      // Scalp : petites mises (paper + live)
       if (isScalpPortfolio(p)) {
         return {
           ...p,
-          liveTradeEnabled: Boolean(p.liveTradeEnabled),
+          liveTradeEnabled: false,
           riskPct: scalpLiveRiskPct(p.riskPct),
           sizePct: Math.min(2, Math.max(0.5, Number(p.sizePct) || 1)),
           maxLeverage: Math.min(3, Math.max(1, Number(p.maxLeverage) || 2)),

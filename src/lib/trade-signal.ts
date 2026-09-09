@@ -1268,93 +1268,7 @@ export async function getTradeSignals(options?: {
         justification,
         strategy: "alignment",
       });
-      // LIVE Hyperliquid — Défaut / Boriaz / Scalp (toggle Lab).
-      // Risqué & autres = jamais. Scalp = petites mises (riskPct ~0.25%).
-      if (
-        opened &&
-        !opened.note.includes("Cash insuffisant") &&
-        portfolioAllowsLive(pf) &&
-        (pf.id === "boriaz" ||
-          (prefs.liveTradeEnabled && pf.liveTradeEnabled))
-      ) {
-        try {
-          const { placeBoriazLiveTrade, placeBoriazLiveTradeMirrored } =
-            await import("./hl-live");
-          const { loadPaperTrades, savePaperTrades } = await import("./persist");
-          const scalp = isScalpPortfolio(pf);
-          const place =
-            pf.id === "boriaz"
-              ? placeBoriazLiveTradeMirrored
-              : placeBoriazLiveTrade;
-          const liveRiskPct = scalp
-            ? scalpLiveRiskPct(pf.riskPct)
-            : (pf.riskPct ?? 2);
-          // Scalp : taille paper déjà petite ; live = riskPct minuscule (pas miroir plein)
-          const live = await place({
-            coin: chosen.coin,
-            side,
-            entry: chosen.entry!,
-            tp: chosen.tp!,
-            sl: chosen.sl!,
-            leverage: scalp ? Math.min(levNum, 3) : levNum,
-            riskPct: liveRiskPct,
-            entryMode:
-              chosen.entryMode === "limit_wait" ? "limit_wait" : "market_now",
-            paperId: opened.id,
-            portfolioId: pf.id,
-            portfolioName: pf.name,
-            strategy: "alignment",
-            paperMarginEur: scalp
-              ? Math.min(opened.marginEur, pf.bankrollEur * 0.01)
-              : opened.marginEur,
-            paperBankrollEur: pf.bankrollEur,
-            mirrorPaper: pf.id === "boriaz",
-          });
-          if (live.ok) {
-            const bot = live.botLabel || pf.name;
-            const tpTxt =
-              live.tpPnlUsd != null ? ` · si TP ${live.tpPnlUsd >= 0 ? "+" : ""}${live.tpPnlUsd.toFixed(2)}$` : "";
-            const slTxt =
-              live.slPnlUsd != null ? ` · si SL ${live.slPnlUsd >= 0 ? "+" : ""}${live.slPnlUsd.toFixed(2)}$` : "";
-            opened.note = `${opened.note} · LIVE HL [${bot}] size=${live.size} entryOid=${live.entryOid ?? "?"}${tpTxt}${slTxt}`;
-            try {
-              const all = await loadPaperTrades();
-              const row = all.find((t) => t.id === opened.id);
-              if (row) {
-                row.note = opened.note;
-                await savePaperTrades(all);
-              }
-            } catch {
-              /* ignore */
-            }
-            if (notify && !hush) {
-              await sendTelegramMessage(
-                [
-                  `LIVE ${pf.name.toUpperCase()} · ${side.toUpperCase()} ${chosen.coin}`,
-                  `Size ${live.size} · entryOid ${live.entryOid ?? "—"}`,
-                  live.tpPnlUsd != null
-                    ? `Si TP ${live.tpPnlUsd >= 0 ? "+" : ""}${live.tpPnlUsd.toFixed(2)}$ · Si SL ${live.slPnlUsd != null && live.slPnlUsd >= 0 ? "+" : ""}${(live.slPnlUsd ?? 0).toFixed(2)}$`
-                    : live.reason
-                      ? `Sizing: ${live.reason}`
-                      : "Sizing: 2% equity HL",
-                  "Ordre réel Hyperliquid — vérifie sur l’app HL.",
-                ].join("\n"),
-              );
-            }
-          } else if (!live.skipped) {
-            console.error("LIVE alignment order failed", live.reason);
-            if (notify && !hush) {
-              await sendTelegramMessage(
-                `LIVE ${pf.name} ÉCHEC · ${chosen.coin}: ${live.reason || "erreur"}`,
-              );
-            }
-          } else {
-            console.info("LIVE alignment skipped", live.reason);
-          }
-        } catch (e) {
-          console.error("LIVE alignment exception", e);
-        }
-      }
+      // LIVE : uniquement Boriaz SMC (plus bas). Défaut / Scalp = paper only.
 
       if (opened && !opened.note.includes("Cash insuffisant")) {
         anyOpened = true;
@@ -1442,22 +1356,27 @@ export async function getTradeSignals(options?: {
         const justification: TradeJustification = {
           summary: `SMC Boriaz ${setup.order.side.toUpperCase()} ${setup.coin} · structure OK · risque ${setup.risk.riskPct}% · gate ChatGPT`,
           bullets: [
-            `Stratégie SMC top-down D1→H4→H1→M15`,
+            `Stratégie SMC Boriaz · exec ${setup.execTimeframe ?? "15m"}`,
+            setup.signalType === "short_counter_trend"
+              ? "SHORT counter-trend M5/M15/M30 (D1/H4 non bloquants)"
+              : setup.signalType === "long_aligned"
+                ? "LONG aligné D1+H4 haussiers"
+                : `Signal ${setup.signalType ?? setup.order.side}`,
             `MTF ${setup.bias.d1}/${setup.bias.h4}/${setup.bias.h1}`,
             setup.liquidityLevel != null
               ? `Liquidity sweep @ ${setup.liquidityLevel}`
               : setup.checklist.liquiditySweep
                 ? "Liquidity sweep validé"
-                : "Sweep soft / BOS",
-            setup.checklist.chochBos ? "CHoCH + BOS" : "Structure soft",
+                : "Sweep manquant",
+            setup.checklist.chochBos ? "CHoCH + BOS validé" : "CHoCH/BOS manquant",
             setup.fvg
               ? `FVG ${setup.fvg.low}–${setup.fvg.high}`
-              : "FVG optionnel",
+              : "FVG manquant",
             setup.ote
               ? `ÔTE ${setup.ote.low}–${setup.ote.high} (idéal ${setup.ote.ideal})`
-              : "ÔTE",
-            `Risque ${setup.risk.riskEur.toFixed(2)} € (2%) · notionnel ${setup.risk.notionalEur} €`,
-            `TP1 1R 50%+BE · TP2 2R`,
+              : "ÔTE manquant",
+            `Risque ${setup.risk.riskEur.toFixed(2)} $ (2%) · notionnel ${setup.risk.notionalEur} $`,
+            `TP1 1R 50%+BE · TP2 2R · trades/jour illimités`,
             smcScan.aiNote || "Gate ChatGPT",
           ],
           alignmentScore: setup.confidence,

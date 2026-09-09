@@ -86,6 +86,15 @@ export interface SmcSetup {
   confidence: number;
   report: string;
   price: number;
+  /** TF d’exécution utilisée (M5 / M15 / M30). */
+  execTimeframe?: "5m" | "15m" | "30m" | null;
+  /** LONG aligné macro vs SHORT counter-trend petite TF. */
+  signalType?:
+    | "long_aligned"
+    | "short_aligned"
+    | "short_counter_trend"
+    | null;
+  counterTrend?: boolean;
 }
 
 const EQUAL_TOL = 0.002; // 0.20 % equal highs/lows
@@ -355,6 +364,8 @@ export function buildSmcOrder(input: {
   fvg: FairValueGap | null;
   impulseHigh: number;
   impulseLow: number;
+  /** Niveau exact du sweep (mèche) — SL sous/au-dessus. */
+  sweepLevel?: number | null;
 }): SmcOrderParams {
   const { side, price, ote, fvg, impulseHigh, impulseLow } = input;
   let entry = ote.ideal;
@@ -368,17 +379,22 @@ export function buildSmcOrder(input: {
   }
 
   const buffer = Math.abs(impulseHigh - impulseLow) * 0.05;
+  const sweep = input.sweepLevel != null && input.sweepLevel > 0
+    ? input.sweepLevel
+    : null;
   let sl: number;
   let tp1: number;
   let tp2: number;
 
   if (side === "long") {
-    sl = impulseLow - buffer;
+    // SL sous la mèche du sweep bas
+    sl = (sweep != null ? Math.min(sweep, impulseLow) : impulseLow) - buffer;
     const risk = entry - sl;
     tp1 = entry + risk; // 1R
     tp2 = entry + risk * 2; // 2R
   } else {
-    sl = impulseHigh + buffer;
+    // SL au-dessus de la mèche du sweep haut
+    sl = (sweep != null ? Math.max(sweep, impulseHigh) : impulseHigh) + buffer;
     const risk = sl - entry;
     tp1 = entry - risk;
     tp2 = entry - risk * 2;
@@ -414,20 +430,38 @@ function fmt(px: number): string {
 export function formatSmcReport(setup: SmcSetup): string {
   const b = setup.bias;
   const c = setup.checklist;
-  const align =
-    c.mtfAligned && c.h1Aligned ? "VALIDE" : "NON ALIGNÉ";
+  const execLabel =
+    setup.execTimeframe === "5m"
+      ? "M5"
+      : setup.execTimeframe === "30m"
+        ? "M30"
+        : "M15";
+  const signalLabel =
+    setup.signalType === "long_aligned"
+      ? "LONG Alignée"
+      : setup.signalType === "short_counter_trend"
+        ? "SHORT Counter-Trend Validé"
+        : setup.signalType === "short_aligned"
+          ? "SHORT Alignée"
+          : setup.side
+            ? setup.side.toUpperCase()
+            : "—";
+  const d1Label =
+    b.d1 === "haussier" ? "Haussière" : b.d1 === "baissier" ? "Baissière" : "Neutre";
+  const h4Label =
+    b.h4 === "haussier" ? "Haussière" : b.h4 === "baissier" ? "Baissière" : "Neutre";
+
   const lines = [
-    "[ANALYSE MULTI-TIMEFRAME (TOP-DOWN)]",
+    "[ANALYSE TIMEFRAME]",
     "",
-    `Tendance Daily (D1) : ${b.d1 === "haussier" ? "Haussière" : b.d1 === "baissier" ? "Baissière" : "Neutre"}`,
-    `Structure H4 : ${b.h4 === "haussier" ? "Haussière" : b.h4 === "baissier" ? "Baissière" : "Neutre"}`,
-    `Tendance H1 : ${b.h1 === "haussier" ? "Haussière" : b.h1 === "baissier" ? "Baissière" : "Neutre"}`,
-    `Alignement MTF : ${align}`,
+    `Tendance Daily (D1) / H4 : ${d1Label} / ${h4Label}`,
+    `Timeframe d'Exécution : ${execLabel}`,
+    `Type de Signal : ${signalLabel}`,
     "",
     "",
-    "[CHECKLIST SMC (M30/M15)]",
+    `[CHECKLIST SMC (${execLabel})]`,
     "",
-    `Prise de liquidité : ${c.liquiditySweep ? `VALIDE (${setup.liquidityLevel != null ? fmt(setup.liquidityLevel) : "niveau local"})` : "NON VALIDE"}`,
+    `Liquidity Sweep : ${c.liquiditySweep ? `VALIDE (${setup.liquidityLevel != null ? fmt(setup.liquidityLevel) : "niveau local"})` : "NON VALIDE"}`,
     `CHoCH / BOS : ${c.chochBos ? "VALIDE" : "NON VALIDE"}`,
     `FVG identifié : ${c.fvg && setup.fvg ? `VALIDE (${fmt(setup.fvg.low)} – ${fmt(setup.fvg.high)})` : "NON VALIDE"}`,
     `Zone ÔTE (0.618 - 0.786) : ${c.ote && setup.ote ? `VALIDE (${fmt(setup.ote.low)} – ${fmt(setup.ote.high)})` : "NON VALIDE"}`,
@@ -439,13 +473,16 @@ export function formatSmcReport(setup: SmcSetup): string {
 
   if (setup.risk) {
     lines.push(
-      `Solde du Wallet : ${setup.risk.walletEur.toLocaleString("fr-FR")} €`,
-      `Capital Risqué (${setup.risk.riskPct}%) : ${setup.risk.riskEur.toFixed(2)} €`,
+      `Capital Risqué (${setup.risk.riskPct}%) : ${setup.risk.riskEur.toFixed(2)} $`,
       `Distance SL (%) : ${setup.risk.slDistancePct.toFixed(2)}%`,
-      `Taille globale de la position : ${setup.risk.notionalEur.toLocaleString("fr-FR")} €`,
+      `Taille de la position : ${setup.risk.notionalEur.toLocaleString("fr-FR")} $`,
     );
   } else {
-    lines.push("Solde du Wallet : —", "Capital Risqué (2%) : —", "Distance SL (%) : —", "Taille globale de la position : —");
+    lines.push(
+      "Capital Risqué (2%) : —",
+      "Distance SL (%) : —",
+      "Taille de la position : —",
+    );
   }
 
   lines.push("", "", "[PARAMÈTRES DE L'ORDRE]", "");
@@ -454,16 +491,16 @@ export function formatSmcReport(setup: SmcSetup): string {
       `Type d'ordre : ${setup.order.entryMode === "limit_wait" ? "LIMIT" : "MARKET"} ${setup.order.side.toUpperCase()}`,
       `Prix d'entrée (Entry) : ${fmt(setup.order.entry)}`,
       `Stop Loss Initial (SL) : ${fmt(setup.order.sl)}`,
-      `TP1 (R:R 1:1 - Clôture 50% + Passage BE) : ${fmt(setup.order.tp1)}`,
-      `TP2 Final (R:R 2:1 - Solde restant 50%) : ${fmt(setup.order.tp2)}`,
+      `TP1 (R:R 1:1 - Clôture 50% + BE) : ${fmt(setup.order.tp1)}`,
+      `TP2 Final (R:R 2:1) : ${fmt(setup.order.tp2)}`,
     );
   } else {
     lines.push(
       "Type d'ordre : —",
       "Prix d'entrée (Entry) : —",
       "Stop Loss Initial (SL) : —",
-      "TP1 (R:R 1:1 - Clôture 50% + Passage BE) : —",
-      "TP2 Final (R:R 2:1 - Solde restant 50%) : —",
+      "TP1 (R:R 1:1 - Clôture 50% + BE) : —",
+      "TP2 Final (R:R 2:1) : —",
     );
   }
 
@@ -475,125 +512,198 @@ export function formatSmcReport(setup: SmcSetup): string {
   return lines.join("\n");
 }
 
+function evaluateSideOnExec(input: {
+  side: SmcSide;
+  candlesExec: Candle[];
+  price: number;
+  walletEur: number;
+  maxLeverage: number;
+}): {
+  liquiditySweep: boolean;
+  liquidityLevel: number | null;
+  chochBos: boolean;
+  fvg: FairValueGap | null;
+  ote: OteZone | null;
+  order: SmcOrderParams | null;
+  risk: SmcRiskPlan | null;
+  impulseHigh: number;
+  impulseLow: number;
+} {
+  const liq = detectLiquiditySweep(input.candlesExec, input.side);
+  const bos = detectChochBos(input.candlesExec, input.side);
+  let impulseHigh = bos.impulseHigh;
+  let impulseLow = bos.impulseLow;
+  const fvg = detectFvg(input.candlesExec, input.side);
+
+  if ((!bos.ok || impulseHigh <= impulseLow) && liq.ok) {
+    const win = input.candlesExec.slice(-20);
+    impulseHigh = Math.max(...win.map((c) => c.h));
+    impulseLow = Math.min(...win.map((c) => c.l));
+  }
+
+  let ote: OteZone | null = null;
+  if (impulseHigh > impulseLow) {
+    ote = computeOte(input.side, impulseHigh, impulseLow);
+  }
+
+  let order: SmcOrderParams | null = null;
+  let risk: SmcRiskPlan | null = null;
+  if (liq.ok && bos.ok && fvg && ote) {
+    order = buildSmcOrder({
+      side: input.side,
+      price: input.price,
+      ote,
+      fvg,
+      impulseHigh,
+      impulseLow,
+      sweepLevel: liq.level,
+    });
+    risk = computeSmcRiskPlan({
+      walletEur: input.walletEur,
+      entry: order.entry,
+      sl: order.sl,
+      maxLeverage: input.maxLeverage,
+      riskPct: 2,
+    });
+  }
+
+  return {
+    liquiditySweep: liq.ok,
+    liquidityLevel: liq.level,
+    chochBos: bos.ok,
+    fvg,
+    ote,
+    order,
+    risk,
+    impulseHigh,
+    impulseLow,
+  };
+}
+
 export function analyzeSmcSetup(input: {
   coin: string;
   price: number;
   candlesD1: Candle[];
   candlesH4: Candle[];
   candlesH1: Candle[];
-  candlesExec: Candle[]; // M15 ou M30
+  candlesExec: Candle[];
   walletEur: number;
   maxLeverage?: number;
+  execTimeframe?: "5m" | "15m" | "30m";
 }): SmcSetup {
   const d1 = trendFromStructure(input.candlesD1, 60);
   const h4 = trendFromStructure(input.candlesH4, 40);
   const h1 = trendFromStructure(input.candlesH1, 40);
   const exec = trendFromStructure(input.candlesExec, 30);
+  const maxLev = input.maxLeverage ?? 3;
+  const execTf = input.execTimeframe ?? "15m";
 
-  // MTF : D1 mène ; H4 aligné OU neutre.
-  // Soft SHORT : D1+H1 baissiers même si H4 encore un peu haussier (transition baissière).
-  const mtfAligned =
-    d1 !== "neutre" &&
-    (h4 === d1 ||
-      h4 === "neutre" ||
-      (d1 === "baissier" && h1 === "baissier"));
-  const side: SmcSide | null = mtfAligned
-    ? d1 === "haussier"
-      ? "long"
-      : "short"
-    : null;
+  const longMacroOk = d1 === "haussier" && h4 === "haussier";
+  const shortMacroAligned = d1 === "baissier";
 
-  const h1Aligned =
-    side != null &&
-    h1 !== (side === "long" ? "baissier" : "haussier");
+  type Candidate = {
+    side: SmcSide;
+    signalType: NonNullable<SmcSetup["signalType"]>;
+    counterTrend: boolean;
+    local: ReturnType<typeof evaluateSideOnExec>;
+  };
 
-  let liquiditySweep = false;
-  let liquidityLevel: number | null = null;
-  let chochBos = false;
-  let fvg: FairValueGap | null = null;
-  let ote: OteZone | null = null;
-  let order: SmcOrderParams | null = null;
-  let risk: SmcRiskPlan | null = null;
-  let impulseHigh = 0;
-  let impulseLow = 0;
+  const candidates: Candidate[] = [];
 
-  if (side) {
-    const liq = detectLiquiditySweep(input.candlesExec, side);
-    liquiditySweep = liq.ok;
-    liquidityLevel = liq.level;
-
-    const bos = detectChochBos(input.candlesExec, side);
-    chochBos = bos.ok;
-    impulseHigh = bos.impulseHigh;
-    impulseLow = bos.impulseLow;
-
-    fvg = detectFvg(input.candlesExec, side);
-    if ((!chochBos || impulseHigh <= impulseLow) && liquiditySweep) {
-      const win = input.candlesExec.slice(-20);
-      impulseHigh = Math.max(...win.map((c) => c.h));
-      impulseLow = Math.min(...win.map((c) => c.l));
-    }
-    if (impulseHigh > impulseLow) {
-      ote = computeOte(side, impulseHigh, impulseLow);
-    }
-
-    // Ordre si OTE + (BOS ou sweep) — FVG recommandé, pas toujours obligatoire
-    const structureOk = chochBos || liquiditySweep;
-    if (ote && structureOk && (fvg || (liquiditySweep && chochBos))) {
-      order = buildSmcOrder({
-        side,
-        price: input.price,
-        ote,
-        fvg,
-        impulseHigh,
-        impulseLow,
-      });
-      risk = computeSmcRiskPlan({
-        walletEur: input.walletEur,
-        entry: order.entry,
-        sl: order.sl,
-        maxLeverage: input.maxLeverage ?? 3,
-        riskPct: 2,
-      });
-    }
+  if (longMacroOk) {
+    const local = evaluateSideOnExec({
+      side: "long",
+      candlesExec: input.candlesExec,
+      price: input.price,
+      walletEur: input.walletEur,
+      maxLeverage: maxLev,
+    });
+    candidates.push({
+      side: "long",
+      signalType: "long_aligned",
+      counterTrend: false,
+      local,
+    });
   }
+
+  {
+    const local = evaluateSideOnExec({
+      side: "short",
+      candlesExec: input.candlesExec,
+      price: input.price,
+      walletEur: input.walletEur,
+      maxLeverage: maxLev,
+    });
+    candidates.push({
+      side: "short",
+      signalType: shortMacroAligned ? "short_aligned" : "short_counter_trend",
+      counterTrend: !shortMacroAligned,
+      local,
+    });
+  }
+
+  const complete = candidates
+    .filter(
+      (c) =>
+        c.local.liquiditySweep &&
+        c.local.chochBos &&
+        c.local.fvg &&
+        c.local.ote &&
+        c.local.order &&
+        c.local.risk,
+    )
+    .sort((a, b) => {
+      const score = (c: Candidate) =>
+        (c.signalType === "long_aligned" ? 3 : 0) +
+        (c.signalType === "short_aligned" ? 2 : 0) +
+        (c.signalType === "short_counter_trend" ? 1 : 0);
+      return score(b) - score(a);
+    });
+
+  const best = complete[0] ?? null;
+  const side = best?.side ?? null;
+  const local = best?.local;
+  const mtfAligned = side === "long" ? longMacroOk : Boolean(best);
+  const h1Aligned =
+    side === "long"
+      ? h1 !== "baissier"
+      : side === "short"
+        ? best?.counterTrend
+          ? true
+          : h1 !== "haussier"
+        : false;
 
   const checklist: SmcChecklist = {
     mtfAligned,
-    h1Aligned: Boolean(side && h1Aligned),
-    liquiditySweep,
-    chochBos,
-    fvg: Boolean(fvg),
-    ote: Boolean(ote),
+    h1Aligned,
+    liquiditySweep: Boolean(local?.liquiditySweep),
+    chochBos: Boolean(local?.chochBos),
+    fvg: Boolean(local?.fvg),
+    ote: Boolean(local?.ote),
     allPass: false,
   };
-  // Structure = sweep OU BOS ; FVG optionnel si les deux structure sont OK
-  const structureOk = checklist.liquiditySweep || checklist.chochBos;
   checklist.allPass =
-    checklist.mtfAligned &&
-    checklist.h1Aligned &&
-    structureOk &&
+    Boolean(best) &&
+    checklist.liquiditySweep &&
+    checklist.chochBos &&
+    checklist.fvg &&
     checklist.ote &&
-    (checklist.fvg || (checklist.liquiditySweep && checklist.chochBos)) &&
-    order != null &&
-    risk != null;
+    local?.order != null &&
+    local?.risk != null &&
+    (side === "long" ? longMacroOk : true);
 
   let status: SmcStatus = "ANNULÉ";
   let cancelReason: string | null = null;
-  if (!mtfAligned) {
-    cancelReason = "D1/H4 non alignés (H4 contraire)";
-  } else if (!checklist.h1Aligned) {
-    cancelReason = "H1 contraire au biais D1";
-  } else if (!structureOk) {
-    cancelReason = "Pas de sweep / CHoCH-BOS M15";
-  } else if (!ote) {
-    cancelReason = "Zone ÔTE introuvable";
-  } else if (!checklist.fvg && !(checklist.liquiditySweep && checklist.chochBos)) {
-    cancelReason = "FVG manquant sans double confirmation structure";
-  } else if (checklist.allPass && order) {
+  if (!best) {
+    cancelReason =
+      "Checklist SMC locale incomplète (Sweep + CHoCH/BOS + FVG + ÔTE) ou LONG sans D1+H4 haussiers";
+  } else if (side === "long" && !longMacroOk) {
+    cancelReason = "LONG : D1+H4 haussiers requis";
+  } else if (checklist.allPass && local?.order && local.ote) {
     const inOte =
-      order.entryMode === "market_now" ||
-      (input.price >= ote!.low * 0.995 && input.price <= ote!.high * 1.005);
+      local.order.entryMode === "market_now" ||
+      (input.price >= local.ote.low * 0.995 &&
+        input.price <= local.ote.high * 1.005);
     status = inOte
       ? "ORDRE PRÊT À ÊTRE EXÉCUTÉ"
       : "EN ATTENTE DE RETRACEMENT";
@@ -603,20 +713,17 @@ export function analyzeSmcSetup(input: {
   }
 
   let confidence = 40;
-  if (checklist.mtfAligned) confidence += 10;
-  if (checklist.h1Aligned) confidence += 8;
+  if (checklist.mtfAligned) confidence += 8;
+  if (checklist.h1Aligned) confidence += 6;
   if (checklist.liquiditySweep) confidence += 12;
   if (checklist.chochBos) confidence += 12;
-  if (checklist.fvg) confidence += 8;
+  if (checklist.fvg) confidence += 10;
   if (checklist.ote) confidence += 8;
   if (checklist.allPass) confidence += 10;
-  // Bonus short bien confirmé (évite le biais long-only des marchés crypto)
-  if (
-    side === "short" &&
-    d1 === "baissier" &&
-    h1 === "baissier" &&
-    checklist.allPass
-  ) {
+  if (best?.signalType === "short_counter_trend" && checklist.allPass) {
+    confidence += 2;
+  }
+  if (best?.signalType === "short_aligned" && checklist.allPass) {
     confidence += 4;
   }
   confidence = Math.min(95, confidence);
@@ -626,16 +733,19 @@ export function analyzeSmcSetup(input: {
     side,
     bias: { d1, h4, h1, exec },
     checklist,
-    liquidityLevel,
-    fvg,
-    ote,
-    order,
-    risk,
+    liquidityLevel: local?.liquidityLevel ?? null,
+    fvg: local?.fvg ?? null,
+    ote: local?.ote ?? null,
+    order: local?.order ?? null,
+    risk: local?.risk ?? null,
     status,
     cancelReason,
     confidence,
     report: "",
     price: input.price,
+    execTimeframe: execTf,
+    signalType: best?.signalType ?? null,
+    counterTrend: best?.counterTrend ?? false,
   };
   setup.report = formatSmcReport(setup);
   return setup;
@@ -647,17 +757,14 @@ export function smcTrendToBias(t: SmcTrend): SignalBias {
   return "neutre";
 }
 
-/** System prompt Claude Haiku — bot SMC Boriaz. */
-export const BORIAZ_SMC_SYSTEM_PROMPT = `Tu es un bot d'exécution et un assistant de trading IA spécialisé dans les Smart Money Concepts (SMC) pour le marché des crypto-monnaies. Ton rôle est de scanner le marché, d'analyser la structure du prix selon une approche descendante (Top-Down) et d'exécuter des trades uniquement lorsque 100 % des conditions de la stratégie sont réunies.
-
-Tu dois impérativement respecter la hiérarchie des timeframes, les règles de gestion du risque (exactement 2% du wallet), et la sécurisation dynamique (TP1 50% + Break-Even, TP2 2R).
+/** System prompt — bot SMC Boriaz (shorts CT petite TF autorisés). */
+export const BORIAZ_SMC_SYSTEM_PROMPT = `Tu es un bot d'exécution et un assistant de trading IA spécialisé dans les Smart Money Concepts (SMC) pour le marché des crypto-monnaies. Ton rôle est de scanner le marché, d'analyser la structure du prix et d'exécuter des trades dès que les conditions de la stratégie sont réunies en petites timeframes.
 
 Règles :
-1. Top-down D1 → H4 → H1 → M30/M15
-2. Checklist 6/6 obligatoire : alignement D1/H4, H1, liquidity sweep, CHoCH+BOS (clôture corps), FVG, zone ÔTE 0.618-0.786
-3. Risque exact 2% du solde wallet
-4. SL sous swing low (long) / au-dessus swing high (short)
-5. TP1 = 1R (clôturer 50% + BE), TP2 = 2R (50% restants)
-6. SHORTS : si D1 baissier (+ H4 baissier ou neutre, ou H1 baissier en transition) et checklist structure OK, approve=true. Ne refuse PAS un short valide juste parce que le récit macro crypto est « bullish ». Long et short sont égaux.
-7. PAS un conseil financier. FR uniquement.
-8. Réponds UNIQUEMENT avec le format d'analyse SMC demandé, puis un JSON compact sur une ligne : {"approve":true|false,"confidence":0-100}`;
+1. LONG : alignement macro D1 + H4 haussiers OBLIGATOIRE, puis checklist locale M5/M15/M30 complète.
+2. SHORT : NE BLOQUE PAS sous prétexte que D1/H4 est haussier. SHORT counter-trend M5/M15/M30 autorisé si checklist SMC locale 100% confirmée (Sweep + CHoCH/BOS + FVG + ÔTE).
+3. Checklist locale obligatoire : Liquidity Sweep (mèche), CHoCH+BOS (clôture corps), FVG, zone ÔTE 0.618-0.786.
+4. Risque exact 2% du solde wallet. SL sous mèche sweep (long) / au-dessus (short).
+5. TP1 = 1R (clôturer 50% + BE), TP2 = 2R (50% restants). Entrée LIMIT dans ÔTE/FVG.
+6. PAS un conseil financier. FR uniquement.
+7. Réponds UNIQUEMENT avec le format d'analyse SMC demandé, puis un JSON compact : {"approve":true|false,"confidence":0-100}`;

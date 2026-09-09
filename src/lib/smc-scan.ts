@@ -39,12 +39,8 @@ type GateResult = {
 };
 
 function minGateConfidence(setup: SmcSetup): number {
-  // Shorts structurels : seuil un peu plus bas (modèles trop « bull-biased »)
-  if (
-    setup.order?.side === "short" &&
-    setup.bias.d1 === "baissier" &&
-    setup.checklist.allPass
-  ) {
+  // Shorts (alignés ou counter-trend) : seuil un peu plus bas (modèles trop « bull-biased »)
+  if (setup.order?.side === "short" && setup.checklist.allPass) {
     return 58;
   }
   return 62;
@@ -105,7 +101,7 @@ Analyse déterministe déjà calculée (à valider ou corriger) :
 
 ${setup.report}
 
-Si TOUTE la checklist structure est VALIDÉE et le statut est ORDRE PRÊT ou EN ATTENTE DE RETRACEMENT, approve=true — y compris pour un SHORT baissier.
+Si TOUTE la checklist structure est VALIDÉE et le statut est ORDRE PRÊT ou EN ATTENTE DE RETRACEMENT, approve=true — y compris pour un SHORT counter-trend (D1/H4 haussiers OK si checklist locale M5/M15/M30 100%).
 Sinon approve=false.
 Réponds d'abord avec le format [ANALYSE...] complet, puis UNE ligne JSON : {"approve":true|false,"confidence":0-100,"note":"..."}`;
 }
@@ -232,13 +228,10 @@ function pickGateCandidates(actionable: SmcSetup[]): SmcSetup[] {
   if (topSide) {
     push(actionable.find((s) => s.order?.side && s.order.side !== topSide));
   }
-  // Favoriser un short structurel s’il n’est pas déjà en tête
+  // Favoriser un short (aligné ou CT) s’il n’est pas déjà en tête
   push(
     actionable.find(
-      (s) =>
-        s.order?.side === "short" &&
-        s.bias.d1 === "baissier" &&
-        s.checklist.allPass,
+      (s) => s.order?.side === "short" && s.checklist.allPass,
     ),
   );
   for (const s of actionable) {
@@ -277,39 +270,62 @@ export async function scanSmcWatchlist(input: {
     const part = await Promise.all(
       batch.map(async (coin) => {
         try {
-          const [d1, h4, h1, m15, m30] = await Promise.all([
+          const [d1, h4, h1, m5, m15, m30] = await Promise.all([
             loadCandles(coin, "1d"),
             loadCandles(coin, "4h"),
             loadCandles(coin, "1h"),
+            loadCandles(coin, "5m"),
             loadCandles(coin, "15m"),
             loadCandles(coin, "30m"),
           ]);
-          const exec =
-            m15.length >= 40 ? m15 : m30.length >= 30 ? m30 : m15;
-          if (
-            d1.length < 30 ||
-            h4.length < 30 ||
-            h1.length < 30 ||
-            exec.length < 25
-          ) {
+          if (d1.length < 30 || h4.length < 30 || h1.length < 30) {
             return null;
           }
           const price =
             input.prices?.[coin] ??
-            exec.at(-1)?.c ??
+            m15.at(-1)?.c ??
+            m5.at(-1)?.c ??
             h1.at(-1)?.c ??
             0;
           if (!(price > 0)) return null;
-          return analyzeSmcSetup({
-            coin,
-            price,
-            candlesD1: d1,
-            candlesH4: h4,
-            candlesH1: h1,
-            candlesExec: exec,
-            walletEur: input.walletEur,
-            maxLeverage: input.maxLeverage ?? 3,
-          });
+
+          // Essayer M5 / M15 / M30 — garder le meilleur setup actionable
+          const execCandidates: {
+            tf: "5m" | "15m" | "30m";
+            candles: typeof m15;
+          }[] = (
+            [
+              { tf: "5m" as const, candles: m5 },
+              { tf: "15m" as const, candles: m15 },
+              { tf: "30m" as const, candles: m30 },
+            ] as const
+          ).filter((e) => e.candles.length >= 25);
+
+          let bestLocal: ReturnType<typeof analyzeSmcSetup> | null = null;
+          for (const ex of execCandidates) {
+            const s = analyzeSmcSetup({
+              coin,
+              price,
+              candlesD1: d1,
+              candlesH4: h4,
+              candlesH1: h1,
+              candlesExec: ex.candles,
+              walletEur: input.walletEur,
+              maxLeverage: input.maxLeverage ?? 3,
+              execTimeframe: ex.tf,
+            });
+            if (!bestLocal) {
+              bestLocal = s;
+              continue;
+            }
+            const betterPass =
+              s.checklist.allPass && !bestLocal.checklist.allPass;
+            const sameTier =
+              s.checklist.allPass === bestLocal.checklist.allPass &&
+              s.confidence > bestLocal.confidence;
+            if (betterPass || sameTier) bestLocal = s;
+          }
+          return bestLocal;
         } catch {
           return null;
         }

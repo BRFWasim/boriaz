@@ -9,8 +9,8 @@
 
 export const SITE_GATE_COOKIE = "bb_site_gate";
 
-/** Portefeuilles autorisés à trader en LIVE HL (réel). */
-export const LIVE_ALLOWED_PORTFOLIO_IDS = new Set(["default", "boriaz"]);
+/** Portefeuilles autorisés à trader en LIVE HL (réel) — Boriaz uniquement. */
+export const LIVE_ALLOWED_PORTFOLIO_IDS = new Set(["boriaz"]);
 
 export function isLiveAllowedPortfolio(id: string | null | undefined): boolean {
   return Boolean(id && LIVE_ALLOWED_PORTFOLIO_IDS.has(id));
