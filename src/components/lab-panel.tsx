@@ -1210,9 +1210,9 @@ export function LabPanel() {
                 </div>
                 {pf.strategy === "smc" ? (
                   <p className="mt-2 text-xs text-muted-foreground">
-              Bot SMC : LONG D1+H4 · SHORT counter-trend M5/M15/M30
-              (sweep+CHoCH/BOS+FVG+ÔTE) · 2 % wallet · TP1 1R 50 %+BE ·
-              TP2 2R · LIVE Boriaz illimité · gate ChatGPT.
+              Bot SMC ultra-strict : Continuation D1+H4 (M5/15/30) ·
+              Correction M15/M30 only · Sweep+BOS corps+FVG+ÔTE · 2 % ·
+              TP1 1R 50 %+BE · TP2 liq. ≥2R · LIMIT only · LIVE illimité.
             </p>
                 ) : null}
                 {(() => {
@@ -1431,9 +1431,10 @@ export function LabPanel() {
           <div>
             <h3 className="font-medium">Boriaz · Smart Money Concepts</h3>
             <p className="mt-1 text-sm text-muted-foreground">
-              LONG : D1+H4 haussiers. SHORT : counter-trend M5/M15/M30 si
-              sweep + CHoCH/BOS + FVG + ÔTE (0.618–0.786). Risque exact 2 %.
-              TP1 1R (50 %+BE) · TP2 2R. LIVE Boriaz illimité. Gate :{" "}
+              Continuation D1+H4 (M5/M15/M30). Correction : SHORT si D1
+              haussier / LONG si D1 baissier — M15/M30 only. Checklist 100%
+              (Sweep + BOS corps + FVG + ÔTE) sinon AUCUN ORDRE. Risque 2 %.
+              SL 1–2 pips mèche · TP1 1R 50 %+BE · TP2 liq. ≥2R. Gate :{" "}
               <code className="text-xs">ChatGPT</code>.
             </p>
           </div>

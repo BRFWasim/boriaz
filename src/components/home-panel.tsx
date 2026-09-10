@@ -485,7 +485,7 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
                     </p>
                     <p className="mt-0.5 text-xs text-muted-foreground">
                       {pf.profile.strategy === "smc"
-                        ? `SMC · LONG D1+H4 · SHORT CT M5/15/30 · risque ${pf.profile.riskPct ?? 2}% · TP1 50%+BE`
+                        ? `SMC ultra-strict · cont. D1+H4 · corr. M15/30 · risque ${pf.profile.riskPct ?? 2}% · TP1 50%+BE`
                         : `TF ${pf.profile.timeframe} · risque ${pf.profile.riskLevel}/5`}
                       {" · "}lev max {pf.profile.maxLeverage}× · R:R ≥{" "}
                       {pf.profile.minRR}

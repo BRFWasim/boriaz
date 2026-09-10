@@ -101,7 +101,8 @@ Analyse déterministe déjà calculée (à valider ou corriger) :
 
 ${setup.report}
 
-Si TOUTE la checklist structure est VALIDÉE et le statut est ORDRE PRÊT ou EN ATTENTE DE RETRACEMENT, approve=true — y compris pour un SHORT counter-trend (D1/H4 haussiers OK si checklist locale M5/M15/M30 100%).
+Si TOUTE la checklist structure est VALIDÉE (Sweep + BOS corps + FVG + ÔTE) et le statut est ORDRE PRÊT ou EN ATTENTE DE RETRACEMENT, approve=true.
+Correction/retracement OK seulement en M15/M30 (pas M5). Un seul critère manquant → approve=false et « SETUP INVALIDÉ (CRITÈRE MANQUANT) - AUCUN ORDRE ».
 Sinon approve=false.
 Réponds d'abord avec le format [ANALYSE...] complet, puis UNE ligne JSON : {"approve":true|false,"confidence":0-100,"note":"..."}`;
 }
@@ -320,9 +321,13 @@ export async function scanSmcWatchlist(input: {
             }
             const betterPass =
               s.checklist.allPass && !bestLocal.checklist.allPass;
+            const contBonus =
+              (s.tradeKind === "continuation" ? 3 : 0) -
+              (bestLocal.tradeKind === "continuation" ? 3 : 0);
             const sameTier =
               s.checklist.allPass === bestLocal.checklist.allPass &&
-              s.confidence > bestLocal.confidence;
+              s.confidence + contBonus > bestLocal.confidence;
+            // Correction interdite sur M5 (déjà filtré dans analyze) — privilégier M15/M30 si égalité
             if (betterPass || sameTier) bestLocal = s;
           }
           return bestLocal;

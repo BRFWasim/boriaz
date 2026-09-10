@@ -1358,10 +1358,17 @@ export async function getTradeSignals(options?: {
           bullets: [
             `Stratégie SMC Boriaz · exec ${setup.execTimeframe ?? "15m"}`,
             setup.signalType === "short_counter_trend"
-              ? "SHORT counter-trend M5/M15/M30 (D1/H4 non bloquants)"
-              : setup.signalType === "long_aligned"
-                ? "LONG aligné D1+H4 haussiers"
-                : `Signal ${setup.signalType ?? setup.order.side}`,
+              ? "SHORT correction (retracement) · M15/M30 only"
+              : setup.signalType === "long_counter_trend"
+                ? "LONG correction (retracement) · M15/M30 only"
+                : setup.signalType === "long_aligned"
+                  ? "LONG continuation D1+H4"
+                  : setup.signalType === "short_aligned"
+                    ? "SHORT continuation D1+H4"
+                    : `Signal ${setup.signalType ?? setup.order.side}`,
+            setup.tradeKind === "correction"
+              ? "Kind correction — M5 interdit"
+              : "Kind continuation — M5/M15/M30 OK",
             `MTF ${setup.bias.d1}/${setup.bias.h4}/${setup.bias.h1}`,
             setup.liquidityLevel != null
               ? `Liquidity sweep @ ${setup.liquidityLevel}`
