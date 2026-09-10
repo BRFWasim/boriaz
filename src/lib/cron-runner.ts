@@ -94,6 +94,14 @@ export async function runCronWork(phase: CronPhase = "all"): Promise<{
           reason: liveReady.reason ?? null,
         },
       };
+      // Après signaux : repair TP/SL nues (nouvelles entrées du tick)
+      try {
+        const { repairNakedLiveTpsl } = await import("@/lib/hl-live");
+        results.liveRepairAfterSignals = await repairNakedLiveTpsl();
+      } catch (e) {
+        results.liveRepairAfterSignalsError =
+          e instanceof Error ? e.message : "repair";
+      }
     } catch (e) {
       results.signalsError = e instanceof Error ? e.message : "signals";
     }

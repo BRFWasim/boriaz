@@ -815,15 +815,26 @@ export async function placeBoriazLiveTrade(
   const openN = portfolio.ok
     ? portfolio.openPositionCount
     : await countOpenPositions(cfg.testnet, user);
-  // Miroir paper Boriaz : on tente quand même (cap soft élevé). Sinon cap strict.
+  // Miroir paper Boriaz : cap soft modéré (pas 8 aveugle).
   const softCap = mirror
-    ? Math.max(cfg.maxOpenPositions, 8)
+    ? Math.max(cfg.maxOpenPositions, Math.min(4, cfg.maxOpenPositions + 1))
     : cfg.maxOpenPositions;
   if (openN >= softCap) {
     return {
       ok: false,
       skipped: true,
       reason: `Déjà ${openN} positions ≥ cap ${softCap}`,
+    };
+  }
+
+  // Refuse double entrée sur le même coin
+  const already = portfolio.positions.find(
+    (p) => p.coin.toUpperCase() === req.coin.toUpperCase(),
+  );
+  if (already) {
+    return {
+      ok: false,
+      reason: `Position HL déjà ouverte ${already.coin} ${already.side}`,
     };
   }
 
@@ -1190,6 +1201,8 @@ export async function placeBoriazLiveTrade(
   const tpPnlUsd = outcomes.tpPnlUsd;
   const slPnlUsd = outcomes.slPnlUsd;
 
+  // 1) Journal d’abord (pour que repair voie l’entrée)
+  let journalOk = false;
   try {
     const { recordLiveJournalEntry } = await import("./live-journal");
     await recordLiveJournalEntry({
@@ -1208,14 +1221,79 @@ export async function placeBoriazLiveTrade(
       portfolioId: req.portfolioId || "boriaz",
       portfolioName: req.portfolioName || botLabel,
       strategy: req.strategy === "smc" ? "smc" : "alignment",
-      botLabel,
+      botLabel: "Boriaz",
       paperId: req.paperId,
       entryOid,
       tpOid,
       slOid,
     });
+    journalOk = true;
   } catch (e) {
     console.error("live journal record failed", e);
+  }
+
+  // 2) Confirmer TP/SL sur le carnet ; repair si besoin
+  let protectedOk = Boolean(tpOid && slOid);
+  try {
+    await new Promise((r) => setTimeout(r, 350));
+    const tpslMap = await fetchLiveExchangeTpslMap();
+    const ex = tpslMap[asset.name.toUpperCase()];
+    if (ex?.tp != null && ex?.sl != null) {
+      protectedOk = true;
+      if (!tpOid && ex.tpOid) tpOid = ex.tpOid;
+      if (!slOid && ex.slOid) slOid = ex.slOid;
+    } else {
+      const repair = await repairNakedLiveTpsl();
+      void repair;
+      await new Promise((r) => setTimeout(r, 400));
+      const again = await fetchLiveExchangeTpslMap();
+      const ex2 = again[asset.name.toUpperCase()];
+      if (ex2?.tp != null && ex2?.sl != null) {
+        protectedOk = true;
+        if (ex2.tpOid) tpOid = ex2.tpOid;
+        if (ex2.slOid) slOid = ex2.slOid;
+      }
+    }
+  } catch (e) {
+    console.info("post-place TP/SL confirm", e);
+  }
+
+  if (!journalOk) {
+    return {
+      ok: false,
+      reason:
+        "Ordre placé mais journal LIVE échoué — position à surveiller manuellement",
+      coin: asset.name,
+      assetId: asset.id,
+      size,
+      entryOid,
+      tpOid,
+      slOid,
+      riskUsd: sized.riskUsd,
+      tpPnlUsd,
+      slPnlUsd,
+      botLabel: "Boriaz",
+      raw: result,
+    };
+  }
+
+  if (!protectedOk) {
+    return {
+      ok: false,
+      reason:
+        "Entrée journalée mais TP/SL non confirmés sur HL — repair cron suivra",
+      coin: asset.name,
+      assetId: asset.id,
+      size,
+      entryOid,
+      tpOid,
+      slOid,
+      riskUsd: sized.riskUsd,
+      tpPnlUsd,
+      slPnlUsd,
+      botLabel: "Boriaz",
+      raw: result,
+    };
   }
 
   return {
@@ -1229,7 +1307,7 @@ export async function placeBoriazLiveTrade(
     riskUsd: sized.riskUsd,
     tpPnlUsd,
     slPnlUsd,
-    botLabel,
+    botLabel: "Boriaz",
     reason: sized.note,
     raw: result,
   };

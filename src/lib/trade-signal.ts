@@ -1334,7 +1334,9 @@ export async function getTradeSignals(options?: {
         ) {
           continue;
         }
-        if (setup.status === "ANNULÉ") continue;
+        // Exécution : uniquement ORDRE PRÊT (réfléchir — pas EN ATTENTE)
+        if (setup.status !== "ORDRE PRÊT À ÊTRE EXÉCUTÉ") continue;
+        if (setup.order.entryMode !== "limit_wait") continue;
 
         const acc = computePaperAccount(paperForCheck, pf.bankrollEur, pf.id);
         if (
@@ -1383,7 +1385,10 @@ export async function getTradeSignals(options?: {
               ? `ÔTE ${setup.ote.low}–${setup.ote.high} (idéal ${setup.ote.ideal})`
               : "ÔTE manquant",
             `Risque ${setup.risk.riskEur.toFixed(2)} $ (2%) · notionnel ${setup.risk.notionalEur} $`,
-            `TP1 1R 50%+BE · TP2 2R · trades/jour illimités`,
+            `TP1 1R 50%+BE · TP2 ≥2R · gate réfléchie`,
+            smcScan.liveEligible
+              ? "LIVE éligible (IA + ORDRE PRÊT)"
+              : "LIVE non éligible pour l’instant",
             smcScan.aiNote || "Gate ChatGPT",
           ],
           alignmentScore: setup.confidence,
@@ -1420,15 +1425,48 @@ export async function getTradeSignals(options?: {
           riskPct: 2,
         });
 
-        // LIVE Hyperliquid — OBLIGATOIRE dès qu’un paper Boriaz ouvre
-        // (toggles Lab ignorés ; kill-switch env HL_LIVE_ENABLED reste).
-        // Marge live = même % du solde réel que le paper a engagé.
+        // LIVE Hyperliquid — uniquement après double gate (réfléchir avant)
         if (
           opened &&
           pf.id === "boriaz" &&
           !opened.note.includes("Cash insuffisant")
         ) {
           try {
+            const {
+              validateLiveSmcBeforePlace,
+              noteLiveOpen,
+            } = await import("./smc-live-gate");
+            const gate = await validateLiveSmcBeforePlace({
+              setup,
+              scan: smcScan,
+            });
+            if (!gate.ok) {
+              console.info("LIVE Boriaz gate refuse", gate.reason, gate.checks);
+              if (notify && !hush) {
+                await sendTelegramMessage(
+                  [
+                    `LIVE BORIAZ REFUS (réflexion) · ${setup.coin}`,
+                    gate.reason,
+                    gate.checks.slice(0, 6).join(" · ") || "—",
+                    "Paper ouvert — LIVE non placé.",
+                  ].join("\n"),
+                );
+              }
+              opened.note = `${opened.note} · LIVE refusé: ${gate.reason}`;
+              try {
+                const { loadPaperTrades, savePaperTrades } = await import(
+                  "./persist"
+                );
+                const all = await loadPaperTrades();
+                const row = all.find((t) => t.id === opened.id);
+                if (row) {
+                  row.note = opened.note;
+                  await savePaperTrades(all);
+                }
+              } catch {
+                /* ignore */
+              }
+            } else {
             const { placeBoriazLiveTradeMirrored } = await import("./hl-live");
             const { loadPaperTrades, savePaperTrades } = await import("./persist");
             const live = await placeBoriazLiveTradeMirrored({
@@ -1441,10 +1479,7 @@ export async function getTradeSignals(options?: {
               tp2: setup.order.tp2,
               leverage: setup.risk.leverage,
               riskPct: pf.riskPct ?? 2,
-              entryMode:
-                setup.order.entryMode === "limit_wait"
-                  ? "limit_wait"
-                  : "market_now",
+              entryMode: "limit_wait",
               paperId: opened.id,
               portfolioId: pf.id,
               portfolioName: pf.name,
@@ -1454,6 +1489,7 @@ export async function getTradeSignals(options?: {
               mirrorPaper: true,
             });
             if (live.ok) {
+              noteLiveOpen(setup.coin);
               const bot = live.botLabel || "Boriaz";
               const tpTxt =
                 live.tpPnlUsd != null
@@ -1480,6 +1516,7 @@ export async function getTradeSignals(options?: {
                     `LIVE BORIAZ · ${setup.order.side.toUpperCase()} ${setup.coin}`,
                     `Size ${live.size} · entryOid ${live.entryOid ?? "—"}`,
                     `TP oid ${live.tpOid ?? "—"} · SL oid ${live.slOid ?? "—"}`,
+                    `Gate: ${gate.checks.slice(0, 4).join(" · ")}`,
                     live.tpPnlUsd != null
                       ? `Si TP ${live.tpPnlUsd >= 0 ? "+" : ""}${live.tpPnlUsd.toFixed(2)}$ · Si SL ${live.slPnlUsd != null && live.slPnlUsd >= 0 ? "+" : ""}${(live.slPnlUsd ?? 0).toFixed(2)}$`
                       : live.reason
@@ -1504,6 +1541,7 @@ export async function getTradeSignals(options?: {
                 );
               }
             }
+            } // end gate.ok else
           } catch (e) {
             console.error("LIVE Boriaz exception", e);
             if (notify && !hush) {

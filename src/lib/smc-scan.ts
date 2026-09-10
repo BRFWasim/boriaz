@@ -28,6 +28,13 @@ export interface SmcScanResult {
   fetchedAt: number;
   /** Combien de candidats ont été testés au gate. */
   gatedTried: number;
+  /** Confiance renvoyée par la gate IA (0 si mécanique). */
+  aiConfidence: number;
+  /**
+   * true seulement si prêt pour LIVE :
+   * ORDRE PRÊT + IA ChatGPT + conf suffisante.
+   */
+  liveEligible: boolean;
 }
 
 type GateResult = {
@@ -39,11 +46,10 @@ type GateResult = {
 };
 
 function minGateConfidence(setup: SmcSetup): number {
-  // Shorts (alignés ou counter-trend) : seuil un peu plus bas (modèles trop « bull-biased »)
-  if (setup.order?.side === "short" && setup.checklist.allPass) {
-    return 58;
-  }
-  return 62;
+  // Ultra-strict LIVE-minded : correction plus exigeante
+  if (setup.tradeKind === "correction" || setup.counterTrend) return 72;
+  if (setup.order?.side === "short") return 68;
+  return 70;
 }
 
 function parseGateJson(
@@ -74,6 +80,12 @@ function parseGateJson(
     approved = false;
     note = `${provider} OK mais checklist SMC mécanique incomplète.`;
   }
+  if (approved && setup.status !== "ORDRE PRÊT À ÊTRE EXÉCUTÉ") {
+    approved = false;
+    note =
+      note ||
+      `${provider}: statut ${setup.status} — attendre ORDRE PRÊT (zone).`;
+  }
   const reportBlock = text.includes("[ANALYSE")
     ? text.replace(/\n?\s*\{[\s\S]*\}\s*$/, "").trim()
     : setup.report;
@@ -101,7 +113,10 @@ Analyse déterministe déjà calculée (à valider ou corriger) :
 
 ${setup.report}
 
-Si TOUTE la checklist structure est VALIDÉE (Sweep + BOS corps + FVG + ÔTE) et le statut est ORDRE PRÊT ou EN ATTENTE DE RETRACEMENT, approve=true.
+Si TOUTE la checklist structure est VALIDÉE (Sweep + BOS corps + FVG + ÔTE)
+ET le statut est exactement « ORDRE PRÊT À ÊTRE EXÉCUTÉ » (prix dans zone ÔTE/FVG),
+approve=true.
+Si statut « EN ATTENTE DE RETRACEMENT » → approve=false (pas encore le moment d’exécuter).
 Correction/retracement OK seulement en M15/M30 (pas M5). Un seul critère manquant → approve=false et « SETUP INVALIDÉ (CRITÈRE MANQUANT) - AUCUN ORDRE ».
 Sinon approve=false.
 Réponds d'abord avec le format [ANALYSE...] complet, puis UNE ligne JSON : {"approve":true|false,"confidence":0-100,"note":"..."}`;
@@ -183,12 +198,15 @@ async function runSmcAiGates(setup: SmcSetup): Promise<{
   const gates = [gpt].filter(Boolean) as GateResult[];
 
   if (!gates.length) {
-    const approved = setup.checklist.allPass && setup.status !== "ANNULÉ";
+    // Sans ChatGPT : paper peut suivre la checklist, LIVE refusera (mechanical).
+    const approved =
+      setup.checklist.allPass &&
+      setup.status === "ORDRE PRÊT À ÊTRE EXÉCUTÉ";
     return {
       approved,
       note: approved
-        ? "Gate mécanique SMC 6/6 (pas de clé ChatGPT)."
-        : "Checklist SMC incomplète — bloqué.",
+        ? "Gate mécanique SMC (pas de clé ChatGPT) — LIVE bloqué sans IA."
+        : "Checklist SMC incomplète ou pas ORDRE PRÊT — bloqué.",
       report: setup.report,
       model: "mechanical-smc",
       confidence: setup.confidence,
@@ -346,7 +364,12 @@ export async function scanSmcWatchlist(input: {
         (s.status === "ORDRE PRÊT À ÊTRE EXÉCUTÉ" ||
           s.status === "EN ATTENTE DE RETRACEMENT"),
     )
-    .sort((a, b) => b.confidence - a.confidence);
+    .sort((a, b) => {
+      // Privilégier ORDRE PRÊT pour exécution
+      const tier = (s: SmcSetup) =>
+        s.status === "ORDRE PRÊT À ÊTRE EXÉCUTÉ" ? 2 : 1;
+      return tier(b) - tier(a) || b.confidence - a.confidence;
+    });
 
   let best: SmcSetup | null =
     actionable[0] ??
@@ -358,8 +381,15 @@ export async function scanSmcWatchlist(input: {
   let aiReport: string | null = null;
   let model = "mechanical-smc";
   let gatedTried = 0;
+  let aiConfidence = 0;
 
-  const candidates = pickGateCandidates(actionable);
+  // Gate IA : uniquement les ORDRE PRÊT (réfléchir avant d’exécuter)
+  const readyForGate = actionable.filter(
+    (s) => s.status === "ORDRE PRÊT À ÊTRE EXÉCUTÉ",
+  );
+  const candidates = pickGateCandidates(
+    readyForGate.length ? readyForGate : [],
+  );
   const refusals: string[] = [];
 
   for (const cand of candidates) {
@@ -372,8 +402,13 @@ export async function scanSmcWatchlist(input: {
       aiNote = gate.note;
       aiReport = gate.report;
       model = gate.model;
+      aiConfidence = gate.confidence;
       if (gate.report) cand.report = gate.report;
-      cand.confidence = Math.max(cand.confidence, gate.confidence);
+      // Ne pas gonfler artificiellement au-delà de la conf mécanique + gate
+      cand.confidence = Math.min(
+        95,
+        Math.round((cand.confidence + gate.confidence) / 2),
+      );
       break;
     }
     refusals.push(
@@ -382,13 +417,26 @@ export async function scanSmcWatchlist(input: {
     aiNote = gate.note;
     aiReport = gate.report;
     model = gate.model;
+    aiConfidence = gate.confidence;
   }
 
   if (!aiApproved && candidates.length) {
-    aiNote = `Aucun candidat validé (${gatedTried}) — ${refusals.slice(0, 3).join(" · ")}`;
+    aiNote = `Aucun candidat ORDRE PRÊT validé (${gatedTried}) — ${refusals.slice(0, 3).join(" · ")}`;
   } else if (!candidates.length && best) {
-    aiNote = best.cancelReason || "Setup SMC non actionnable";
+    aiNote =
+      best.status === "EN ATTENTE DE RETRACEMENT"
+        ? "EN ATTENTE DE RETRACEMENT — pas d’exécution tant que le prix n’est pas en zone"
+        : best.cancelReason || "Setup SMC non actionnable";
   }
+
+  const liveEligible =
+    aiApproved &&
+    best != null &&
+    best.checklist.allPass &&
+    best.status === "ORDRE PRÊT À ÊTRE EXÉCUTÉ" &&
+    best.order?.entryMode === "limit_wait" &&
+    model !== "mechanical-smc" &&
+    aiConfidence >= minGateConfidence(best);
 
   const value: SmcScanResult = {
     setups: setups.sort((a, b) => b.confidence - a.confidence),
@@ -400,6 +448,8 @@ export async function scanSmcWatchlist(input: {
     model,
     fetchedAt: Date.now(),
     gatedTried,
+    aiConfidence,
+    liveEligible,
   };
   scanCache = { key: cacheKey, at: Date.now(), value };
   return value;
