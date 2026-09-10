@@ -23,6 +23,7 @@ type LivePosition = {
   slPnlUsd?: number | null;
   riskUsd?: number | null;
   nakedTpsl?: boolean;
+  journalMissing?: boolean;
   tpslSource?: string | null;
   manageSnapshot?: TradeManageSnapshot | null;
 };
@@ -246,23 +247,22 @@ export function BoriazPanel({ onOpenLab }: { onOpenLab?: () => void }) {
                         <span className="font-medium">
                           {p.coin} {p.side} {p.leverage}×
                           {p.botLabel ? (
-                            <span
-                              className={`ml-2 rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-wide uppercase ${
-                                /externe|hors bot/i.test(p.botLabel)
-                                  ? "bg-amber-500/15 text-amber-800 dark:text-amber-300"
-                                  : "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
-                              }`}
-                            >
+                            <span className="ml-2 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-emerald-700 uppercase dark:text-emerald-300">
                               {p.botLabel}
                             </span>
                           ) : (
-                            <span className="ml-2 text-[10px] text-muted-foreground">
-                              bot ?
+                            <span className="ml-2 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-emerald-700 uppercase dark:text-emerald-300">
+                              Boriaz
                             </span>
                           )}
                           {p.nakedTpsl ? (
                             <span className="ml-2 rounded border border-rose-500/40 bg-rose-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700 dark:text-rose-300">
                               sans TP/SL HL
+                            </span>
+                          ) : null}
+                          {p.journalMissing ? (
+                            <span className="ml-2 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800 dark:text-amber-300">
+                              journal manquant
                             </span>
                           ) : null}
                         </span>
@@ -280,8 +280,15 @@ export function BoriazPanel({ onOpenLab }: { onOpenLab?: () => void }) {
                       </p>
                       {p.nakedTpsl ? (
                         <p className="mt-0.5 text-[11px] text-rose-700 dark:text-rose-300">
-                          Aucun TP/SL trigger sur Hyperliquid — position hors
-                          protection (externe ou placement incomplet).
+                          Aucun TP/SL trigger sur Hyperliquid — protection
+                          manquante (Boriaz tentera une réparation au prochain
+                          cron).
+                        </p>
+                      ) : null}
+                      {p.journalMissing ? (
+                        <p className="mt-0.5 text-[11px] text-amber-800 dark:text-amber-300">
+                          Position wallet rattachée à Boriaz (seul bot LIVE) —
+                          métadonnées journal absentes (pas un autre bot).
                         </p>
                       ) : null}
                       <p className="mt-0.5 text-xs">

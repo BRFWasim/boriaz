@@ -12,10 +12,7 @@ import {
   syncLiveJournalWithPositions,
 } from "@/lib/live-journal";
 import { loadLiveManageSnapshots } from "@/lib/manage-live-positions";
-import {
-  botLabelFromPortfolio,
-  tradeOutcomesUsd,
-} from "@/lib/trade-outcomes";
+import { tradeOutcomesUsd } from "@/lib/trade-outcomes";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -69,6 +66,9 @@ export async function GET() {
         : null;
 
       if (!j && !paper) {
+        // LIVE = Boriaz uniquement. Pas d’autre bot.
+        // Sans journal = position wallet non rattachée (manuel / journal perdu),
+        // on l’affiche quand même sous Boriaz — jamais « Externe » / autre bot.
         const outcomes =
           exchangeTp != null &&
           exchangeSl != null &&
@@ -84,10 +84,10 @@ export async function GET() {
             : null;
         return {
           ...p,
-          botLabel: nakedTpsl ? "Externe" : "HL (hors bot)",
-          portfolioId: null,
-          portfolioName: null,
-          strategy: null,
+          botLabel: "Boriaz",
+          portfolioId: "boriaz",
+          portfolioName: "Boriaz",
+          strategy: "smc",
           tp: exchangeTp,
           sl: exchangeSl,
           tpPnlUsd: outcomes?.tpPnlUsd ?? null,
@@ -97,7 +97,9 @@ export async function GET() {
           exchangeTp,
           exchangeSl,
           nakedTpsl,
-          tpslSource: exchangeTp != null || exchangeSl != null ? "exchange" : "none",
+          journalMissing: true,
+          tpslSource:
+            exchangeTp != null || exchangeSl != null ? "exchange" : "none",
           manageSnapshot,
         };
       }
@@ -127,10 +129,11 @@ export async function GET() {
             : null;
         return {
           ...p,
-          botLabel: j.botLabel || j.portfolioName || "Boriaz",
-          portfolioId: j.portfolioId,
-          portfolioName: j.portfolioName,
-          strategy: j.strategy,
+          // Force label Boriaz (LIVE n’a qu’un bot)
+          botLabel: "Boriaz",
+          portfolioId: j.portfolioId === "boriaz" ? j.portfolioId : "boriaz",
+          portfolioName: "Boriaz",
+          strategy: "smc",
           tp,
           sl,
           tpPnlUsd: outcomes?.tpPnlUsd ?? j.tpPnlUsd ?? null,
@@ -140,6 +143,7 @@ export async function GET() {
           exchangeTp,
           exchangeSl,
           nakedTpsl,
+          journalMissing: false,
           tpslSource:
             exchangeTp != null || exchangeSl != null
               ? "exchange"
@@ -166,14 +170,10 @@ export async function GET() {
       });
       return {
         ...p,
-        botLabel: botLabelFromPortfolio({
-          portfolioId: paper!.portfolioId,
-          portfolioName: paper!.portfolioName,
-          strategy: paper!.strategy,
-        }),
-        portfolioId: paper!.portfolioId ?? null,
-        portfolioName: paper!.portfolioName ?? null,
-        strategy: paper!.strategy ?? null,
+        botLabel: "Boriaz",
+        portfolioId: "boriaz",
+        portfolioName: "Boriaz",
+        strategy: "smc",
         tp,
         sl,
         tpPnlUsd: outcomes.tpPnlUsd,
@@ -183,6 +183,7 @@ export async function GET() {
         exchangeTp,
         exchangeSl,
         nakedTpsl,
+        journalMissing: true,
         tpslSource:
           exchangeTp != null || exchangeSl != null
             ? "exchange"
@@ -221,7 +222,7 @@ export async function GET() {
           riskPct: 2,
           riskUsd: Math.round(portfolio.accountValueUsd * 0.02 * 100) / 100,
           note:
-            "LIVE = Boriaz uniquement. TP/SL lus sur HL (ordres trigger) + journal. Positions hors bot = « Externe ».",
+            "LIVE = Boriaz uniquement. TP/SL lus sur HL + journal Boriaz.",
         }
       : null,
   });
