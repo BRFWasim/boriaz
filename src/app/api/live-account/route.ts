@@ -1,4 +1,5 @@
 import {
+  fetchLiveExchangeTpslMap,
   fetchLivePortfolio,
   getLiveConfig,
   isLiveEnvReady,
@@ -21,7 +22,7 @@ export const runtime = "nodejs";
 
 /**
  * Portefeuille RÉEL Hyperliquid — séparé du paper.
- * Enrichit chaque position avec le bot (Boriaz / Scalp / Défaut) + si TP / si SL.
+ * Enrichit chaque position avec bot + TP/SL (journal, sinon ordres HL, sinon paper Boriaz).
  * Jamais de private key dans la réponse.
  */
 export async function GET() {
@@ -41,6 +42,7 @@ export async function GET() {
     all.filter((e) => e.status === "open"),
   );
   const manageSnaps = await loadLiveManageSnapshots();
+  const exchangeTpsl = portfolio.ok ? await fetchLiveExchangeTpslMap() : {};
 
   if (portfolio.ok) {
     openJournal = await syncLiveJournalWithPositions(
@@ -51,62 +53,110 @@ export async function GET() {
       const snapKey = `${p.coin.toUpperCase()}:${p.side}`;
       const manageSnapshot =
         j?.manageSnapshot ?? manageSnaps[snapKey] ?? null;
-      // Fallback paper (même coin+side) si journal manquant — bot / Si TP-SL
+      const ex = exchangeTpsl[p.coin.toUpperCase()];
+      const exchangeTp = ex?.tp ?? null;
+      const exchangeSl = ex?.sl ?? null;
+      const nakedTpsl = !(exchangeTp != null && exchangeSl != null);
+
+      // Fallback paper : UNIQUEMENT Boriaz/SMC (évite faux label « Défaut »)
       const paper = !j
         ? paperOpen.find(
             (t) =>
               t.coin.toUpperCase() === p.coin.toUpperCase() &&
-              t.side === p.side,
+              t.side === p.side &&
+              (t.portfolioId === "boriaz" || t.strategy === "smc"),
           )
         : null;
 
       if (!j && !paper) {
-        return {
-          ...p,
-          botLabel: null,
-          portfolioId: null,
-          portfolioName: null,
-          strategy: null,
-          tp: null,
-          sl: null,
-          tpPnlUsd: null,
-          slPnlUsd: null,
-          riskUsd: null,
-          paperId: null,
-          manageSnapshot,
-        };
-      }
-
-      if (j) {
         const outcomes =
-          j.tp > 0 && j.sl > 0 && p.size > 0
+          exchangeTp != null &&
+          exchangeSl != null &&
+          p.entryPx > 0 &&
+          p.size > 0
             ? tradeOutcomesUsd({
                 side: p.side,
-                entry: j.entry > 0 ? j.entry : p.entryPx,
-                tp: j.tp,
-                sl: j.sl,
+                entry: p.entryPx,
+                tp: exchangeTp,
+                sl: exchangeSl,
                 size: p.size,
               })
             : null;
         return {
           ...p,
-          botLabel: j.botLabel || j.portfolioName || null,
+          botLabel: nakedTpsl ? "Externe" : "HL (hors bot)",
+          portfolioId: null,
+          portfolioName: null,
+          strategy: null,
+          tp: exchangeTp,
+          sl: exchangeSl,
+          tpPnlUsd: outcomes?.tpPnlUsd ?? null,
+          slPnlUsd: outcomes?.slPnlUsd ?? null,
+          riskUsd: null,
+          paperId: null,
+          exchangeTp,
+          exchangeSl,
+          nakedTpsl,
+          tpslSource: exchangeTp != null || exchangeSl != null ? "exchange" : "none",
+          manageSnapshot,
+        };
+      }
+
+      if (j) {
+        const tp =
+          exchangeTp != null && exchangeTp > 0
+            ? exchangeTp
+            : j.tp > 0
+              ? j.tp
+              : null;
+        const sl =
+          exchangeSl != null && exchangeSl > 0
+            ? exchangeSl
+            : j.sl > 0
+              ? j.sl
+              : null;
+        const outcomes =
+          tp != null && sl != null && p.size > 0
+            ? tradeOutcomesUsd({
+                side: p.side,
+                entry: j.entry > 0 ? j.entry : p.entryPx,
+                tp,
+                sl,
+                size: p.size,
+              })
+            : null;
+        return {
+          ...p,
+          botLabel: j.botLabel || j.portfolioName || "Boriaz",
           portfolioId: j.portfolioId,
           portfolioName: j.portfolioName,
           strategy: j.strategy,
-          tp: j.tp,
-          sl: j.sl,
+          tp,
+          sl,
           tpPnlUsd: outcomes?.tpPnlUsd ?? j.tpPnlUsd ?? null,
           slPnlUsd: outcomes?.slPnlUsd ?? j.slPnlUsd ?? null,
           riskUsd: j.riskUsd,
           paperId: j.paperId ?? null,
+          exchangeTp,
+          exchangeSl,
+          nakedTpsl,
+          tpslSource:
+            exchangeTp != null || exchangeSl != null
+              ? "exchange"
+              : tp != null || sl != null
+                ? "journal"
+                : "none",
           manageSnapshot,
         };
       }
 
       const entry = paper!.entry;
-      const tp = paper!.tp1Hit && paper!.tp2 ? paper!.tp2 : paper!.tp;
-      const sl = paper!.tp1Hit ? paper!.entry : paper!.sl;
+      const tpPaper = paper!.tp1Hit && paper!.tp2 ? paper!.tp2 : paper!.tp;
+      const slPaper = paper!.tp1Hit ? paper!.entry : paper!.sl;
+      const tp =
+        exchangeTp != null && exchangeTp > 0 ? exchangeTp : tpPaper;
+      const sl =
+        exchangeSl != null && exchangeSl > 0 ? exchangeSl : slPaper;
       const outcomes = tradeOutcomesUsd({
         side: p.side,
         entry,
@@ -130,6 +180,13 @@ export async function GET() {
         slPnlUsd: outcomes.slPnlUsd,
         riskUsd: null,
         paperId: paper!.id,
+        exchangeTp,
+        exchangeSl,
+        nakedTpsl,
+        tpslSource:
+          exchangeTp != null || exchangeSl != null
+            ? "exchange"
+            : "paper",
         manageSnapshot: manageSnapshot ?? paper!.manageSnapshot ?? null,
       };
     });
@@ -164,7 +221,7 @@ export async function GET() {
           riskPct: 2,
           riskUsd: Math.round(portfolio.accountValueUsd * 0.02 * 100) / 100,
           note:
-            "Boriaz live = même % de marge que le paper sur l’equity HL. Si TP / Si SL / bot via journal partagé.",
+            "LIVE = Boriaz uniquement. TP/SL lus sur HL (ordres trigger) + journal. Positions hors bot = « Externe ».",
         }
       : null,
   });

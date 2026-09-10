@@ -65,9 +65,9 @@ export async function POST(request: Request) {
       return Response.json({ error: "Paper introuvable" }, { status: 404 });
     }
     const { trade: t, trades, scope: paperScope } = found;
-    if (t.portfolioId !== "boriaz" && t.strategy !== "smc") {
+    if (t.portfolioId !== "boriaz") {
       return Response.json(
-        { error: "Copie LIVE réservée aux paper Boriaz / SMC" },
+        { error: "Copie LIVE réservée au paper Boriaz uniquement" },
         { status: 400 },
       );
     }

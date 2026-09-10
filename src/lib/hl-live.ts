@@ -310,6 +310,136 @@ function readOid(status: unknown): number | null {
   return null;
 }
 
+export type LiveExchangeTpsl = {
+  coin: string;
+  tp: number | null;
+  sl: number | null;
+  tpOid: number | null;
+  slOid: number | null;
+  orderCount: number;
+};
+
+function isTpOrderType(orderType: string): boolean {
+  return /take\s*profit/i.test(orderType) || /\btp\b/i.test(orderType);
+}
+
+function isSlOrderType(orderType: string): boolean {
+  return /stop/i.test(orderType) && !/take\s*profit/i.test(orderType);
+}
+
+/** Extrait TP/SL réels depuis les ordres trigger HL (source de vérité). */
+export function extractTpslFromOpenOrders(
+  opens: Array<{
+    coin?: string;
+    oid?: number;
+    isTrigger?: boolean;
+    isPositionTpsl?: boolean;
+    reduceOnly?: boolean;
+    orderType?: string;
+    triggerPx?: string | number;
+    limitPx?: string | number;
+  }>,
+  coin: string,
+): LiveExchangeTpsl {
+  const c = coin.toUpperCase();
+  const forCoin = opens.filter(
+    (o) => String(o.coin || "").toUpperCase() === c,
+  );
+  const tps = forCoin
+    .filter((o) => isTpOrderType(String(o.orderType || "")))
+    .map((o) => ({
+      px: Number(o.triggerPx || o.limitPx || 0),
+      oid: Number(o.oid) || null,
+    }))
+    .filter((x) => x.px > 0);
+  const sls = forCoin
+    .filter((o) => {
+      const ot = String(o.orderType || "");
+      return (
+        isSlOrderType(ot) ||
+        (Boolean(o.isTrigger || o.isPositionTpsl) && !isTpOrderType(ot))
+      );
+    })
+    .map((o) => ({
+      px: Number(o.triggerPx || o.limitPx || 0),
+      oid: Number(o.oid) || null,
+    }))
+    .filter((x) => x.px > 0);
+
+  let tp: number | null = null;
+  let sl: number | null = null;
+  let tpOid: number | null = null;
+  let slOid: number | null = null;
+
+  if (sls.length) {
+    sl = sls[0]!.px;
+    slOid = sls[0]!.oid;
+  }
+  if (tps.length) {
+    // SMC : 2 TP possibles → afficher le TP final (le plus éloigné du SL / entry)
+    const ref = sl ?? tps[0]!.px;
+    tps.sort((a, b) => Math.abs(b.px - ref) - Math.abs(a.px - ref));
+    tp = tps[0]!.px;
+    tpOid = tps[0]!.oid;
+  }
+
+  return {
+    coin: c,
+    tp,
+    sl,
+    tpOid,
+    slOid,
+    orderCount: forCoin.length,
+  };
+}
+
+/** Charge les TP/SL ouverts sur HL pour un compte. */
+export async function fetchLiveExchangeTpslMap(): Promise<
+  Record<string, LiveExchangeTpsl>
+> {
+  const cfg = getLiveConfig();
+  if (!cfg.accountAddress) return {};
+  try {
+    const info = new InfoClient({ transport: makeTransport(cfg.testnet) });
+    const opens = await info.frontendOpenOrders({
+      user: cfg.accountAddress as `0x${string}`,
+    });
+    const byCoin = new Map<string, typeof opens>();
+    for (const o of opens ?? []) {
+      const c = String(o.coin || "").toUpperCase();
+      if (!c) continue;
+      const arr = byCoin.get(c) ?? [];
+      arr.push(o);
+      byCoin.set(c, arr);
+    }
+    const out: Record<string, LiveExchangeTpsl> = {};
+    for (const [coin, list] of byCoin) {
+      out[coin] = extractTpslFromOpenOrders(list, coin);
+    }
+    return out;
+  } catch (e) {
+    console.info("fetchLiveExchangeTpslMap", e);
+    return {};
+  }
+}
+
+/** True si l’ordre HL est un TP/SL trigger (pas une limit entrée). */
+export function isProtectiveOpenOrder(o: {
+  isTrigger?: boolean;
+  isPositionTpsl?: boolean;
+  reduceOnly?: boolean;
+  orderType?: string;
+}): boolean {
+  const ot = String(o.orderType || "");
+  return (
+    Boolean(o.isTrigger) ||
+    Boolean(o.isPositionTpsl) ||
+    isTpOrderType(ot) ||
+    isSlOrderType(ot) ||
+    (Boolean(o.reduceOnly) && /stop|take\s*profit/i.test(ot))
+  );
+}
+
 
 export type LivePositionRow = {
   coin: string;
@@ -331,6 +461,13 @@ export type LivePositionRow = {
   slPnlUsd?: number | null;
   riskUsd?: number | null;
   paperId?: string | null;
+  /** TP/SL lus sur les ordres trigger HL (source de vérité exchange). */
+  exchangeTp?: number | null;
+  exchangeSl?: number | null;
+  /** true si position ouverte sans TP ni SL sur HL. */
+  nakedTpsl?: boolean;
+  /** journal | exchange | paper | none */
+  tpslSource?: "journal" | "exchange" | "paper" | "none" | null;
 };
 
 export type LivePortfolioSnapshot = {
@@ -849,14 +986,104 @@ export async function placeBoriazLiveTrade(
         ],
         grouping: "na",
       });
-      const statuses = result.response?.data?.statuses ?? [];
-      const err = statuses.find(
+      let statuses = result.response?.data?.statuses ?? [];
+      let err = statuses.find(
         (s) => s && typeof s === "object" && "error" in s,
       ) as { error?: string } | undefined;
+      // Retry 1× si le batch protecteur échoue (évite position nue)
       if (err?.error) {
+        await new Promise((r) => setTimeout(r, 800));
+        try {
+          result = await client.order({
+            orders: [
+              {
+                a: asset.id,
+                b: !isBuy,
+                p: tp1Px,
+                s: halfSz,
+                r: true,
+                t: {
+                  trigger: {
+                    isMarket: true,
+                    triggerPx: tp1Px,
+                    tpsl: "tp",
+                  },
+                },
+              },
+              {
+                a: asset.id,
+                b: !isBuy,
+                p: tp2Px,
+                s: halfSz,
+                r: true,
+                t: {
+                  trigger: {
+                    isMarket: true,
+                    triggerPx: tp2Px,
+                    tpsl: "tp",
+                  },
+                },
+              },
+              {
+                a: asset.id,
+                b: !isBuy,
+                p: slPx,
+                s: size,
+                r: true,
+                t: {
+                  trigger: {
+                    isMarket: true,
+                    triggerPx: slPx,
+                    tpsl: "sl",
+                  },
+                },
+              },
+            ],
+            grouping: "na",
+          });
+          statuses = result.response?.data?.statuses ?? [];
+          err = statuses.find(
+            (s) => s && typeof s === "object" && "error" in s,
+          ) as { error?: string } | undefined;
+        } catch (retryErr) {
+          err = { error: hlErrMessage(retryErr) };
+        }
+      }
+      if (err?.error) {
+        // Dernier recours : flatten pour ne pas laisser une position sans TP/SL
+        try {
+          const midInfo = new InfoClient({
+            transport: makeTransport(cfg.testnet),
+          });
+          const mids = await midInfo.allMids();
+          const mid = Number(
+            mids[asset.name] ?? mids[asset.name.toUpperCase()] ?? req.entry,
+          );
+          const flatPx = aggressivePx(
+            req.side === "long" ? "short" : "long",
+            mid > 0 ? mid : req.entry,
+            req.entry,
+            asset.szDecimals,
+          );
+          await client.order({
+            orders: [
+              {
+                a: asset.id,
+                b: !isBuy,
+                p: flatPx,
+                s: size,
+                r: true,
+                t: { limit: { tif: "FrontendMarket" } },
+              },
+            ],
+            grouping: "na",
+          });
+        } catch (flatErr) {
+          console.error("SMC live flatten after naked TP/SL fail", flatErr);
+        }
         return {
           ok: false,
-          reason: err.error,
+          reason: `TP/SL refusés après entrée (${err.error}) — tentative de flatten`,
           coin: asset.name,
           assetId: asset.id,
           size,
@@ -1033,19 +1260,35 @@ export async function manageLiveSmcPositions(): Promise<{
       Number(e.tp1) > 0 &&
       !e.tp1Hit,
   );
-  if (!journal.length) return { checked: 0, updated: 0, notes: [] };
 
   const cfg = getLiveConfig();
+  const notes: string[] = [];
+  let updated = 0;
+  let checked = 0;
+
+  if (!journal.length) {
+    const repaired = await repairNakedLiveTpsl();
+    return {
+      checked: repaired.checked,
+      updated: repaired.updated,
+      notes: repaired.notes,
+    };
+  }
+
   const portfolio = await fetchLivePortfolio();
   if (!portfolio.ok) {
-    return { checked: journal.length, updated: 0, notes: [portfolio.reason || "portfolio"] };
+    const repaired = await repairNakedLiveTpsl();
+    return {
+      checked: journal.length + repaired.checked,
+      updated: repaired.updated,
+      notes: [portfolio.reason || "portfolio", ...repaired.notes],
+    };
   }
   const info = new InfoClient({ transport: makeTransport(cfg.testnet) });
   const mids = await info.allMids();
   const assets = await loadAssetMap(cfg.testnet);
   const client = getExchangeClient(cfg.testnet);
-  const notes: string[] = [];
-  let updated = 0;
+  checked = journal.length;
 
   for (const entry of journal) {
     const pos = portfolio.positions.find(
@@ -1068,13 +1311,17 @@ export async function manageLiveSmcPositions(): Promise<{
     if (!asset) continue;
 
     try {
-      // Annuler TP/SL restants pour recaler BE + TP2
+      // Annuler UNIQUEMENT les TP/SL trigger (pas d’autres ordres limit)
       try {
         const opens = await info.frontendOpenOrders({
           user: cfg.accountAddress as `0x${string}`,
         });
         const cancels = (opens ?? [])
-          .filter((o) => String(o.coin || "").toUpperCase() === entry.coin.toUpperCase())
+          .filter(
+            (o) =>
+              String(o.coin || "").toUpperCase() ===
+                entry.coin.toUpperCase() && isProtectiveOpenOrder(o),
+          )
           .map((o) => ({ a: asset.id, o: Number(o.oid) }))
           .filter((c) => Number.isFinite(c.o));
         if (cancels.length) {
@@ -1127,40 +1374,59 @@ export async function manageLiveSmcPositions(): Promise<{
       const bePx = formatPx(entry.entry, asset.szDecimals);
       const tp2Px = formatPx(Number(entry.tp2 ?? entry.tp), asset.szDecimals);
       const isBuy = entry.side === "long";
-      const tpsl = await client.order({
-        orders: [
-          {
-            a: asset.id,
-            b: !isBuy,
-            p: tp2Px,
-            s: remSz,
-            r: true,
-            t: {
-              trigger: {
-                isMarket: true,
-                triggerPx: tp2Px,
-                tpsl: "tp",
+      const placeBeTp2 = async () =>
+        client.order({
+          orders: [
+            {
+              a: asset.id,
+              b: !isBuy,
+              p: tp2Px,
+              s: remSz,
+              r: true,
+              t: {
+                trigger: {
+                  isMarket: true,
+                  triggerPx: tp2Px,
+                  tpsl: "tp",
+                },
               },
             },
-          },
-          {
-            a: asset.id,
-            b: !isBuy,
-            p: bePx,
-            s: remSz,
-            r: true,
-            t: {
-              trigger: {
-                isMarket: true,
-                triggerPx: bePx,
-                tpsl: "sl",
+            {
+              a: asset.id,
+              b: !isBuy,
+              p: bePx,
+              s: remSz,
+              r: true,
+              t: {
+                trigger: {
+                  isMarket: true,
+                  triggerPx: bePx,
+                  tpsl: "sl",
+                },
               },
             },
-          },
-        ],
-        grouping: "na",
-      });
-      const st = tpsl.response?.data?.statuses ?? [];
+          ],
+          grouping: "na",
+        });
+      let tpsl = await placeBeTp2();
+      let st = tpsl.response?.data?.statuses ?? [];
+      let tpslErr = st.find(
+        (s) => s && typeof s === "object" && "error" in s,
+      ) as { error?: string } | undefined;
+      if (tpslErr?.error) {
+        await new Promise((r) => setTimeout(r, 700));
+        tpsl = await placeBeTp2();
+        st = tpsl.response?.data?.statuses ?? [];
+        tpslErr = st.find(
+          (s) => s && typeof s === "object" && "error" in s,
+        ) as { error?: string } | undefined;
+      }
+      if (tpslErr?.error) {
+        notes.push(
+          `${entry.coin}: TP2/BE refusés après cancel (${tpslErr.error}) — position peut être nue`,
+        );
+        continue;
+      }
       const tp2 = Number(entry.tp2 ?? entry.tp);
       const { tradeOutcomesUsd } = await import("./trade-outcomes");
       const outcomes = tradeOutcomesUsd({
@@ -1189,7 +1455,120 @@ export async function manageLiveSmcPositions(): Promise<{
     }
   }
 
-  return { checked: journal.length, updated, notes };
+  const repaired = await repairNakedLiveTpsl();
+  notes.push(...repaired.notes);
+  updated += repaired.updated;
+
+  return { checked: checked + repaired.checked, updated, notes };
+}
+
+/**
+ * Si une position Boriaz (journal) n’a plus de TP/SL sur HL → re-place.
+ * Évite les positions « nues » après échec cancel/replace.
+ */
+export async function repairNakedLiveTpsl(): Promise<{
+  checked: number;
+  updated: number;
+  notes: string[];
+}> {
+  const ready = isLiveEnvReady();
+  if (!ready.ok) return { checked: 0, updated: 0, notes: [] };
+  const cfg = getLiveConfig();
+  const { loadLiveJournal, updateLiveJournalEntry } = await import(
+    "./live-journal"
+  );
+  const journal = (await loadLiveJournal()).filter((e) => e.status === "open");
+  if (!journal.length) return { checked: 0, updated: 0, notes: [] };
+
+  const portfolio = await fetchLivePortfolio();
+  if (!portfolio.ok) return { checked: 0, updated: 0, notes: [] };
+
+  const info = new InfoClient({ transport: makeTransport(cfg.testnet) });
+  const opens = await info.frontendOpenOrders({
+    user: cfg.accountAddress as `0x${string}`,
+  }).catch(() => []);
+  const assets = await loadAssetMap(cfg.testnet);
+  const client = getExchangeClient(cfg.testnet);
+  const notes: string[] = [];
+  let updated = 0;
+  let checked = 0;
+
+  for (const entry of journal) {
+    const pos = portfolio.positions.find(
+      (p) =>
+        p.coin.toUpperCase() === entry.coin.toUpperCase() &&
+        p.side === entry.side,
+    );
+    if (!pos) continue;
+    checked += 1;
+    const tpsl = extractTpslFromOpenOrders(opens ?? [], entry.coin);
+    if (tpsl.tp != null && tpsl.sl != null) continue;
+    if (!(entry.tp > 0 && entry.sl > 0)) continue;
+
+    const asset = assets.get(entry.coin.toUpperCase());
+    if (!asset) continue;
+    const size = formatSz(Math.abs(pos.size), asset.szDecimals);
+    if (!size || Number(size) <= 0) continue;
+
+    const isBuy = entry.side === "long";
+    const tpPx = formatPx(entry.tp, asset.szDecimals);
+    const slPx = formatPx(entry.sl, asset.szDecimals);
+    try {
+      const res = await client.order({
+        orders: [
+          {
+            a: asset.id,
+            b: !isBuy,
+            p: tpPx,
+            s: size,
+            r: true,
+            t: {
+              trigger: {
+                isMarket: true,
+                triggerPx: tpPx,
+                tpsl: "tp",
+              },
+            },
+          },
+          {
+            a: asset.id,
+            b: !isBuy,
+            p: slPx,
+            s: size,
+            r: true,
+            t: {
+              trigger: {
+                isMarket: true,
+                triggerPx: slPx,
+                tpsl: "sl",
+              },
+            },
+          },
+        ],
+        grouping: "na",
+      });
+      const st = res.response?.data?.statuses ?? [];
+      const err = st.find(
+        (s) => s && typeof s === "object" && "error" in s,
+      ) as { error?: string } | undefined;
+      if (err?.error) {
+        notes.push(`${entry.coin}: repair TP/SL refusé (${err.error})`);
+        continue;
+      }
+      await updateLiveJournalEntry(entry.id, {
+        tpOid: readOid(st[0]),
+        slOid: readOid(st[1]),
+      });
+      updated += 1;
+      notes.push(`${entry.coin}: TP/SL réparés sur HL`);
+    } catch (e) {
+      notes.push(
+        `${entry.coin}: repair err ${e instanceof Error ? e.message : "x"}`,
+      );
+    }
+  }
+
+  return { checked, updated, notes };
 }
 
 export async function placeBoriazLiveTradeMirrored(

@@ -203,8 +203,15 @@ export async function manageLivePositionReviews(opts?: {
   for (const pos of portfolio.positions.slice(0, max)) {
     const j = matchJournalToPosition(openJournal, pos.coin, pos.side);
     const entryPx = j?.entry && j.entry > 0 ? j.entry : pos.entryPx;
-    const tp = j?.tp && j.tp > 0 ? j.tp : entryPx * (pos.side === "long" ? 1.02 : 0.98);
-    const sl = j?.sl && j.sl > 0 ? j.sl : entryPx * (pos.side === "long" ? 0.98 : 1.02);
+    const hasRealTp = Boolean(j?.tp && j.tp > 0);
+    const hasRealSl = Boolean(j?.sl && j.sl > 0);
+    const levelsAreReal = hasRealTp && hasRealSl;
+    const tp = hasRealTp
+      ? j!.tp
+      : entryPx * (pos.side === "long" ? 1.25 : 0.75);
+    const sl = hasRealSl
+      ? j!.sl
+      : entryPx * (pos.side === "long" ? 0.75 : 1.25);
 
     let frames: TimeframeFrame[] = [];
     try {
@@ -247,8 +254,9 @@ export async function manageLivePositionReviews(opts?: {
       portfolioName: j?.portfolioName || j?.botLabel || "Live",
     });
 
-    const lastAt =
-      j?.manageSnapshot?.at ?? orphan[snapKey(pos.coin, pos.side)]?.at ?? 0;
+    const previousSnapshot =
+      j?.manageSnapshot ?? orphan[snapKey(pos.coin, pos.side)] ?? null;
+    const lastAt = previousSnapshot?.at ?? 0;
 
     const evaluated = await evaluateTradeManage({
       trade: stub,
@@ -257,6 +265,8 @@ export async function manageLivePositionReviews(opts?: {
       pnl: { pnlPct, pnlEur: pnlUsd, movePct },
       skipAi: opts?.skipAi,
       lastSnapshotAt: lastAt,
+      previousSnapshot,
+      levelsAreReal,
       currency: "$",
     });
     if (evaluated.aiUsed) aiUsed = true;

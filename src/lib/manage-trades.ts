@@ -62,6 +62,118 @@ function distPct(a: number, b: number): number {
 }
 
 /**
+ * Stabilise les avis live/paper : évite hold ↔ close en quelques secondes.
+ * - garde l’action précédente jusqu’à minDuration OU 2 confirmations brutes
+ * - escalade close/flip plus lente que wait↔hold
+ */
+export function stabilizeManageAction(opts: {
+  prev?: TradeManageSnapshot | null;
+  next: ManageAction;
+  reason: string;
+  outlook: string;
+}): {
+  action: ManageAction;
+  reason: string;
+  outlook: string;
+  rawAction: ManageAction;
+  actionSince: number;
+  confirmCount: number;
+  sticky: boolean;
+} {
+  const now = Date.now();
+  const prev = opts.prev;
+  const next = opts.next;
+  if (!prev?.action) {
+    return {
+      action: next,
+      reason: opts.reason,
+      outlook: opts.outlook,
+      rawAction: next,
+      actionSince: now,
+      confirmCount: 1,
+      sticky: false,
+    };
+  }
+
+  const sameAsPrev = prev.action === next;
+  const sameAsRaw = prev.rawAction === next;
+  const confirmCount = sameAsRaw ? (prev.confirmCount ?? 1) + 1 : 1;
+  const actionSince = sameAsPrev ? prev.actionSince ?? prev.at : prev.at;
+  const heldMs = now - (prev.actionSince ?? prev.at);
+
+  if (sameAsPrev) {
+    return {
+      action: prev.action,
+      reason: opts.reason,
+      outlook: opts.outlook,
+      rawAction: next,
+      actionSince,
+      confirmCount,
+      sticky: false,
+    };
+  }
+
+  const softPair =
+    (prev.action === "hold" || prev.action === "wait") &&
+    (next === "hold" || next === "wait");
+  const escalateClose = next === "close";
+  const escalateFlip = next === "flip";
+  const deEscalate =
+    (prev.action === "close" || prev.action === "flip") &&
+    (next === "hold" || next === "wait");
+
+  const minMs = softPair
+    ? 90_000
+    : escalateFlip
+      ? 4 * 60_000
+      : escalateClose
+        ? 2.5 * 60_000
+        : deEscalate
+          ? 3 * 60_000
+          : 2 * 60_000;
+  const needConfirms = escalateFlip ? 3 : escalateClose ? 2 : softPair ? 2 : 2;
+
+  if (heldMs >= minMs && confirmCount >= needConfirms) {
+    return {
+      action: next,
+      reason: opts.reason,
+      outlook: opts.outlook,
+      rawAction: next,
+      actionSince: now,
+      confirmCount: 1,
+      sticky: false,
+    };
+  }
+
+  // Soft: wait↔hold peut basculer plus vite après 1 confirm + 45s
+  if (softPair && heldMs >= 45_000 && confirmCount >= 1) {
+    return {
+      action: next,
+      reason: opts.reason,
+      outlook: opts.outlook,
+      rawAction: next,
+      actionSince: now,
+      confirmCount: 1,
+      sticky: false,
+    };
+  }
+
+  const waitSec = Math.max(
+    0,
+    Math.ceil((minMs - heldMs) / 1000),
+  );
+  return {
+    action: prev.action,
+    reason: `${prev.reason} · (avis stable${waitSec > 0 ? ` encore ~${waitSec}s` : ""})`,
+    outlook: prev.outlook || opts.outlook,
+    rawAction: next,
+    actionSince: prev.actionSince ?? prev.at,
+    confirmCount,
+    sticky: true,
+  };
+}
+
+/**
  * Décision déterministe enrichie : PnL live + structure + zones S/R.
  * - close : setup mort / zone majeure atteinte en profit / adverse fort + perte
  * - hold : rebond/rechute favorable encore probable
@@ -570,6 +682,12 @@ export async function evaluateTradeManage(opts: {
   /** Skip relecture SMC (FVG/BOS) — utile si déjà fournie. */
   skipSmc?: boolean;
   lastSnapshotAt?: number;
+  /** Snapshot précédent (hystérésis avis). */
+  previousSnapshot?: TradeManageSnapshot | null;
+  /**
+   * false = TP/SL stubs (±2%) — ignore nearTp/nearSl pour éviter faux « clôturer ».
+   */
+  levelsAreReal?: boolean;
   currency?: "€" | "$";
 }): Promise<{
   action: ManageAction;
@@ -580,21 +698,39 @@ export async function evaluateTradeManage(opts: {
   aiUsed: boolean;
 }> {
   const currency = opts.currency ?? "€";
+  const levelsAreReal = opts.levelsAreReal !== false;
+  const tradeForDet =
+    levelsAreReal
+      ? opts.trade
+      : {
+          ...opts.trade,
+          // Éloigne TP/SL artificiels pour ne pas déclencher nearTp/nearSl
+          tp:
+            opts.trade.side === "long"
+              ? opts.trade.entry * 1.25
+              : opts.trade.entry * 0.75,
+          sl:
+            opts.trade.side === "long"
+              ? opts.trade.entry * 0.75
+              : opts.trade.entry * 1.25,
+        };
   const pnl = {
     pnlPct: opts.pnl.pnlPct,
     pnlEur: opts.pnl.pnlEur,
     movePct: opts.pnl.movePct ?? opts.pnl.pnlPct / Math.max(1, opts.trade.leverage),
   };
-  const det = deterministicDecision(opts.trade, opts.frames, opts.price, pnl);
+  const det = deterministicDecision(tradeForDet, opts.frames, opts.price, pnl);
   let action = det.action;
   let reason = det.reason;
   let outlook = det.outlook;
   let providers = ["règles+PnL"];
   let aiUsed = false;
 
-  const lastAt = opts.lastSnapshotAt ?? 0;
-  const stale = Date.now() - lastAt > 3 * 60_000;
+  const lastAt =
+    opts.previousSnapshot?.at ?? opts.lastSnapshotAt ?? 0;
+  const stale = Date.now() - lastAt > 5 * 60_000;
   const critical = det.action === "close" || det.action === "flip";
+  // IA moins souvent : seulement si stale (5 min) ou critique — réduit le flip-flop
   if (!opts.skipAi && (stale || critical)) {
     const ai = await aiDecision(
       opts.trade,
@@ -635,6 +771,7 @@ export async function evaluateTradeManage(opts: {
   );
 
   // SMC FVG / BOS / Sweep / ÔTE pendant le trade (sauf skip explicite)
+  let smcAgainstStrong = false;
   if (!opts.skipSmc) {
     try {
       const { reviewOpenTradeSmc } = await import("./smc-open-review");
@@ -660,26 +797,55 @@ export async function evaluateTradeManage(opts: {
         snapshot.bullets = [...smc.bullets, ...base].slice(0, 12);
         if (!providers.includes("SMC")) providers = [...providers, "SMC"];
         snapshot.providers = providers;
-        // Structure SMC clairement contre → pousse close/wait si règles étaient hold
-        if (smc.against && (action === "hold" || action === "wait")) {
-          if (smc.againstPosition.chochBos && smc.againstPosition.sweep) {
+        // Contre fort = Sweep+BOS adverses — pousse wait d’abord, close seulement si déjà wait/close sticky
+        smcAgainstStrong =
+          smc.against &&
+          smc.againstPosition.chochBos &&
+          smc.againstPosition.sweep;
+        if (smcAgainstStrong && (action === "hold" || action === "wait")) {
+          const prevAct = opts.previousSnapshot?.action;
+          if (prevAct === "wait" || prevAct === "close") {
             action = "close";
-            reason = `SMC contre ${opts.trade.side} (Sweep+BOS adverses) · ${reason}`;
-            outlook = `Structure SMC adverse — sortie ${opts.trade.side} recommandée.`;
-            snapshot.action = action;
-            snapshot.reason = reason.slice(0, 280);
-            snapshot.outlook = outlook.slice(0, 280);
-            snapshot.bullets = [
-              `À faire : clôturer le ${opts.trade.side} (SMC adverse)`,
-              ...(snapshot.bullets ?? []),
-            ].slice(0, 12);
+            reason = `SMC contre ${opts.trade.side} (Sweep+BOS adverses confirmés) · ${reason}`;
+            outlook = `Structure SMC adverse confirmée — sortie ${opts.trade.side} recommandée.`;
+          } else {
+            action = "wait";
+            reason = `SMC contre ${opts.trade.side} (Sweep+BOS adverses) — confirmation… · ${reason}`;
+            outlook = `Structure SMC adverse naissante — on surveille avant de clôturer.`;
           }
+          snapshot.action = action;
+          snapshot.reason = reason.slice(0, 280);
+          snapshot.outlook = outlook.slice(0, 280);
+          snapshot.bullets = [
+            action === "close"
+              ? `À faire : clôturer le ${opts.trade.side} (SMC adverse confirmé)`
+              : `À faire : attendre confirmation SMC adverse avant clôture`,
+            ...(snapshot.bullets ?? []),
+          ].slice(0, 12);
         }
       }
     } catch {
       /* SMC optionnel */
     }
   }
+
+  const stable = stabilizeManageAction({
+    prev: opts.previousSnapshot,
+    next: action,
+    reason: snapshot.reason,
+    outlook: snapshot.outlook,
+  });
+  snapshot.action = stable.action;
+  snapshot.reason = stable.reason.slice(0, 280);
+  snapshot.outlook = stable.outlook.slice(0, 280);
+  snapshot.rawAction = stable.rawAction;
+  snapshot.actionSince = stable.actionSince;
+  snapshot.confirmCount = stable.confirmCount;
+  if (stable.sticky && !providers.includes("stable")) {
+    providers = [...providers, "stable"];
+    snapshot.providers = providers;
+  }
+  void smcAgainstStrong;
 
   return {
     action: snapshot.action,
@@ -744,6 +910,8 @@ export async function manageOpenTrades(opts?: {
       pnl,
       skipAi: opts?.skipAi,
       lastSnapshotAt: trade.manageSnapshot?.at,
+      previousSnapshot: trade.manageSnapshot,
+      levelsAreReal: trade.tp > 0 && trade.sl > 0,
     });
     if (evaluated.aiUsed) aiUsed = true;
     const { action, reason, outlook, providers } = evaluated;

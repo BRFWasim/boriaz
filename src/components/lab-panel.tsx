@@ -102,6 +102,8 @@ export function LabPanel() {
       tpPnlUsd?: number | null;
       slPnlUsd?: number | null;
       riskUsd?: number | null;
+      nakedTpsl?: boolean;
+      tpslSource?: string | null;
       manageSnapshot?: TradeManageSnapshot | null;
     }[];
   } | null>(null);
@@ -1003,7 +1005,13 @@ export function LabPanel() {
                             {p.side} {p.leverage}×
                           </span>
                           {p.botLabel ? (
-                            <span className="ml-2 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-300">
+                            <span
+                              className={`ml-2 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                                /externe|hors bot/i.test(p.botLabel)
+                                  ? "bg-amber-500/15 text-amber-800 dark:text-amber-300"
+                                  : "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                              }`}
+                            >
                               {p.botLabel}
                             </span>
                           ) : (
@@ -1011,6 +1019,11 @@ export function LabPanel() {
                               bot ?
                             </span>
                           )}
+                          {p.nakedTpsl ? (
+                            <span className="ml-2 rounded border border-rose-500/40 bg-rose-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700 dark:text-rose-300">
+                              sans TP/SL HL
+                            </span>
+                          ) : null}
                         </span>
                         <span className={signedClass(p.unrealizedPnlUsd)}>
                           {p.unrealizedPnlUsd >= 0 ? "+" : ""}
@@ -1019,11 +1032,18 @@ export function LabPanel() {
                       </div>
                       <p className="mt-1 text-xs text-muted-foreground">
                         size {p.size} · entry {p.entryPx}
-                        {p.tp != null ? ` · TP ${p.tp}` : ""}
-                        {p.sl != null ? ` · SL ${p.sl}` : ""}
+                        {p.tp != null ? ` · TP ${p.tp}` : " · TP —"}
+                        {p.sl != null ? ` · SL ${p.sl}` : " · SL —"}
+                        {p.tpslSource ? ` · src ${p.tpslSource}` : ""}
                         {" · "}notionnel {p.positionValueUsd.toFixed(2)} $ · marge{" "}
                         {p.marginUsedUsd.toFixed(2)} $
                       </p>
+                      {p.nakedTpsl ? (
+                        <p className="mt-0.5 text-[11px] text-rose-700 dark:text-rose-300">
+                          Aucun TP/SL trigger sur Hyperliquid (externe ou
+                          placement incomplet).
+                        </p>
+                      ) : null}
                       <p className="mt-0.5 text-xs">
                         <span className="text-emerald-700 dark:text-emerald-400">
                           Si TP{" "}

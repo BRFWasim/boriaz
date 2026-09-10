@@ -472,6 +472,13 @@ export interface TradeManageSnapshot {
     oteLabel: string | null;
     against: boolean;
   } | null;
+  /**
+   * Hystérésis : action affichée sticky jusqu’à confirmation.
+   * rawAction = dernier verdict brut (avant sticky).
+   */
+  rawAction?: "close" | "flip" | "wait" | "hold";
+  actionSince?: number;
+  confirmCount?: number;
 }
 
 export interface BookTrade {

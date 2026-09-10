@@ -99,9 +99,9 @@ export async function reviewOpenTradeSmc(opts: {
     const againstFvg = detectFvg(m15, opp);
 
     const marketSide = setup.side;
-    const against =
-      (marketSide != null && marketSide !== opts.side) ||
-      (againstBos.ok && againstSweep.ok);
+    // Against = structure adverse locale (Sweep+BOS), PAS le flip du biais marché
+    // (analyzeSmcSetup oscille trop vite et faisait basculer l’avis en quelques secondes).
+    const against = againstBos.ok && againstSweep.ok;
 
     const withPos = {
       sweep: withSweep.ok,
