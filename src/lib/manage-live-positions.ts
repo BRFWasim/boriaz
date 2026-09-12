@@ -26,6 +26,9 @@ import { dataPath, ensureDataDir } from "./data-dir";
 const SNAPS_KEY = "boriazbot:hl-live-manage-snaps";
 const memSnaps = new Map<string, string>();
 
+/** Budget TF par coin — le poll UI ne doit pas rester bloqué. */
+const FRAMES_TIMEOUT_MS = 8_000;
+
 export type LiveManageDecision = {
   coin: string;
   side: "long" | "short";
@@ -163,6 +166,78 @@ function stubPaperFromLive(input: {
   };
 }
 
+
+async function analyzeFramesWithTimeout(
+  coin: string,
+  ms: number,
+): Promise<TimeframeFrame[]> {
+  try {
+    return await Promise.race([
+      analyzeCoinFrames(coin, [
+        { interval: "15m", horizon: "très court (15m)" },
+        { interval: "1h", horizon: "court (1h)" },
+        { interval: "4h", horizon: "moyen (4h)" },
+      ]),
+      new Promise<TimeframeFrame[]>((resolve) =>
+        setTimeout(() => resolve([]), ms),
+      ),
+    ]);
+  } catch {
+    return [];
+  }
+}
+
+function buildLiveFallbackSnapshot(input: {
+  side: "long" | "short";
+  price: number;
+  pnlUsd: number;
+  pnlPct: number;
+  previous: TradeManageSnapshot | null;
+}): TradeManageSnapshot {
+  const { side, price, pnlUsd, pnlPct, previous } = input;
+  const sign = pnlUsd >= 0 ? "+" : "";
+  const action = previous?.action ?? (pnlPct <= -8 ? "wait" : "hold");
+  return {
+    at: Date.now(),
+    action,
+    reason: (
+      previous?.reason ??
+      `Live ${side.toUpperCase()} · mid ${price} · PnL ${sign}${pnlUsd.toFixed(2)} $ (${sign}${pnlPct.toFixed(1)} %)`
+    ).slice(0, 280),
+    price,
+    pnlEur: Math.round(pnlUsd * 100) / 100,
+    pnlPct: Math.round(pnlPct * 100) / 100,
+    bias1h: previous?.bias1h ?? "neutre",
+    bias4h: previous?.bias4h ?? "neutre",
+    bias15m: previous?.bias15m,
+    support: previous?.support ?? null,
+    resistance: previous?.resistance ?? null,
+    providers: previous
+      ? Array.from(new Set([...(previous.providers ?? []), "mid+PnL"]))
+      : ["mid+PnL"],
+    outlook: (
+      previous?.outlook ??
+      (pnlUsd >= 0
+        ? "Position en gain — laisser courir, surveiller structure au prochain scan."
+        : "Position en perte — attendre confirmation multi-TF avant de couper.")
+    ).slice(0, 280),
+    side,
+    currency: "$",
+    bullets: [
+      `${side.toUpperCase()} live · PnL ${sign}${pnlUsd.toFixed(2)} $ (${sign}${pnlPct.toFixed(1)} %)`,
+      `Spot ~${price}`,
+      previous
+        ? "Dernier avis conservé — TF/SMC en rafraîchissement"
+        : "Analyse mid+PnL immédiate — structure TF dès que HL répond",
+      ...(previous?.bullets ?? []),
+    ].slice(0, 8),
+    smc: previous?.smc ?? null,
+    rawAction: previous?.rawAction,
+    actionSince: previous?.actionSince,
+    confirmCount: previous?.confirmCount,
+  };
+}
+
 /**
  * Relit chaque position HL ouverte : mid + TF + PnL $ → snapshot.
  * Advisory only — aucune clôture HL ici.
@@ -203,6 +278,7 @@ export async function manageLivePositionReviews(opts?: {
   const max = opts?.max ?? 8;
 
   for (const pos of portfolio.positions.slice(0, max)) {
+    const key = snapKey(pos.coin, pos.side);
     try {
       const j = matchJournalToPosition(openJournal, pos.coin, pos.side);
       const entryPx = j?.entry && j.entry > 0 ? j.entry : pos.entryPx;
@@ -216,32 +292,44 @@ export async function manageLivePositionReviews(opts?: {
         ? j!.sl
         : entryPx * (pos.side === "long" ? 0.75 : 1.25);
 
-      let frames: TimeframeFrame[] = [];
-      try {
-        frames = await analyzeCoinFrames(pos.coin, [
-          { interval: "15m", horizon: "très court (15m)" },
-          { interval: "1h", horizon: "court (1h)" },
-          { interval: "4h", horizon: "moyen (4h)" },
-        ]);
-      } catch {
-        frames = [];
-      }
+      const mid = mids[pos.coin.toUpperCase()] ?? 0;
+      const priceEarly = mid > 0 ? mid : entryPx;
+      const movePctEarly =
+        pos.side === "long"
+          ? ((priceEarly - entryPx) / Math.max(entryPx, 1e-9)) * 100
+          : ((entryPx - priceEarly) / Math.max(entryPx, 1e-9)) * 100;
+      const lev = pos.leverage || j?.leverage || 1;
+      const pnlPctEarly = movePctEarly * lev;
+      const pnlUsd = pos.unrealizedPnlUsd;
+      const previousSnapshot =
+        j?.manageSnapshot ?? orphan[key] ?? null;
+
+      // Snapshot immédiat (garantit l’UI même si HL candles timeout)
+      let snapshot = buildLiveFallbackSnapshot({
+        side: pos.side,
+        price: priceEarly,
+        pnlUsd,
+        pnlPct: pnlPctEarly,
+        previous: previousSnapshot,
+      });
+      orphan[key] = snapshot;
+      await saveOrphanSnaps(orphan);
+
+      const frames = await analyzeFramesWithTimeout(
+        pos.coin,
+        FRAMES_TIMEOUT_MS,
+      );
 
       const candlePx =
         frames.find((f) => f.interval === "1h")?.indicators?.price ??
         frames[0]?.indicators?.price ??
         0;
-      const mid = mids[pos.coin.toUpperCase()] ?? 0;
       const price = mid > 0 ? mid : candlePx > 0 ? candlePx : entryPx;
-
       const movePct =
         pos.side === "long"
-          ? ((price - entryPx) / entryPx) * 100
-          : ((entryPx - price) / entryPx) * 100;
-      const lev = pos.leverage || j?.leverage || 1;
+          ? ((price - entryPx) / Math.max(entryPx, 1e-9)) * 100
+          : ((entryPx - price) / Math.max(entryPx, 1e-9)) * 100;
       const pnlPct = movePct * lev;
-      // TradeManageSnapshot.pnlEur stocke le $ pour le live (UI affiche $)
-      const pnlUsd = pos.unrealizedPnlUsd;
 
       const stub = stubPaperFromLive({
         coin: pos.coin,
@@ -256,84 +344,68 @@ export async function manageLivePositionReviews(opts?: {
         portfolioName: j?.portfolioName || j?.botLabel || "Live",
       });
 
-      const previousSnapshot =
-        j?.manageSnapshot ?? orphan[snapKey(pos.coin, pos.side)] ?? null;
-      const lastAt = previousSnapshot?.at ?? 0;
+      let evaluatedAction: LiveManageDecision["action"] = snapshot.action;
+      let evaluatedProviders = snapshot.providers;
 
-      let snapshot: TradeManageSnapshot;
-      let evaluatedAction: LiveManageDecision["action"];
-      let evaluatedProviders: string[];
-
-      if (!frames.length) {
-        // Snapshot dégradé : ne jamais skip (sinon « Relecture en cours… »)
+      if (frames.length) {
+        try {
+          const evaluated = await evaluateTradeManage({
+            trade: stub,
+            frames,
+            price,
+            pnl: { pnlPct, pnlEur: pnlUsd, movePct },
+            skipAi: opts?.skipAi,
+            skipSmc: opts?.skipSmc,
+            lastSnapshotAt: previousSnapshot?.at ?? 0,
+            previousSnapshot,
+            levelsAreReal,
+            currency: "$",
+          });
+          if (evaluated.aiUsed) aiUsed = true;
+          snapshot = {
+            ...evaluated.snapshot,
+            pnlEur: Math.round(pnlUsd * 100) / 100,
+            pnlPct: Math.round(pnlPct * 100) / 100,
+            currency: "$",
+            side: pos.side,
+          };
+          evaluatedAction = evaluated.action;
+          evaluatedProviders = evaluated.providers;
+        } catch {
+          snapshot = {
+            ...snapshot,
+            price,
+            pnlEur: Math.round(pnlUsd * 100) / 100,
+            pnlPct: Math.round(pnlPct * 100) / 100,
+            at: Date.now(),
+          };
+        }
+      } else {
         snapshot = {
-          at: Date.now(),
-          action: previousSnapshot?.action ?? "wait",
-          reason:
-            previousSnapshot?.reason ??
-            "Données TF indisponibles (HL lent/429) — PnL mid uniquement",
+          ...snapshot,
           price,
           pnlEur: Math.round(pnlUsd * 100) / 100,
           pnlPct: Math.round(pnlPct * 100) / 100,
-          bias1h: previousSnapshot?.bias1h ?? "neutre",
-          bias4h: previousSnapshot?.bias4h ?? "neutre",
-          bias15m: previousSnapshot?.bias15m,
-          support: previousSnapshot?.support ?? null,
-          resistance: previousSnapshot?.resistance ?? null,
-          providers: previousSnapshot
-            ? [...(previousSnapshot.providers ?? []), "mid+PnL"]
-            : ["mid+PnL"],
-          outlook:
-            previousSnapshot?.outlook ??
-            "Surveillance dégradée : attendre le prochain scan complet.",
-          side: pos.side,
-          currency: "$",
+          at: Date.now(),
           bullets: [
-            "TF indisponibles — dernier avis conservé + PnL rafraîchi",
+            `${pos.side.toUpperCase()} live · PnL ${pnlUsd >= 0 ? "+" : ""}${pnlUsd.toFixed(2)} $ (${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(1)} %)`,
+            `Spot ~${price}`,
+            "TF HL timeout/vides — avis mid+PnL (structure au prochain scan)",
             ...(previousSnapshot?.bullets ?? []),
           ].slice(0, 8),
-          smc: previousSnapshot?.smc,
-          rawAction: previousSnapshot?.rawAction,
-          actionSince: previousSnapshot?.actionSince,
-          confirmCount: previousSnapshot?.confirmCount,
         };
-        evaluatedAction = snapshot.action;
-        evaluatedProviders = snapshot.providers;
-      } else {
-        const evaluated = await evaluateTradeManage({
-          trade: stub,
-          frames,
-          price,
-          pnl: { pnlPct, pnlEur: pnlUsd, movePct },
-          skipAi: opts?.skipAi,
-          skipSmc: opts?.skipSmc,
-          lastSnapshotAt: lastAt,
-          previousSnapshot,
-          levelsAreReal,
-          currency: "$",
-        });
-        if (evaluated.aiUsed) aiUsed = true;
-        snapshot = {
-          ...evaluated.snapshot,
-          pnlEur: Math.round(pnlUsd * 100) / 100,
-          pnlPct: Math.round(pnlPct * 100) / 100,
-          currency: "$",
-          side: pos.side,
-        };
-        evaluatedAction = evaluated.action;
-        evaluatedProviders = evaluated.providers;
       }
 
+      // Dual-write : orphelin toujours + journal si dispo
+      orphan[key] = snapshot;
       if (j) {
         await updateLiveJournalEntry(j.id, { manageSnapshot: snapshot });
-        // garder openJournal à jour localement
         const idx = openJournal.findIndex((e) => e.id === j.id);
         if (idx >= 0) {
           openJournal[idx] = { ...openJournal[idx]!, manageSnapshot: snapshot };
         }
-      } else {
-        orphan[snapKey(pos.coin, pos.side)] = snapshot;
       }
+      await saveOrphanSnaps(orphan);
 
       decisions.push({
         coin: pos.coin,
@@ -361,7 +433,40 @@ export async function manageLivePositionReviews(opts?: {
         );
       }
     } catch {
-      // Une position en erreur ne doit pas bloquer les autres analyses
+      try {
+        const entryPx = pos.entryPx > 0 ? pos.entryPx : 1;
+        const mid = mids[pos.coin.toUpperCase()] ?? entryPx;
+        const lev = pos.leverage || 1;
+        const movePct =
+          pos.side === "long"
+            ? ((mid - entryPx) / entryPx) * 100
+            : ((entryPx - mid) / entryPx) * 100;
+        const snap = buildLiveFallbackSnapshot({
+          side: pos.side,
+          price: mid,
+          pnlUsd: pos.unrealizedPnlUsd,
+          pnlPct: movePct * lev,
+          previous: orphan[key] ?? null,
+        });
+        snap.reason =
+          "Erreur relecture — PnL mid affiché, nouvel essai au prochain scan";
+        snap.providers = ["erreur", "mid+PnL"];
+        orphan[key] = snap;
+        await saveOrphanSnaps(orphan);
+        decisions.push({
+          coin: pos.coin,
+          side: pos.side,
+          action: snap.action,
+          reason: snap.reason,
+          outlook: snap.outlook,
+          price: mid,
+          pnlUsd: pos.unrealizedPnlUsd,
+          providers: snap.providers,
+          journalId: null,
+        });
+      } catch {
+        /* ignore */
+      }
     }
   }
 

@@ -281,7 +281,24 @@ export function LabPanel() {
           });
         }
         if (json.account) setAccount(json.account);
-        // Rafraîchir positions live pour attacher les snapshots
+        // Appliquer snapshots live immédiatement depuis /api/manage
+        const snaps = json.live?.snapshots;
+        if (snaps && typeof snaps === "object") {
+          setLivePortfolio((prev) => {
+            if (!prev?.positions?.length) return prev;
+            return {
+              ...prev,
+              positions: prev.positions.map((p) => {
+                const key = `${p.coin.toUpperCase()}:${p.side}`;
+                const snap = snaps[key];
+                return snap
+                  ? { ...p, manageSnapshot: snap }
+                  : p;
+              }),
+            };
+          });
+        }
+        // Rafraîchir positions live (en préservant manageSnapshot déjà affiché)
         if (res.ok) {
           try {
             const liveAcc = await fetch("/api/live-account").then((r) =>
@@ -289,7 +306,33 @@ export function LabPanel() {
                 portfolio?: NonNullable<typeof livePortfolio>;
               }>(r),
             );
-            if (liveAcc?.portfolio) setLivePortfolio(liveAcc.portfolio);
+            if (liveAcc?.portfolio) {
+              setLivePortfolio((prev) => {
+                const incoming = liveAcc.portfolio!;
+                if (!prev?.positions?.length) return incoming;
+                const prevByKey = new Map(
+                  prev.positions.map((p) => [
+                    `${p.coin.toUpperCase()}:${p.side}`,
+                    p,
+                  ]),
+                );
+                return {
+                  ...incoming,
+                  positions: incoming.positions.map((p) => {
+                    const key = `${p.coin.toUpperCase()}:${p.side}`;
+                    const old = prevByKey.get(key);
+                    return {
+                      ...p,
+                      manageSnapshot:
+                        p.manageSnapshot ??
+                        snaps?.[key] ??
+                        old?.manageSnapshot ??
+                        null,
+                    };
+                  }),
+                };
+              });
+            }
           } catch {
             /* ignore */
           }
@@ -298,8 +341,8 @@ export function LabPanel() {
         /* ignore */
       }
     }
-    const reviewSoon = window.setTimeout(() => void reviewFast(), 6_000);
-    const reviewId = window.setInterval(() => void reviewFast(), 45_000);
+    const reviewSoon = window.setTimeout(() => void reviewFast(), 2_000);
+    const reviewId = window.setInterval(() => void reviewFast(), 30_000);
 
     return () => {
       window.clearInterval(id);

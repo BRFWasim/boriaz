@@ -130,18 +130,42 @@ export function BoriazPanel({ onOpenLab }: { onOpenLab?: () => void }) {
 
     async function reviewLiveFast() {
       try {
-        await fetch("/api/manage", {
+        const res = await fetch("/api/manage", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ fast: true }),
         });
+        // Appliquer les snapshots tout de suite (sans attendre live-account)
+        try {
+          const json = (await res.json()) as {
+            live?: { snapshots?: Record<string, unknown> };
+          };
+          const snaps = json.live?.snapshots;
+          if (snaps && typeof snaps === "object") {
+            setLiveHl((prev) => {
+              if (!prev?.positions?.length) return prev;
+              return {
+                ...prev,
+                positions: prev.positions.map((p) => {
+                  const key = `${p.coin.toUpperCase()}:${p.side}`;
+                  const snap = snaps[key] as typeof p.manageSnapshot;
+                  return snap
+                    ? { ...p, manageSnapshot: snap }
+                    : p;
+                }),
+              };
+            });
+          }
+        } catch {
+          /* ignore parse */
+        }
         await load();
       } catch {
         /* ignore */
       }
     }
-    const reviewSoon = window.setTimeout(() => void reviewLiveFast(), 8_000);
-    const reviewId = window.setInterval(() => void reviewLiveFast(), 45_000);
+    const reviewSoon = window.setTimeout(() => void reviewLiveFast(), 2_000);
+    const reviewId = window.setInterval(() => void reviewLiveFast(), 30_000);
 
     return () => {
       window.clearInterval(id);
