@@ -1,11 +1,15 @@
 import { bindUserRequest } from "@/lib/bind-request";
 import { manageOpenTrades } from "@/lib/manage-trades";
-import { manageLivePositionReviews } from "@/lib/manage-live-positions";
+import {
+  loadLiveManageSnapshots,
+  manageLivePositionReviews,
+} from "@/lib/manage-live-positions";
 import {
   aggregatePaperAccount,
   ensurePortfolios,
   loadPrefs,
 } from "@/lib/persist";
+import { invalidateTradeSignalsCache } from "@/lib/trade-signal";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -13,7 +17,7 @@ export const maxDuration = 90;
 
 /**
  * POST /api/manage
- * body: { fast?: boolean } — fast=true : relecture PnL+structure sans IA (poll UI ~45s)
+ * body: { fast?: boolean } — fast=true : PnL+règles sans IA ni SMC lourd (poll UI ~45s)
  * Relit paper + positions LIVE (advisory).
  */
 export async function POST(request: Request) {
@@ -29,23 +33,28 @@ export async function POST(request: Request) {
     const result = await manageOpenTrades({
       notify: !fast,
       skipAi: fast,
+      // Poll UI : skip SMC (bougies HL) pour éviter 429/timeout → analyses vides
+      skipSmc: fast,
       max: fast ? 8 : 12,
     });
+    invalidateTradeSignalsCache();
     let live: Awaited<ReturnType<typeof manageLivePositionReviews>> | null =
       null;
     try {
       live = await manageLivePositionReviews({
         notify: !fast,
         skipAi: fast,
+        skipSmc: fast,
         max: fast ? 8 : 12,
       });
     } catch {
+      // Ne pas renvoyer {} : garder les derniers snapshots connus
       live = {
         reviewed: 0,
         decisions: [],
         telegramSent: false,
         aiUsed: false,
-        snapshots: {},
+        snapshots: await loadLiveManageSnapshots().catch(() => ({})),
       };
     }
     const prefs = await loadPrefs();

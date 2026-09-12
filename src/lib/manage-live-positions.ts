@@ -171,6 +171,8 @@ export async function manageLivePositionReviews(opts?: {
   notify?: boolean;
   max?: number;
   skipAi?: boolean;
+  /** Skip FVG/BOS (poll UI ~45s) — évite 429 HL. */
+  skipSmc?: boolean;
 }): Promise<LiveManageResult> {
   const prefs = await loadPrefs();
   const notify =
@@ -201,119 +203,165 @@ export async function manageLivePositionReviews(opts?: {
   const max = opts?.max ?? 8;
 
   for (const pos of portfolio.positions.slice(0, max)) {
-    const j = matchJournalToPosition(openJournal, pos.coin, pos.side);
-    const entryPx = j?.entry && j.entry > 0 ? j.entry : pos.entryPx;
-    const hasRealTp = Boolean(j?.tp && j.tp > 0);
-    const hasRealSl = Boolean(j?.sl && j.sl > 0);
-    const levelsAreReal = hasRealTp && hasRealSl;
-    const tp = hasRealTp
-      ? j!.tp
-      : entryPx * (pos.side === "long" ? 1.25 : 0.75);
-    const sl = hasRealSl
-      ? j!.sl
-      : entryPx * (pos.side === "long" ? 0.75 : 1.25);
-
-    let frames: TimeframeFrame[] = [];
     try {
-      frames = await analyzeCoinFrames(pos.coin, [
-        { interval: "15m", horizon: "très court (15m)" },
-        { interval: "1h", horizon: "court (1h)" },
-        { interval: "4h", horizon: "moyen (4h)" },
-      ]);
-    } catch {
-      frames = [];
-    }
-    if (!frames.length) continue;
+      const j = matchJournalToPosition(openJournal, pos.coin, pos.side);
+      const entryPx = j?.entry && j.entry > 0 ? j.entry : pos.entryPx;
+      const hasRealTp = Boolean(j?.tp && j.tp > 0);
+      const hasRealSl = Boolean(j?.sl && j.sl > 0);
+      const levelsAreReal = hasRealTp && hasRealSl;
+      const tp = hasRealTp
+        ? j!.tp
+        : entryPx * (pos.side === "long" ? 1.25 : 0.75);
+      const sl = hasRealSl
+        ? j!.sl
+        : entryPx * (pos.side === "long" ? 0.75 : 1.25);
 
-    const candlePx =
-      frames.find((f) => f.interval === "1h")?.indicators?.price ??
-      frames[0]?.indicators?.price ??
-      0;
-    const mid = mids[pos.coin.toUpperCase()] ?? 0;
-    const price = mid > 0 ? mid : candlePx > 0 ? candlePx : entryPx;
-
-    const movePct =
-      pos.side === "long"
-        ? ((price - entryPx) / entryPx) * 100
-        : ((entryPx - price) / entryPx) * 100;
-    const lev = pos.leverage || j?.leverage || 1;
-    const pnlPct = movePct * lev;
-    // TradeManageSnapshot.pnlEur stocke le $ pour le live (UI affiche $)
-    const pnlUsd = pos.unrealizedPnlUsd;
-
-    const stub = stubPaperFromLive({
-      coin: pos.coin,
-      side: pos.side,
-      entry: entryPx,
-      tp,
-      sl,
-      leverage: lev,
-      marginUsd: pos.marginUsedUsd,
-      size: Math.abs(pos.size),
-      portfolioId: j?.portfolioId || "boriaz",
-      portfolioName: j?.portfolioName || j?.botLabel || "Live",
-    });
-
-    const previousSnapshot =
-      j?.manageSnapshot ?? orphan[snapKey(pos.coin, pos.side)] ?? null;
-    const lastAt = previousSnapshot?.at ?? 0;
-
-    const evaluated = await evaluateTradeManage({
-      trade: stub,
-      frames,
-      price,
-      pnl: { pnlPct, pnlEur: pnlUsd, movePct },
-      skipAi: opts?.skipAi,
-      lastSnapshotAt: lastAt,
-      previousSnapshot,
-      levelsAreReal,
-      currency: "$",
-    });
-    if (evaluated.aiUsed) aiUsed = true;
-
-    const snapshot: TradeManageSnapshot = {
-      ...evaluated.snapshot,
-      pnlEur: Math.round(pnlUsd * 100) / 100,
-      pnlPct: Math.round(pnlPct * 100) / 100,
-      currency: "$",
-      side: pos.side,
-    };
-
-    if (j) {
-      await updateLiveJournalEntry(j.id, { manageSnapshot: snapshot });
-      // garder openJournal à jour localement
-      const idx = openJournal.findIndex((e) => e.id === j.id);
-      if (idx >= 0) {
-        openJournal[idx] = { ...openJournal[idx]!, manageSnapshot: snapshot };
+      let frames: TimeframeFrame[] = [];
+      try {
+        frames = await analyzeCoinFrames(pos.coin, [
+          { interval: "15m", horizon: "très court (15m)" },
+          { interval: "1h", horizon: "court (1h)" },
+          { interval: "4h", horizon: "moyen (4h)" },
+        ]);
+      } catch {
+        frames = [];
       }
-    } else {
-      orphan[snapKey(pos.coin, pos.side)] = snapshot;
-    }
 
-    decisions.push({
-      coin: pos.coin,
-      side: pos.side,
-      action: evaluated.action,
-      reason: snapshot.reason,
-      outlook: snapshot.outlook,
-      price,
-      pnlUsd,
-      providers: evaluated.providers,
-      journalId: j?.id ?? null,
-    });
+      const candlePx =
+        frames.find((f) => f.interval === "1h")?.indicators?.price ??
+        frames[0]?.indicators?.price ??
+        0;
+      const mid = mids[pos.coin.toUpperCase()] ?? 0;
+      const price = mid > 0 ? mid : candlePx > 0 ? candlePx : entryPx;
 
-    if (
-      notify &&
-      (evaluated.action === "close" || evaluated.action === "flip")
-    ) {
-      notes.push(
-        [
-          `📡 LIVE conseil · ${evaluated.action === "flip" ? "bascule" : "sortie"} ${pos.side.toUpperCase()} ${pos.coin}`,
-          `Spot ~${price} · PnL ${pnlUsd >= 0 ? "+" : ""}${pnlUsd.toFixed(2)} $`,
-          snapshot.reason,
-          "Advisory live — pas de clôture auto. Pas un conseil financier.",
-        ].join("\n"),
-      );
+      const movePct =
+        pos.side === "long"
+          ? ((price - entryPx) / entryPx) * 100
+          : ((entryPx - price) / entryPx) * 100;
+      const lev = pos.leverage || j?.leverage || 1;
+      const pnlPct = movePct * lev;
+      // TradeManageSnapshot.pnlEur stocke le $ pour le live (UI affiche $)
+      const pnlUsd = pos.unrealizedPnlUsd;
+
+      const stub = stubPaperFromLive({
+        coin: pos.coin,
+        side: pos.side,
+        entry: entryPx,
+        tp,
+        sl,
+        leverage: lev,
+        marginUsd: pos.marginUsedUsd,
+        size: Math.abs(pos.size),
+        portfolioId: j?.portfolioId || "boriaz",
+        portfolioName: j?.portfolioName || j?.botLabel || "Live",
+      });
+
+      const previousSnapshot =
+        j?.manageSnapshot ?? orphan[snapKey(pos.coin, pos.side)] ?? null;
+      const lastAt = previousSnapshot?.at ?? 0;
+
+      let snapshot: TradeManageSnapshot;
+      let evaluatedAction: LiveManageDecision["action"];
+      let evaluatedProviders: string[];
+
+      if (!frames.length) {
+        // Snapshot dégradé : ne jamais skip (sinon « Relecture en cours… »)
+        snapshot = {
+          at: Date.now(),
+          action: previousSnapshot?.action ?? "wait",
+          reason:
+            previousSnapshot?.reason ??
+            "Données TF indisponibles (HL lent/429) — PnL mid uniquement",
+          price,
+          pnlEur: Math.round(pnlUsd * 100) / 100,
+          pnlPct: Math.round(pnlPct * 100) / 100,
+          bias1h: previousSnapshot?.bias1h ?? "neutre",
+          bias4h: previousSnapshot?.bias4h ?? "neutre",
+          bias15m: previousSnapshot?.bias15m,
+          support: previousSnapshot?.support ?? null,
+          resistance: previousSnapshot?.resistance ?? null,
+          providers: previousSnapshot
+            ? [...(previousSnapshot.providers ?? []), "mid+PnL"]
+            : ["mid+PnL"],
+          outlook:
+            previousSnapshot?.outlook ??
+            "Surveillance dégradée : attendre le prochain scan complet.",
+          side: pos.side,
+          currency: "$",
+          bullets: [
+            "TF indisponibles — dernier avis conservé + PnL rafraîchi",
+            ...(previousSnapshot?.bullets ?? []),
+          ].slice(0, 8),
+          smc: previousSnapshot?.smc,
+          rawAction: previousSnapshot?.rawAction,
+          actionSince: previousSnapshot?.actionSince,
+          confirmCount: previousSnapshot?.confirmCount,
+        };
+        evaluatedAction = snapshot.action;
+        evaluatedProviders = snapshot.providers;
+      } else {
+        const evaluated = await evaluateTradeManage({
+          trade: stub,
+          frames,
+          price,
+          pnl: { pnlPct, pnlEur: pnlUsd, movePct },
+          skipAi: opts?.skipAi,
+          skipSmc: opts?.skipSmc,
+          lastSnapshotAt: lastAt,
+          previousSnapshot,
+          levelsAreReal,
+          currency: "$",
+        });
+        if (evaluated.aiUsed) aiUsed = true;
+        snapshot = {
+          ...evaluated.snapshot,
+          pnlEur: Math.round(pnlUsd * 100) / 100,
+          pnlPct: Math.round(pnlPct * 100) / 100,
+          currency: "$",
+          side: pos.side,
+        };
+        evaluatedAction = evaluated.action;
+        evaluatedProviders = evaluated.providers;
+      }
+
+      if (j) {
+        await updateLiveJournalEntry(j.id, { manageSnapshot: snapshot });
+        // garder openJournal à jour localement
+        const idx = openJournal.findIndex((e) => e.id === j.id);
+        if (idx >= 0) {
+          openJournal[idx] = { ...openJournal[idx]!, manageSnapshot: snapshot };
+        }
+      } else {
+        orphan[snapKey(pos.coin, pos.side)] = snapshot;
+      }
+
+      decisions.push({
+        coin: pos.coin,
+        side: pos.side,
+        action: evaluatedAction,
+        reason: snapshot.reason,
+        outlook: snapshot.outlook,
+        price,
+        pnlUsd,
+        providers: evaluatedProviders,
+        journalId: j?.id ?? null,
+      });
+
+      if (
+        notify &&
+        (evaluatedAction === "close" || evaluatedAction === "flip")
+      ) {
+        notes.push(
+          [
+            `📡 LIVE conseil · ${evaluatedAction === "flip" ? "bascule" : "sortie"} ${pos.side.toUpperCase()} ${pos.coin}`,
+            `Spot ~${price} · PnL ${pnlUsd >= 0 ? "+" : ""}${pnlUsd.toFixed(2)} $`,
+            snapshot.reason,
+            "Advisory live — pas de clôture auto. Pas un conseil financier.",
+          ].join("\n"),
+        );
+      }
+    } catch {
+      // Une position en erreur ne doit pas bloquer les autres analyses
     }
   }
 

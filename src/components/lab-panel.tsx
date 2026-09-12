@@ -164,9 +164,24 @@ export function LabPanel() {
         dirtyRef.current = false;
       }
       setJournal(j.entries ?? []);
-      setPaper(pa.trades ?? []);
+      setPaper((prev) => {
+        const incoming = pa.trades ?? [];
+        if (!incoming.length) return prev;
+        const byId = new Map(prev.map((t) => [t.id, t]));
+        for (const t of incoming) {
+          const old = byId.get(t.id);
+          byId.set(t.id, {
+            ...t,
+            manageSnapshot: t.manageSnapshot ?? old?.manageSnapshot ?? null,
+          });
+        }
+        const merged = [...byId.values()].sort(
+          (a, b) => b.openedAt - a.openedAt,
+        );
+        writeLocalPaper(merged);
+        return merged;
+      });
       setAccount(pa.account ?? null);
-      if (pa.trades) writeLocalPaper(pa.trades);
       if (!c.error || c.latest) setCorr(c);
       const st = await fetch("/api/status").then((r) => readResponseJson<NonNullable<typeof status>>(r));
       setStatus(st);
@@ -249,8 +264,21 @@ export function LabPanel() {
           };
         }>(res);
         if (res.ok && Array.isArray(json.trades)) {
-          setPaper(json.trades);
-          writeLocalPaper(json.trades);
+          setPaper((prev) => {
+            const byId = new Map(prev.map((t) => [t.id, t]));
+            for (const t of json.trades!) {
+              const old = byId.get(t.id);
+              byId.set(t.id, {
+                ...t,
+                manageSnapshot: t.manageSnapshot ?? old?.manageSnapshot ?? null,
+              });
+            }
+            const merged = [...byId.values()].sort(
+              (a, b) => b.openedAt - a.openedAt,
+            );
+            writeLocalPaper(merged);
+            return merged;
+          });
         }
         if (json.account) setAccount(json.account);
         // Rafraîchir positions live pour attacher les snapshots
@@ -521,8 +549,21 @@ export function LabPanel() {
           `Relecture ${json.reviewed ?? 0} trade(s)${json.aiUsed ? " (IA)" : " (règles)"}${acts ? " · " + acts : " · rien à faire"}`,
         );
         if (json.trades) {
-          setPaper(json.trades);
-          writeLocalPaper(json.trades);
+          setPaper((prev) => {
+            const byId = new Map(prev.map((t) => [t.id, t]));
+            for (const t of json.trades as PaperTrade[]) {
+              const old = byId.get(t.id);
+              byId.set(t.id, {
+                ...t,
+                manageSnapshot: t.manageSnapshot ?? old?.manageSnapshot ?? null,
+              });
+            }
+            const merged = [...byId.values()].sort(
+              (a, b) => b.openedAt - a.openedAt,
+            );
+            writeLocalPaper(merged);
+            return merged;
+          });
         }
       }
     } catch (e) {

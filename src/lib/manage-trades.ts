@@ -859,12 +859,14 @@ export async function evaluateTradeManage(opts: {
 
 /**
  * Relit chaque trade ouvert : prix mid HL + TF + PnL live → close/flip/wait/hold.
- * skipAi=true : chemin rapide pour poll UI (règles + PnL, sans LLM).
+ * skipAi=true : chemin rapide poll UI (règles + PnL, sans LLM).
+ * skipSmc=true : saute FVG/BOS (évite 429 HL sur poll ~45s).
  */
 export async function manageOpenTrades(opts?: {
   notify?: boolean;
   max?: number;
   skipAi?: boolean;
+  skipSmc?: boolean;
 }): Promise<ManageResult> {
   const prefs = await loadPrefs();
   const notify = opts?.notify !== false && prefs.telegramEnabled && !opts?.skipAi;
@@ -878,167 +880,235 @@ export async function manageOpenTrades(opts?: {
   const mids = await loadMids();
 
   for (const trade of open) {
-    let frames: TimeframeFrame[] = [];
     try {
-      frames = await analyzeCoinFrames(trade.coin, [
-        { interval: "15m", horizon: "très court (15m)" },
-        { interval: "1h", horizon: "court (1h)" },
-        { interval: "4h", horizon: "moyen (4h)" },
-      ]);
-    } catch {
-      frames = [];
-    }
-    if (!frames.length) continue;
+      let frames: TimeframeFrame[] = [];
+      try {
+        frames = await analyzeCoinFrames(trade.coin, [
+          { interval: "15m", horizon: "très court (15m)" },
+          { interval: "1h", horizon: "court (1h)" },
+          { interval: "4h", horizon: "moyen (4h)" },
+        ]);
+      } catch {
+        frames = [];
+      }
 
-    const candlePx =
-      frames.find((f) => f.interval === "1h")?.indicators?.price ??
-      frames[0]?.indicators?.price ??
-      0;
-    const mid = mids[trade.coin.toUpperCase()] ?? 0;
-    const price = mid > 0 ? mid : candlePx > 0 ? candlePx : trade.markPx ?? trade.entry;
-    const pnl = livePnl(trade, price);
+      const candlePx =
+        frames.find((f) => f.interval === "1h")?.indicators?.price ??
+        frames[0]?.indicators?.price ??
+        0;
+      const mid = mids[trade.coin.toUpperCase()] ?? 0;
+      const price =
+        mid > 0 ? mid : candlePx > 0 ? candlePx : trade.markPx ?? trade.entry;
+      const pnl = livePnl(trade, price);
 
-    // Maj mark/PnL immédiatement (même si hold)
-    trade.markPx = price;
-    trade.pnlPct = pnl.pnlPct;
-    trade.pnlEur = pnl.pnlEur;
-
-    const evaluated = await evaluateTradeManage({
-      trade,
-      frames,
-      price,
-      pnl,
-      skipAi: opts?.skipAi,
-      lastSnapshotAt: trade.manageSnapshot?.at,
-      previousSnapshot: trade.manageSnapshot,
-      levelsAreReal: trade.tp > 0 && trade.sl > 0,
-    });
-    if (evaluated.aiUsed) aiUsed = true;
-    const { action, reason, outlook, providers } = evaluated;
-    const snap = evaluated.snapshot;
-    trade.manageSnapshot = snap;
-
-    decisions.push({
-      id: trade.id,
-      coin: trade.coin,
-      side: trade.side,
-      action,
-      reason,
-      price,
-      pnlEur: pnl.pnlEur,
-      providers,
-      outlook,
-    });
-
-    const tag = providers.includes("règles+PnL") && providers.length === 1 ? "Relecture" : "IA";
-
-    if (action === "close" || action === "flip") {
-      const netEur = pnl.pnlEur;
-      trade.status = "closed_manual";
-      trade.closedAt = Date.now();
-      trade.exitPx = price;
+      // Maj mark/PnL immédiatement (même si hold)
       trade.markPx = price;
       trade.pnlPct = pnl.pnlPct;
-      trade.pnlEur = netEur;
-      trade.closeNotified = true;
-      trade.note =
-        `${tag}: ${action === "flip" ? "bascule" : "clôture"} @ ${price} — net ${netEur.toFixed(2)} € · ${reason}`.slice(
-          0,
-          220,
+      trade.pnlEur = pnl.pnlEur;
+
+      // Sans TF : snapshot dégradé (évite « Relecture en cours… » infini)
+      if (!frames.length) {
+        const degraded = buildSnapshot(
+          trade,
+          [],
+          price,
+          pnl,
+          "wait",
+          "Données TF indisponibles (HL lent/429) — PnL mid uniquement",
+          "Surveillance dégradée : attendre le prochain scan complet.",
+          ["mid+PnL"],
+          "€",
         );
-      if (notify) {
-        notes.push(
-          [
-            `${action === "flip" ? "🔄 Bascule" : "📉 Clôture"} · ${trade.side.toUpperCase()} ${trade.coin}`,
-            `Portefeuille « ${trade.portfolioName || "Défaut"} »`,
-            `Sortie ~${price} · PnL net ${netEur >= 0 ? "+" : ""}${netEur.toFixed(2)} €`,
-            reason,
-            "Simulation paper — pas un conseil financier.",
-          ].join("\n"),
-        );
+        if (trade.manageSnapshot) {
+          degraded.action = trade.manageSnapshot.action;
+          degraded.rawAction = trade.manageSnapshot.rawAction;
+          degraded.actionSince = trade.manageSnapshot.actionSince;
+          degraded.confirmCount = trade.manageSnapshot.confirmCount;
+          degraded.smc = trade.manageSnapshot.smc;
+          degraded.bullets = [
+            "TF indisponibles — dernier avis conservé + PnL rafraîchi",
+            ...(trade.manageSnapshot.bullets ?? []),
+          ].slice(0, 8);
+        }
+        trade.manageSnapshot = degraded;
+        decisions.push({
+          id: trade.id,
+          coin: trade.coin,
+          side: trade.side,
+          action: degraded.action,
+          reason: degraded.reason,
+          price,
+          pnlEur: pnl.pnlEur,
+          providers: degraded.providers,
+          outlook: degraded.outlook,
+        });
+        continue;
       }
 
-      if (action === "flip") {
-        const oppSide = trade.side === "long" ? "short" : "long";
-        const ind = (frames.find((f) => f.interval === "1h") ?? frames[0])
-          ?.indicators;
-        const lv = computeTradeLevels(oppSide, price, ind, 66);
-        const notionalEur = trade.marginEur * trade.leverage;
-        const now = Date.now();
-        const dup = list.some(
-          (t) =>
-            (t.status === "open" || t.status === "pending") &&
-            t.coin === trade.coin &&
-            t.side === oppSide &&
-            (t.portfolioId || "default") === (trade.portfolioId || "default"),
-        );
-        if (!dup) {
-          const flipTrade: PaperTrade = {
-            id: `pt-${now}-${trade.portfolioId || "default"}-${trade.coin}-${oppSide}`,
-            closeNotified: false,
-            feesEur: estimateRoundTripFeesEur(notionalEur),
-            openedAt: now,
-            filledAt: now,
-            coin: trade.coin,
-            side: oppSide,
-            entry: price,
-            tp: lv.tp,
-            sl: lv.sl,
-            leverage: trade.leverage,
-            sizePct: trade.sizePct,
-            marginEur: trade.marginEur,
-            notionalEur,
-            entryMode: "market_now",
-            status: "open",
-            closedAt: null,
-            exitPx: null,
-            markPx: price,
-            pnlPct: 0,
-            pnlEur: 0,
-            note: `Bascule depuis ${trade.side.toUpperCase()} · ${reason}`.slice(0, 220),
-            portfolioId: trade.portfolioId || "default",
-            portfolioName: trade.portfolioName || "Défaut (sûr)",
-            justification: null,
-            manageSnapshot: {
-              at: now,
-              action: "hold",
-              reason: "Ouverture par bascule — surveillance active",
-              price,
-              pnlEur: 0,
-              pnlPct: 0,
-              bias1h: frames.find((f) => f.interval === "1h")?.bias ?? "neutre",
-              bias4h: frames.find((f) => f.interval === "4h")?.bias ?? "neutre",
-              support: ind?.support ?? null,
-              resistance: ind?.resistance ?? null,
-              providers,
-              outlook: "Nouveau trade après retournement — laisser se poser.",
+      const evaluated = await evaluateTradeManage({
+        trade,
+        frames,
+        price,
+        pnl,
+        skipAi: opts?.skipAi,
+        skipSmc: opts?.skipSmc,
+        lastSnapshotAt: trade.manageSnapshot?.at,
+        previousSnapshot: trade.manageSnapshot,
+        levelsAreReal: trade.tp > 0 && trade.sl > 0,
+      });
+      if (evaluated.aiUsed) aiUsed = true;
+      const { action, reason, outlook, providers } = evaluated;
+      const snap = evaluated.snapshot;
+      trade.manageSnapshot = snap;
+
+      decisions.push({
+        id: trade.id,
+        coin: trade.coin,
+        side: trade.side,
+        action,
+        reason,
+        price,
+        pnlEur: pnl.pnlEur,
+        providers,
+        outlook,
+      });
+
+      const tag =
+        providers.includes("règles+PnL") && providers.length === 1
+          ? "Relecture"
+          : "IA";
+
+      if (action === "close" || action === "flip") {
+        const netEur = pnl.pnlEur;
+        trade.status = "closed_manual";
+        trade.closedAt = Date.now();
+        trade.exitPx = price;
+        trade.markPx = price;
+        trade.pnlPct = pnl.pnlPct;
+        trade.pnlEur = netEur;
+        trade.closeNotified = true;
+        trade.note =
+          `${tag}: ${action === "flip" ? "bascule" : "clôture"} @ ${price} — net ${netEur.toFixed(2)} € · ${reason}`.slice(
+            0,
+            220,
+          );
+        if (notify) {
+          notes.push(
+            [
+              `${action === "flip" ? "🔄 Bascule" : "📉 Clôture"} · ${trade.side.toUpperCase()} ${trade.coin}`,
+              `Portefeuille « ${trade.portfolioName || "Défaut"} »`,
+              `Sortie ~${price} · PnL net ${netEur >= 0 ? "+" : ""}${netEur.toFixed(2)} €`,
+              reason,
+              "Simulation paper — pas un conseil financier.",
+            ].join("\n"),
+          );
+        }
+
+        if (action === "flip") {
+          const oppSide = trade.side === "long" ? "short" : "long";
+          const ind = (frames.find((f) => f.interval === "1h") ?? frames[0])
+            ?.indicators;
+          const lv = computeTradeLevels(oppSide, price, ind, 66);
+          const notionalEur = trade.marginEur * trade.leverage;
+          const now = Date.now();
+          const dup = list.some(
+            (t) =>
+              (t.status === "open" || t.status === "pending") &&
+              t.coin === trade.coin &&
+              t.side === oppSide &&
+              (t.portfolioId || "default") === (trade.portfolioId || "default"),
+          );
+          if (!dup) {
+            const flipTrade: PaperTrade = {
+              id: `pt-${now}-${trade.portfolioId || "default"}-${trade.coin}-${oppSide}`,
+              closeNotified: false,
+              feesEur: estimateRoundTripFeesEur(notionalEur),
+              openedAt: now,
+              filledAt: now,
+              coin: trade.coin,
               side: oppSide,
-              currency: "€",
-              bullets: [
-                `${oppSide.toUpperCase()} ${trade.coin} · bascule depuis ${trade.side.toUpperCase()}`,
-                "Surveillance active — même analyse live long/short au prochain scan",
-                "À faire : laisser se poser puis relecture PnL + structure",
-              ],
-            },
-          };
-          list.unshift(flipTrade);
-          if (notify) {
-            notes.push(
-              [
-                `🆕 Ouverture ${oppSide.toUpperCase()} ${trade.coin} (bascule)`,
-                `Entrée ~${price} · TP ${lv.tp.toFixed(4)} · SL ${lv.sl.toFixed(4)}`,
-                "Simulation paper — pas un conseil financier.",
-              ].join("\n"),
-            );
+              entry: price,
+              tp: lv.tp,
+              sl: lv.sl,
+              leverage: trade.leverage,
+              sizePct: trade.sizePct,
+              marginEur: trade.marginEur,
+              notionalEur,
+              entryMode: "market_now",
+              status: "open",
+              closedAt: null,
+              exitPx: null,
+              markPx: price,
+              pnlPct: 0,
+              pnlEur: 0,
+              note: `Bascule depuis ${trade.side.toUpperCase()} · ${reason}`.slice(
+                0,
+                220,
+              ),
+              portfolioId: trade.portfolioId || "default",
+              portfolioName: trade.portfolioName || "Défaut (sûr)",
+              justification: null,
+              manageSnapshot: {
+                at: now,
+                action: "hold",
+                reason: "Ouverture par bascule — surveillance active",
+                price,
+                pnlEur: 0,
+                pnlPct: 0,
+                bias1h:
+                  frames.find((f) => f.interval === "1h")?.bias ?? "neutre",
+                bias4h:
+                  frames.find((f) => f.interval === "4h")?.bias ?? "neutre",
+                support: ind?.support ?? null,
+                resistance: ind?.resistance ?? null,
+                providers,
+                outlook:
+                  "Nouveau trade après retournement — laisser se poser.",
+                side: oppSide,
+                currency: "€",
+                bullets: [
+                  `${oppSide.toUpperCase()} ${trade.coin} · bascule depuis ${trade.side.toUpperCase()}`,
+                  "Surveillance active — même analyse live long/short au prochain scan",
+                  "À faire : laisser se poser puis relecture PnL + structure",
+                ],
+              },
+            };
+            list.unshift(flipTrade);
+            if (notify) {
+              notes.push(
+                [
+                  `🆕 Ouverture ${oppSide.toUpperCase()} ${trade.coin} (bascule)`,
+                  `Entrée ~${price} · TP ${lv.tp.toFixed(4)} · SL ${lv.sl.toFixed(4)}`,
+                  "Simulation paper — pas un conseil financier.",
+                ].join("\n"),
+              );
+            }
           }
         }
+      } else {
+        trade.note =
+          `${action === "wait" ? "Attendre" : "Laisser courir"} · PnL ${pnl.pnlEur >= 0 ? "+" : ""}${pnl.pnlEur.toFixed(2)} € · ${reason}`.slice(
+            0,
+            220,
+          );
       }
-    } else {
-      trade.note =
-        `${action === "wait" ? "Attendre" : "Laisser courir"} · PnL ${pnl.pnlEur >= 0 ? "+" : ""}${pnl.pnlEur.toFixed(2)} € · ${reason}`.slice(
-          0,
-          220,
+    } catch {
+      // Un trade en erreur ne doit pas bloquer les autres analyses
+      if (!trade.manageSnapshot) {
+        const price = trade.markPx ?? trade.entry;
+        const pnl = livePnl(trade, price);
+        trade.manageSnapshot = buildSnapshot(
+          trade,
+          [],
+          price,
+          pnl,
+          "wait",
+          "Erreur relecture — nouvel essai au prochain scan",
+          "Analyse temporairement indisponible.",
+          ["erreur"],
+          "€",
         );
+      }
     }
   }
 

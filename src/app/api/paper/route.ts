@@ -9,7 +9,6 @@ import {
   savePaperTrades,
   storageInfo,
 } from "@/lib/persist";
-import { getTradeSignals } from "@/lib/trade-signal";
 import { postInfo } from "@/lib/hyperliquid";
 import { parseNum } from "@/lib/format";
 import { sendTelegramMessage } from "@/lib/telegram";
@@ -22,13 +21,15 @@ export const maxDuration = 60;
 export async function GET() {
   try {
     await bindUserRequest();
-    // Pas de force:true ici — évite un timeout Vercel (504 texte non-JSON).
-    // Le mark-to-market live est déjà fait par /api/live.
-    const sig = await getTradeSignals({ notify: false });
+    // Lecture directe du paper (pas le cache signaux) : conserve manageSnapshot.
+    const [prefs, trades] = await Promise.all([loadPrefs(), loadPaperTrades()]);
     return Response.json({
-      trades: sig.paper,
-      account: sig.account,
-      storage: sig.storage,
+      trades: trades.slice(0, 40),
+      account: aggregatePaperAccount(
+        trades,
+        ensurePortfolios(prefs.portfolios),
+      ),
+      storage: storageInfo(),
       fetchedAt: Date.now(),
       howto:
         "Compte virtuel 1000 €. Chaque alerte ouvre une simu. Equity = cash + positions au prix live. Variation = ce que tu aurais gagné/perdu.",

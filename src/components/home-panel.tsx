@@ -51,7 +51,14 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
     if (!next?.length) return;
     setPaperLive((prev) => {
       const byId = new Map(prev.map((t) => [t.id, t]));
-      for (const t of next) byId.set(t.id, t);
+      for (const t of next) {
+        const old = byId.get(t.id);
+        byId.set(t.id, {
+          ...t,
+          // Ne pas perdre une analyse déjà affichée si la réponse n'en a pas
+          manageSnapshot: t.manageSnapshot ?? old?.manageSnapshot ?? null,
+        });
+      }
       const merged = [...byId.values()].sort((a, b) => b.openedAt - a.openedAt);
       writeLocalPaper(merged);
       return merged;

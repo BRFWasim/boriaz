@@ -95,3 +95,13 @@ export async function kvGetJson<T>(key: string): Promise<T | null> {
 export async function kvSetJson(key: string, value: unknown): Promise<void> {
   await kvSet(key, JSON.stringify(value));
 }
+
+export async function kvDel(key: string): Promise<void> {
+  mem.delete(key);
+  if (!upstashConfigured()) return;
+  try {
+    await upstashCommand(["DEL", key]);
+  } catch {
+    /* ignore */
+  }
+}

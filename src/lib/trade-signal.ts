@@ -8,7 +8,7 @@ import { sendTelegramMessage } from "./telegram";
 import { correlateSetup } from "./signal-score";
 import { computeAlignment, type AlignmentScore } from "./alignment";
 import { stabilizeDirection } from "./signal-sticky";
-import { kvGetJson, kvSetJsonEx } from "./kv";
+import { kvDel, kvGetJson, kvSetJsonEx } from "./kv";
 import {
   aggregatePaperAccount,
   appendBook,
@@ -20,6 +20,7 @@ import {
   openPaperTrade,
   loadPaperTrades,
   loadBook,
+  persistUserId,
   savePaperTrades,
   storageInfo,
   type PaperAccount,
@@ -97,6 +98,16 @@ const TG_COOLDOWN = 8 * 60_000;
 let cache: { at: number; value: TradeSignalPayload } | null = null;
 let lastTgKey = "";
 let lastTgAt = 0;
+
+function tradeSignalsCacheKey(): string {
+  return `boriaz:trade-signals-v1:${persistUserId()}`;
+}
+
+/** Invalide le cache signaux (mémoire + KV) après manage — garde manageSnapshot à jour. */
+export function invalidateTradeSignalsCache(): void {
+  cache = null;
+  void kvDel(tradeSignalsCacheKey());
+}
 
 function leverageFor(confidence: number, adx: number | null, maxLev: number): string {
   let sug = 1;
@@ -486,15 +497,44 @@ export async function getTradeSignals(options?: {
   const cacheTtl = liveArmed ? CACHE_TTL_LIVE : CACHE_TTL_IDLE;
 
   if (!options?.force && cache && Date.now() - cache.at < cacheTtl) {
+    // Paper depuis disk : manageSnapshot ne doit pas rester figé dans le cache
+    try {
+      const freshPaper = await loadPaperTrades();
+      const prefsFresh = await loadPrefs();
+      cache.value = {
+        ...cache.value,
+        paper: freshPaper.slice(0, 40),
+        account: aggregatePaperAccount(
+          freshPaper,
+          ensurePortfolios(prefsFresh.portfolios),
+        ),
+      };
+    } catch {
+      /* garde cache.value */
+    }
     return cache.value;
   }
 
   // Cache Upstash : survit aux cold starts Vercel (mémoire process seule = 504 fréquents)
   if (!options?.force) {
     const shared = await kvGetJson<{ at: number; value: TradeSignalPayload }>(
-      "boriaz:trade-signals-v1",
+      tradeSignalsCacheKey(),
     );
     if (shared && Date.now() - shared.at < cacheTtl) {
+      try {
+        const freshPaper = await loadPaperTrades();
+        const prefsFresh = await loadPrefs();
+        shared.value = {
+          ...shared.value,
+          paper: freshPaper.slice(0, 40),
+          account: aggregatePaperAccount(
+            freshPaper,
+            ensurePortfolios(prefsFresh.portfolios),
+          ),
+        };
+      } catch {
+        /* garde shared.value */
+      }
       cache = { at: shared.at, value: shared.value };
       return shared.value;
     }
@@ -1686,7 +1726,7 @@ export async function getTradeSignals(options?: {
   };
   cache = { at: Date.now(), value };
   void kvSetJsonEx(
-    "boriaz:trade-signals-v1",
+    tradeSignalsCacheKey(),
     { at: cache.at, value },
     Math.ceil(cacheTtl / 1000),
   );
