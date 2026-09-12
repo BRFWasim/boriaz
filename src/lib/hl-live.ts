@@ -784,6 +784,26 @@ export async function placeBoriazLiveTrade(
   if (!ready.ok) {
     return { ok: false, skipped: true, reason: ready.reason };
   }
+
+  // Modes shadow/paper + kill switch + Redis/PG — jamais d’entrée live par défaut
+  try {
+    const { assertLiveEntryAllowed } = await import("./bot/trading-mode");
+    const gate = await assertLiveEntryAllowed();
+    if (!gate.allowed) {
+      return {
+        ok: false,
+        skipped: true,
+        reason: `LIVE bloqué (${gate.mode}): ${gate.reasons.join(" · ")}`,
+      };
+    }
+  } catch (e) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: `Gate live indisponible: ${e instanceof Error ? e.message : "error"}`,
+    };
+  }
+
   const cfg = getLiveConfig();
 
   if (!(req.entry > 0 && req.tp > 0 && req.sl > 0)) {
