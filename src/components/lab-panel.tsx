@@ -205,7 +205,30 @@ export function LabPanel() {
             portfolio?: NonNullable<typeof livePortfolio>;
           }>(r),
         );
-        if (liveAcc?.portfolio) setLivePortfolio(liveAcc.portfolio);
+        if (liveAcc?.portfolio) {
+          setLivePortfolio((prev) => {
+            const incoming = liveAcc.portfolio!;
+            if (!prev?.positions?.length) return incoming;
+            const prevByKey = new Map(
+              prev.positions.map((p) => [
+                `${p.coin.toUpperCase()}:${p.side}`,
+                p,
+              ]),
+            );
+            return {
+              ...incoming,
+              positions: incoming.positions.map((p) => {
+                const key = `${p.coin.toUpperCase()}:${p.side}`;
+                const old = prevByKey.get(key);
+                return {
+                  ...p,
+                  manageSnapshot:
+                    p.manageSnapshot ?? old?.manageSnapshot ?? null,
+                };
+              }),
+            };
+          });
+        }
         if (liveAcc?.env) {
           setLiveStatus({
             env: liveAcc.env,
@@ -247,7 +270,7 @@ export function LabPanel() {
       /* ignore */
     }
     void syncPaperFromBrowser().then(() => void refresh());
-    const id = window.setInterval(() => void refresh(), 12_000);
+    const id = window.setInterval(() => void refresh(), 30_000);
 
     async function reviewFast() {
       try {
@@ -341,8 +364,8 @@ export function LabPanel() {
         /* ignore */
       }
     }
-    const reviewSoon = window.setTimeout(() => void reviewFast(), 2_000);
-    const reviewId = window.setInterval(() => void reviewFast(), 30_000);
+    const reviewSoon = window.setTimeout(() => void reviewFast(), 8_000);
+    const reviewId = window.setInterval(() => void reviewFast(), 90_000);
 
     return () => {
       window.clearInterval(id);

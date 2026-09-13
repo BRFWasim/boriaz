@@ -70,6 +70,8 @@ export function BoriazPanel({ onOpenLab }: { onOpenLab?: () => void }) {
   const [liveHl, setLiveHl] = useState<LiveHl | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [repairMsg, setRepairMsg] = useState<string | null>(null);
+  const [repairing, setRepairing] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -100,20 +102,38 @@ export function BoriazPanel({ onOpenLab }: { onOpenLab?: () => void }) {
         return;
       }
       if (lj.portfolio) {
-        setLiveHl({
-          ok: lj.portfolio.ok,
-          reason: lj.portfolio.reason,
-          accountValueUsd: lj.portfolio.accountValueUsd ?? 0,
-          totalMarginUsedUsd: lj.portfolio.totalMarginUsedUsd ?? 0,
-          withdrawableUsd: lj.portfolio.withdrawableUsd ?? 0,
-          totalUnrealizedPnlUsd: lj.portfolio.totalUnrealizedPnlUsd ?? 0,
-          openPositionCount: lj.portfolio.openPositionCount ?? 0,
-          address: lj.portfolio.address,
-          agentAddress: lj.env?.agentAddress ?? null,
-          accountAddress: lj.env?.accountAddress ?? null,
-          ready: Boolean(lj.env?.ready),
-          riskUsd: lj.riskPreview?.riskUsd ?? null,
-          positions: lj.portfolio.positions ?? [],
+        setLiveHl((prev) => {
+          const incoming = lj.portfolio!.positions ?? [];
+          const prevByKey = new Map(
+            (prev?.positions ?? []).map((p) => [
+              `${p.coin.toUpperCase()}:${p.side}`,
+              p,
+            ]),
+          );
+          const positions = incoming.map((p) => {
+            const key = `${p.coin.toUpperCase()}:${p.side}`;
+            const old = prevByKey.get(key);
+            return {
+              ...p,
+              manageSnapshot:
+                p.manageSnapshot ?? old?.manageSnapshot ?? null,
+            };
+          });
+          return {
+            ok: lj.portfolio!.ok,
+            reason: lj.portfolio!.reason,
+            accountValueUsd: lj.portfolio!.accountValueUsd ?? 0,
+            totalMarginUsedUsd: lj.portfolio!.totalMarginUsedUsd ?? 0,
+            withdrawableUsd: lj.portfolio!.withdrawableUsd ?? 0,
+            totalUnrealizedPnlUsd: lj.portfolio!.totalUnrealizedPnlUsd ?? 0,
+            openPositionCount: lj.portfolio!.openPositionCount ?? 0,
+            address: lj.portfolio!.address,
+            agentAddress: lj.env?.agentAddress ?? null,
+            accountAddress: lj.env?.accountAddress ?? null,
+            ready: Boolean(lj.env?.ready),
+            riskUsd: lj.riskPreview?.riskUsd ?? null,
+            positions,
+          };
         });
         setError(null);
       }
@@ -124,9 +144,37 @@ export function BoriazPanel({ onOpenLab }: { onOpenLab?: () => void }) {
     }
   }, []);
 
+  async function repairTpsl() {
+    setRepairing(true);
+    setRepairMsg("Pose TP/SL manquants…");
+    try {
+      const res = await fetch("/api/live-repair", { method: "POST" });
+      const json = (await res.json()) as {
+        error?: string;
+        updated?: number;
+        checked?: number;
+        notes?: string[];
+      };
+      if (!res.ok) {
+        setRepairMsg(json.error || "Repair échoué");
+      } else {
+        setRepairMsg(
+          json.updated
+            ? `TP/SL posés sur ${json.updated}/${json.checked} position(s)`
+            : `Rien à réparer (${json.checked ?? 0} vérifiée(s))`,
+        );
+        await load();
+      }
+    } catch (e) {
+      setRepairMsg(e instanceof Error ? e.message : "Repair impossible");
+    } finally {
+      setRepairing(false);
+    }
+  }
+
   useEffect(() => {
     void load();
-    const id = window.setInterval(() => void load(), 20_000);
+    const id = window.setInterval(() => void load(), 45_000);
 
     async function reviewLiveFast() {
       try {
@@ -159,13 +207,14 @@ export function BoriazPanel({ onOpenLab }: { onOpenLab?: () => void }) {
         } catch {
           /* ignore parse */
         }
-        await load();
+        // Ne PAS recharger live-account tout de suite : ça écrasait les snapshots.
+        // Le poll load() périodique fusionne en préservant manageSnapshot.
       } catch {
         /* ignore */
       }
     }
-    const reviewSoon = window.setTimeout(() => void reviewLiveFast(), 2_000);
-    const reviewId = window.setInterval(() => void reviewLiveFast(), 30_000);
+    const reviewSoon = window.setTimeout(() => void reviewLiveFast(), 5_000);
+    const reviewId = window.setInterval(() => void reviewLiveFast(), 90_000);
 
     return () => {
       window.clearInterval(id);
@@ -200,6 +249,16 @@ export function BoriazPanel({ onOpenLab }: { onOpenLab?: () => void }) {
             >
               Rafraîchir
             </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-7 border-amber-500/50 text-amber-700 dark:text-amber-300"
+              disabled={repairing}
+              onClick={() => void repairTpsl()}
+            >
+              {repairing ? "Repair…" : "Réparer TP/SL"}
+            </Button>
             {onOpenLab ? (
               <Button
                 type="button"
@@ -214,6 +273,11 @@ export function BoriazPanel({ onOpenLab }: { onOpenLab?: () => void }) {
           </div>
         </div>
 
+        {repairMsg ? (
+          <p className="mt-3 text-sm text-amber-700 dark:text-amber-300">
+            {repairMsg}
+          </p>
+        ) : null}
         {loading && !liveHl ? (
           <p className="mt-3 text-sm text-muted-foreground">
             Chargement du wallet HL…

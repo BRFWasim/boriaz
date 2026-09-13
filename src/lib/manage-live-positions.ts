@@ -264,6 +264,17 @@ export async function manageLivePositionReviews(opts?: {
     };
   }
 
+  // Positions nues (sans TP/SL HL) → re-place d’urgence avant l’analyse
+  try {
+    const { repairNakedLiveTpsl } = await import("./hl-live");
+    const repaired = await repairNakedLiveTpsl();
+    if (repaired.updated > 0) {
+      console.info("LIVE repair TP/SL", repaired.notes.join(" | "));
+    }
+  } catch (e) {
+    console.info("LIVE repair TP/SL skip", e);
+  }
+
   let openJournal = await syncLiveJournalWithPositions(
     portfolio.positions.map((p) => ({ coin: p.coin, side: p.side })),
   );

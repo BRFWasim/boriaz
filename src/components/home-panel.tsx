@@ -209,7 +209,7 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
     });
     void loadFull();
     const fullId = window.setInterval(() => void loadFull(), 60_000);
-    const liveId = window.setInterval(() => void loadLive(), 4_000);
+    const liveId = window.setInterval(() => void loadLive(), 15_000);
 
     // Relecture rapide des trades ouverts (PnL + structure, sans IA lourde)
     async function reviewOpenFast() {
@@ -233,7 +233,7 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
       }
     }
     const reviewSoon = window.setTimeout(() => void reviewOpenFast(), 8_000);
-    const reviewId = window.setInterval(() => void reviewOpenFast(), 45_000);
+    const reviewId = window.setInterval(() => void reviewOpenFast(), 90_000);
 
     return () => {
       alive = false;

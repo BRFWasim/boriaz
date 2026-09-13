@@ -1540,9 +1540,22 @@ export async function manageLiveSmcPositions(): Promise<{
   return { checked: checked + repaired.checked, updated, notes };
 }
 
+/** Urgence : TP/SL synthétiques si journal vide (SL 1.5%, TP ~2R). */
+function synthesizeEmergencyTpsl(
+  side: "long" | "short",
+  entry: number,
+): { tp: number; sl: number } {
+  const risk = entry * 0.015;
+  if (side === "long") {
+    return { sl: entry - risk, tp: entry + risk * 2 };
+  }
+  return { sl: entry + risk, tp: entry - risk * 2 };
+}
+
 /**
  * Si une position Boriaz (journal) n’a plus de TP/SL sur HL → re-place.
- * Évite les positions « nues » après échec cancel/replace.
+ * Si le journal n’a pas de niveaux : synthétise SL 1.5% / TP 2R (urgence).
+ * Couvre aussi les positions HL nues sans journal.
  */
 export async function repairNakedLiveTpsl(): Promise<{
   checked: number;
@@ -1556,10 +1569,12 @@ export async function repairNakedLiveTpsl(): Promise<{
     "./live-journal"
   );
   const journal = (await loadLiveJournal()).filter((e) => e.status === "open");
-  if (!journal.length) return { checked: 0, updated: 0, notes: [] };
 
   const portfolio = await fetchLivePortfolio();
   if (!portfolio.ok) return { checked: 0, updated: 0, notes: [] };
+  if (!portfolio.positions.length) {
+    return { checked: 0, updated: 0, notes: [] };
+  }
 
   const info = new InfoClient({ transport: makeTransport(cfg.testnet) });
   const opens = await info.frontendOpenOrders({
@@ -1571,26 +1586,69 @@ export async function repairNakedLiveTpsl(): Promise<{
   let updated = 0;
   let checked = 0;
 
-  for (const entry of journal) {
-    const pos = portfolio.positions.find(
-      (p) =>
-        p.coin.toUpperCase() === entry.coin.toUpperCase() &&
-        p.side === entry.side,
-    );
-    if (!pos) continue;
-    checked += 1;
-    const tpsl = extractTpslFromOpenOrders(opens ?? [], entry.coin);
-    if (tpsl.tp != null && tpsl.sl != null) continue;
-    if (!(entry.tp > 0 && entry.sl > 0)) continue;
+  type Job = {
+    coin: string;
+    side: "long" | "short";
+    entry: number;
+    size: number;
+    tp: number;
+    sl: number;
+    journalId: string | null;
+    synthesized: boolean;
+  };
+  const jobs: Job[] = [];
 
-    const asset = assets.get(entry.coin.toUpperCase());
+  for (const pos of portfolio.positions) {
+    const tpsl = extractTpslFromOpenOrders(opens ?? [], pos.coin);
+    if (tpsl.tp != null && tpsl.sl != null) continue;
+    checked += 1;
+    const entry =
+      journal.find(
+        (e) =>
+          e.coin.toUpperCase() === pos.coin.toUpperCase() &&
+          e.side === pos.side,
+      ) ?? null;
+    let tp = entry && entry.tp > 0 ? entry.tp : 0;
+    let sl = entry && entry.sl > 0 ? entry.sl : 0;
+    let synthesized = false;
+    if (!(tp > 0 && sl > 0)) {
+      const syn = synthesizeEmergencyTpsl(
+        pos.side,
+        pos.entryPx > 0 ? pos.entryPx : entry?.entry || 0,
+      );
+      if (!(syn.tp > 0 && syn.sl > 0)) continue;
+      tp = syn.tp;
+      sl = syn.sl;
+      synthesized = true;
+    }
+    const entryPx =
+      entry && entry.entry > 0
+        ? entry.entry
+        : pos.entryPx > 0
+          ? pos.entryPx
+          : 0;
+    if (!(entryPx > 0)) continue;
+    jobs.push({
+      coin: pos.coin,
+      side: pos.side,
+      entry: entryPx,
+      size: Math.abs(pos.size),
+      tp,
+      sl,
+      journalId: entry?.id ?? null,
+      synthesized,
+    });
+  }
+
+  for (const job of jobs) {
+    const asset = assets.get(job.coin.toUpperCase());
     if (!asset) continue;
-    const size = formatSz(Math.abs(pos.size), asset.szDecimals);
+    const size = formatSz(job.size, asset.szDecimals);
     if (!size || Number(size) <= 0) continue;
 
-    const isBuy = entry.side === "long";
-    const tpPx = formatPx(entry.tp, asset.szDecimals);
-    const slPx = formatPx(entry.sl, asset.szDecimals);
+    const isBuy = job.side === "long";
+    const tpPx = formatPx(job.tp, asset.szDecimals);
+    const slPx = formatPx(job.sl, asset.szDecimals);
     try {
       const res = await client.order({
         orders: [
@@ -1630,18 +1688,28 @@ export async function repairNakedLiveTpsl(): Promise<{
         (s) => s && typeof s === "object" && "error" in s,
       ) as { error?: string } | undefined;
       if (err?.error) {
-        notes.push(`${entry.coin}: repair TP/SL refusé (${err.error})`);
+        notes.push(`${job.coin}: repair TP/SL refusé (${err.error})`);
         continue;
       }
-      await updateLiveJournalEntry(entry.id, {
-        tpOid: readOid(st[0]),
-        slOid: readOid(st[1]),
-      });
+      const tpOid = readOid(st[0]);
+      const slOid = readOid(st[1]);
+      if (job.journalId) {
+        await updateLiveJournalEntry(job.journalId, {
+          tp: job.tp,
+          sl: job.sl,
+          tpOid,
+          slOid,
+        });
+      }
       updated += 1;
-      notes.push(`${entry.coin}: TP/SL réparés sur HL`);
+      notes.push(
+        job.synthesized
+          ? `${job.coin}: TP/SL d’urgence placés (SL 1.5% / TP 2R) @ ${slPx}/${tpPx}`
+          : `${job.coin}: TP/SL journal re-placés sur HL`,
+      );
     } catch (e) {
       notes.push(
-        `${entry.coin}: repair err ${e instanceof Error ? e.message : "x"}`,
+        `${job.coin}: repair err ${e instanceof Error ? e.message : "x"}`,
       );
     }
   }
