@@ -29,8 +29,8 @@ export function noteLiveOpen(coin: string): void {
 }
 
 function minLiveConfidence(setup: SmcSetup): number {
-  if (setup.tradeKind === "correction" || setup.counterTrend) return 75;
-  return 70;
+  if (setup.tradeKind === "correction" || setup.counterTrend) return 70;
+  return 65;
 }
 
 function geometryOk(setup: SmcSetup): { ok: boolean; why: string } {
@@ -233,7 +233,7 @@ export async function validateLiveSmcBeforePlace(opts: {
         checks,
       };
     }
-    if (mid > zoneHigh * 1.004) {
+    if (mid > zoneHigh * 1.01) {
       return {
         ok: false,
         reason: `Mid hors zone ÔTE/FVG haute — attendre retracement`,
@@ -258,7 +258,7 @@ export async function validateLiveSmcBeforePlace(opts: {
         checks,
       };
     }
-    if (mid < zoneLow * 0.996) {
+    if (mid < zoneLow * 0.99) {
       return {
         ok: false,
         reason: `Mid hors zone ÔTE/FVG basse — attendre retracement`,

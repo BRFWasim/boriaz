@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { signedClass } from "@/lib/format";
 import { readResponseJson } from "@/lib/safe-json";
 import { TradeLiveReview } from "@/components/trade-live-review";
@@ -44,6 +46,17 @@ type LiveHl = {
   positions: LivePosition[];
 };
 
+type ManualForm = {
+  coin: string;
+  side: "long" | "short";
+  entry: string;
+  tp: string;
+  sl: string;
+  leverage: string;
+  riskPct: string;
+  entryMode: "market_now" | "limit_wait";
+};
+
 function Stat({
   label,
   value,
@@ -72,6 +85,18 @@ export function BoriazPanel({ onOpenLab }: { onOpenLab?: () => void }) {
   const [loading, setLoading] = useState(true);
   const [repairMsg, setRepairMsg] = useState<string | null>(null);
   const [repairing, setRepairing] = useState(false);
+  const [manualMsg, setManualMsg] = useState<string | null>(null);
+  const [manualBusy, setManualBusy] = useState(false);
+  const [manual, setManual] = useState<ManualForm>({
+    coin: "BTC",
+    side: "long",
+    entry: "",
+    tp: "",
+    sl: "",
+    leverage: "3",
+    riskPct: "2",
+    entryMode: "market_now",
+  });
 
   const load = useCallback(async () => {
     try {
@@ -172,6 +197,61 @@ export function BoriazPanel({ onOpenLab }: { onOpenLab?: () => void }) {
     }
   }
 
+  async function submitManualTrade() {
+    const coin = manual.coin.trim().toUpperCase();
+    const entry = Number(manual.entry);
+    const tp = Number(manual.tp);
+    const sl = Number(manual.sl);
+    if (!coin || !(entry > 0 && tp > 0 && sl > 0)) {
+      setManualMsg("Renseigne coin, entry, TP et SL (> 0).");
+      return;
+    }
+    if (
+      !window.confirm(
+        `Placer un ordre LIVE ${manual.side.toUpperCase()} ${coin} sur Hyperliquid ?\n\nEntry ${entry} · TP ${tp} · SL ${sl} · ${manual.leverage}× · risque ${manual.riskPct}% · ${manual.entryMode === "limit_wait" ? "LIMITE" : "MARCHÉ"}\n\nArgent réel — irréversible.`,
+      )
+    ) {
+      return;
+    }
+    setManualBusy(true);
+    setManualMsg("Envoi ordre LIVE…");
+    try {
+      const res = await fetch("/api/live-trade", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          coin,
+          side: manual.side,
+          entry,
+          tp,
+          sl,
+          leverage: Number(manual.leverage) || 3,
+          riskPct: Number(manual.riskPct) || 2,
+          entryMode: manual.entryMode,
+        }),
+      });
+      const json = await readResponseJson<{
+        ok?: boolean;
+        error?: string;
+        size?: string;
+        entryOid?: number | null;
+        reason?: string;
+      }>(res);
+      if (!res.ok || !json.ok) {
+        setManualMsg(json.error || json.reason || "Ordre refusé");
+        return;
+      }
+      setManualMsg(
+        `LIVE OK · size ${json.size ?? "?"} · entryOid ${json.entryOid ?? "?"}`,
+      );
+      await load();
+    } catch (e) {
+      setManualMsg(e instanceof Error ? e.message : "Erreur ordre");
+    } finally {
+      setManualBusy(false);
+    }
+  }
+
   useEffect(() => {
     void load();
     const id = window.setInterval(() => void load(), 45_000);
@@ -183,7 +263,6 @@ export function BoriazPanel({ onOpenLab }: { onOpenLab?: () => void }) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ fast: true }),
         });
-        // Appliquer les snapshots tout de suite (sans attendre live-account)
         try {
           const json = (await res.json()) as {
             live?: { snapshots?: Record<string, unknown> };
@@ -207,8 +286,6 @@ export function BoriazPanel({ onOpenLab }: { onOpenLab?: () => void }) {
         } catch {
           /* ignore parse */
         }
-        // Ne PAS recharger live-account tout de suite : ça écrasait les snapshots.
-        // Le poll load() périodique fusionne en préservant manageSnapshot.
       } catch {
         /* ignore */
       }
@@ -369,8 +446,7 @@ export function BoriazPanel({ onOpenLab }: { onOpenLab?: () => void }) {
                       {p.nakedTpsl ? (
                         <p className="mt-0.5 text-[11px] text-rose-700 dark:text-rose-300">
                           Aucun TP/SL trigger sur Hyperliquid — protection
-                          manquante (Boriaz tentera une réparation au prochain
-                          cron).
+                          manquante (utilise « Replacer TP/SL »).
                         </p>
                       ) : null}
                       {p.journalMissing ? (
@@ -404,6 +480,19 @@ export function BoriazPanel({ onOpenLab }: { onOpenLab?: () => void }) {
                         side={p.side}
                         unrealizedPnlUsd={p.unrealizedPnlUsd}
                         onClosed={() => void load()}
+                        onSnapshot={(snap) => {
+                          setLiveHl((prev) => {
+                            if (!prev) return prev;
+                            return {
+                              ...prev,
+                              positions: prev.positions.map((pos) =>
+                                pos.coin === p.coin && pos.side === p.side
+                                  ? { ...pos, manageSnapshot: snap }
+                                  : pos,
+                              ),
+                            };
+                          });
+                        }}
                       />
                     </li>
                   ))}
@@ -426,6 +515,150 @@ export function BoriazPanel({ onOpenLab }: { onOpenLab?: () => void }) {
             </div>
           )
         ) : null}
+      </section>
+
+      <section className="rounded-[1.5rem] border border-border/60 bg-card/30 px-4 py-5 sm:px-6">
+        <p className="text-[0.65rem] tracking-[0.28em] text-muted-foreground uppercase">
+          Ordre manuel
+        </p>
+        <h3 className="font-heading mt-1 text-base font-semibold">
+          Trade LIVE depuis le site
+        </h3>
+        <p className="mt-1 max-w-xl text-sm text-muted-foreground">
+          Place un ordre Hyperliquid réel (sizing 2% du solde HL par défaut).
+          Confirmation obligatoire avant envoi.
+        </p>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="m-coin">Coin</Label>
+            <Input
+              id="m-coin"
+              value={manual.coin}
+              onChange={(e) =>
+                setManual((m) => ({ ...m, coin: e.target.value.toUpperCase() }))
+              }
+              placeholder="BTC"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="m-side">Sens</Label>
+            <select
+              id="m-side"
+              className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm"
+              value={manual.side}
+              onChange={(e) =>
+                setManual((m) => ({
+                  ...m,
+                  side: e.target.value === "short" ? "short" : "long",
+                }))
+              }
+            >
+              <option value="long">Long</option>
+              <option value="short">Short</option>
+            </select>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="m-mode">Mode</Label>
+            <select
+              id="m-mode"
+              className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm"
+              value={manual.entryMode}
+              onChange={(e) =>
+                setManual((m) => ({
+                  ...m,
+                  entryMode:
+                    e.target.value === "limit_wait"
+                      ? "limit_wait"
+                      : "market_now",
+                }))
+              }
+            >
+              <option value="market_now">Marché</option>
+              <option value="limit_wait">Limite</option>
+            </select>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="m-lev">Levier</Label>
+            <Input
+              id="m-lev"
+              type="number"
+              min={1}
+              max={20}
+              value={manual.leverage}
+              onChange={(e) =>
+                setManual((m) => ({ ...m, leverage: e.target.value }))
+              }
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="m-entry">Entry</Label>
+            <Input
+              id="m-entry"
+              type="number"
+              step="any"
+              value={manual.entry}
+              onChange={(e) =>
+                setManual((m) => ({ ...m, entry: e.target.value }))
+              }
+              placeholder="prix"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="m-tp">TP</Label>
+            <Input
+              id="m-tp"
+              type="number"
+              step="any"
+              value={manual.tp}
+              onChange={(e) =>
+                setManual((m) => ({ ...m, tp: e.target.value }))
+              }
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="m-sl">SL</Label>
+            <Input
+              id="m-sl"
+              type="number"
+              step="any"
+              value={manual.sl}
+              onChange={(e) =>
+                setManual((m) => ({ ...m, sl: e.target.value }))
+              }
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="m-risk">Risque %</Label>
+            <Input
+              id="m-risk"
+              type="number"
+              step="0.25"
+              min={0.25}
+              max={5}
+              value={manual.riskPct}
+              onChange={(e) =>
+                setManual((m) => ({ ...m, riskPct: e.target.value }))
+              }
+            />
+          </div>
+        </div>
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          <Button
+            type="button"
+            disabled={manualBusy || !liveHl?.ready}
+            onClick={() => void submitManualTrade()}
+          >
+            {manualBusy ? "Envoi…" : "Placer ordre LIVE"}
+          </Button>
+          {!liveHl?.ready ? (
+            <span className="text-xs text-amber-700 dark:text-amber-300">
+              Env LIVE non prêt — vérifie les clés Vercel.
+            </span>
+          ) : null}
+          {manualMsg ? (
+            <span className="text-xs text-muted-foreground">{manualMsg}</span>
+          ) : null}
+        </div>
       </section>
     </div>
   );

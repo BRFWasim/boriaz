@@ -850,8 +850,9 @@ export function analyzeSmcSetup(input: {
   if (checklist.allPass && local?.order && local.ote && local.fvg) {
     const zoneLow = Math.min(local.ote.low, local.fvg.low);
     const zoneHigh = Math.max(local.ote.high, local.fvg.high);
+    // Fenêtre ±0.8 % autour ÔTE∪FVG — assez large pour filler, sans entrer hors zone
     const inZone =
-      input.price >= zoneLow * 0.998 && input.price <= zoneHigh * 1.002;
+      input.price >= zoneLow * 0.992 && input.price <= zoneHigh * 1.008;
     status = inZone
       ? "ORDRE PRÊT À ÊTRE EXÉCUTÉ"
       : "EN ATTENTE DE RETRACEMENT";

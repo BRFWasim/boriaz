@@ -1717,6 +1717,206 @@ export async function repairNakedLiveTpsl(): Promise<{
   return { checked, updated, notes };
 }
 
+/**
+ * Force cancel + re-place TP/SL sur UNE position LIVE (même si déjà protégés).
+ * Niveaux : journal si dispo, sinon SL 1.5% / TP 2R, sinon opts.tp/sl fournis.
+ */
+export async function forceReplaceLiveTpsl(opts: {
+  coin: string;
+  side?: LiveSide;
+  tp?: number;
+  sl?: number;
+}): Promise<{
+  ok: boolean;
+  reason?: string;
+  coin?: string;
+  side?: LiveSide;
+  tp?: number;
+  sl?: number;
+  synthesized?: boolean;
+  notes: string[];
+}> {
+  const ready = isLiveEnvReady();
+  if (!ready.ok) {
+    return { ok: false, reason: ready.reason || "LIVE non prêt", notes: [] };
+  }
+  const coin = String(opts.coin || "").trim().toUpperCase();
+  if (!coin) return { ok: false, reason: "coin requis", notes: [] };
+
+  const cfg = getLiveConfig();
+  const portfolio = await fetchLivePortfolio();
+  if (!portfolio.ok) {
+    return { ok: false, reason: portfolio.reason || "Portfolio illisible", notes: [] };
+  }
+  const pos = portfolio.positions.find(
+    (p) =>
+      p.coin.toUpperCase() === coin &&
+      (opts.side == null || p.side === opts.side),
+  );
+  if (!pos) {
+    return {
+      ok: false,
+      reason: opts.side
+        ? `Pas de position ${opts.side} ${coin}`
+        : `Pas de position ${coin}`,
+      notes: [],
+    };
+  }
+
+  const { loadLiveJournal, matchJournalToPosition, updateLiveJournalEntry } =
+    await import("./live-journal");
+  const journal = (await loadLiveJournal()).filter((e) => e.status === "open");
+  const entry = matchJournalToPosition(journal, pos.coin, pos.side);
+
+  let tp =
+    opts.tp != null && opts.tp > 0
+      ? opts.tp
+      : entry && entry.tp > 0
+        ? entry.tp
+        : 0;
+  let sl =
+    opts.sl != null && opts.sl > 0
+      ? opts.sl
+      : entry && entry.sl > 0
+        ? entry.sl
+        : 0;
+  let synthesized = false;
+  const entryPx =
+    entry && entry.entry > 0
+      ? entry.entry
+      : pos.entryPx > 0
+        ? pos.entryPx
+        : 0;
+  if (!(tp > 0 && sl > 0)) {
+    const syn = synthesizeEmergencyTpsl(pos.side, entryPx);
+    tp = syn.tp;
+    sl = syn.sl;
+    synthesized = true;
+  }
+  if (!(entryPx > 0 && tp > 0 && sl > 0)) {
+    return {
+      ok: false,
+      reason: "Impossible de déterminer entry/TP/SL",
+      notes: [],
+    };
+  }
+
+  const assets = await loadAssetMap(cfg.testnet);
+  const asset = assets.get(coin);
+  if (!asset) {
+    return { ok: false, reason: `Asset ${coin} inconnu`, notes: [] };
+  }
+
+  const info = new InfoClient({ transport: makeTransport(cfg.testnet) });
+  const client = getExchangeClient(cfg.testnet);
+  const notes: string[] = [];
+
+  try {
+    const opens = await info.frontendOpenOrders({
+      user: cfg.accountAddress as `0x${string}`,
+    });
+    const cancels = (opens ?? [])
+      .filter((o) => String(o.coin || "").toUpperCase() === coin)
+      .map((o) => ({ a: asset.id, o: Number(o.oid) }))
+      .filter((c) => Number.isFinite(c.o));
+    if (cancels.length) {
+      await client.cancel({ cancels });
+      notes.push(`Annulé ${cancels.length} ordre(s) ouverts ${coin}`);
+    }
+  } catch (e) {
+    notes.push(
+      `Cancel partiel: ${e instanceof Error ? e.message : "err"}`,
+    );
+  }
+
+  const size = formatSz(Math.abs(pos.size), asset.szDecimals);
+  if (!size || Number(size) <= 0) {
+    return { ok: false, reason: "Taille nulle", notes };
+  }
+  const isBuy = pos.side === "long";
+  const tpPx = formatPx(tp, asset.szDecimals);
+  const slPx = formatPx(sl, asset.szDecimals);
+
+  try {
+    const res = await client.order({
+      orders: [
+        {
+          a: asset.id,
+          b: !isBuy,
+          p: tpPx,
+          s: size,
+          r: true,
+          t: {
+            trigger: {
+              isMarket: true,
+              triggerPx: tpPx,
+              tpsl: "tp",
+            },
+          },
+        },
+        {
+          a: asset.id,
+          b: !isBuy,
+          p: slPx,
+          s: size,
+          r: true,
+          t: {
+            trigger: {
+              isMarket: true,
+              triggerPx: slPx,
+              tpsl: "sl",
+            },
+          },
+        },
+      ],
+      grouping: "na",
+    });
+    const st = res.response?.data?.statuses ?? [];
+    const err = st.find(
+      (s) => s && typeof s === "object" && "error" in s,
+    ) as { error?: string } | undefined;
+    if (err?.error) {
+      return {
+        ok: false,
+        reason: err.error,
+        coin: pos.coin,
+        side: pos.side,
+        notes: [...notes, `HL refuse TP/SL: ${err.error}`],
+      };
+    }
+    if (entry) {
+      await updateLiveJournalEntry(entry.id, {
+        tp,
+        sl,
+        tpOid: readOid(st[0]),
+        slOid: readOid(st[1]),
+      });
+    }
+    notes.push(
+      synthesized
+        ? `TP/SL urgence re-placés @ ${slPx}/${tpPx}`
+        : `TP/SL re-placés @ ${slPx}/${tpPx}`,
+    );
+    return {
+      ok: true,
+      coin: pos.coin,
+      side: pos.side,
+      tp,
+      sl,
+      synthesized,
+      notes,
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      reason: hlErrMessage(e),
+      coin: pos.coin,
+      side: pos.side,
+      notes,
+    };
+  }
+}
+
 export async function placeBoriazLiveTradeMirrored(
   req: LiveTradeRequest,
 ): Promise<LiveTradeResult> {

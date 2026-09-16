@@ -19,6 +19,7 @@ const PRIVATE_API_PREFIXES = [
   "/api/live-mirror",
   "/api/live-close",
   "/api/live-repair",
+  "/api/live-trade",
   "/api/live",
   "/api/paper",
   "/api/prefs",

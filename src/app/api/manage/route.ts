@@ -24,9 +24,18 @@ export async function POST(request: Request) {
   try {
     await bindUserRequest();
     let fast = false;
+    let coin: string | undefined;
+    let side: "long" | "short" | undefined;
     try {
-      const body = (await request.json()) as { fast?: boolean };
+      const body = (await request.json()) as {
+        fast?: boolean;
+        coin?: string;
+        side?: string;
+      };
       fast = Boolean(body?.fast);
+      coin = body?.coin?.trim() || undefined;
+      const s = String(body?.side || "").toLowerCase();
+      side = s === "long" || s === "short" ? s : undefined;
     } catch {
       /* no body */
     }
@@ -37,11 +46,13 @@ export async function POST(request: Request) {
     try {
       live = await manageLivePositionReviews({
         notify: !fast,
-        skipAi: fast,
+        skipAi: fast && !coin,
         // LIVE : garder SMC (FVG/BOS) même en fast — peu de positions.
         // Timeout TF interne évite le blocage ; fallback mid+PnL si HL lent.
         skipSmc: false,
-        max: fast ? 8 : 12,
+        max: coin ? 1 : fast ? 8 : 12,
+        coin,
+        side,
       });
     } catch {
       live = {

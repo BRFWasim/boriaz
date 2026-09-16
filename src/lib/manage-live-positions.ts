@@ -248,6 +248,9 @@ export async function manageLivePositionReviews(opts?: {
   skipAi?: boolean;
   /** Skip FVG/BOS (poll UI ~45s) — évite 429 HL. */
   skipSmc?: boolean;
+  /** Forcer la relecture d’une seule position. */
+  coin?: string;
+  side?: "long" | "short";
 }): Promise<LiveManageResult> {
   const prefs = await loadPrefs();
   const notify =
@@ -287,8 +290,16 @@ export async function manageLivePositionReviews(opts?: {
   const notes: string[] = [];
   let aiUsed = false;
   const max = opts?.max ?? 8;
+  const filterCoin = opts?.coin?.trim().toUpperCase() || null;
+  const filterSide = opts?.side ?? null;
 
-  for (const pos of portfolio.positions.slice(0, max)) {
+  const positions = portfolio.positions.filter((p) => {
+    if (filterCoin && p.coin.toUpperCase() !== filterCoin) return false;
+    if (filterSide && p.side !== filterSide) return false;
+    return true;
+  });
+
+  for (const pos of positions.slice(0, max)) {
     const key = snapKey(pos.coin, pos.side);
     try {
       const j = matchJournalToPosition(openJournal, pos.coin, pos.side);

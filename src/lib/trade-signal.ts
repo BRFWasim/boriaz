@@ -1369,13 +1369,16 @@ export async function getTradeSignals(options?: {
           !setup ||
           !setup.order ||
           !setup.risk ||
-          !setup.checklist.allPass ||
-          !smcScan.aiApproved
+          !setup.checklist.allPass
         ) {
           continue;
         }
-        // Exécution : uniquement ORDRE PRÊT (réfléchir — pas EN ATTENTE)
-        if (setup.status !== "ORDRE PRÊT À ÊTRE EXÉCUTÉ") continue;
+        const isReady = setup.status === "ORDRE PRÊT À ÊTRE EXÉCUTÉ";
+        const isWaiting = setup.status === "EN ATTENTE DE RETRACEMENT";
+        // Paper : ORDRE PRÊT (immédiat/limite) OU EN ATTENTE (limite pendante)
+        // LIVE : uniquement ORDRE PRÊT + gate IA (plus bas)
+        if (!isReady && !isWaiting) continue;
+        if (isReady && !smcScan.aiApproved) continue;
         if (setup.order.entryMode !== "limit_wait") continue;
 
         const acc = computePaperAccount(paperForCheck, pf.bankrollEur, pf.id);
@@ -1396,9 +1399,14 @@ export async function getTradeSignals(options?: {
         }
 
         const justification: TradeJustification = {
-          summary: `SMC Boriaz ${setup.order.side.toUpperCase()} ${setup.coin} · structure OK · risque ${setup.risk.riskPct}% · gate ChatGPT`,
+          summary: isWaiting
+            ? `SMC Boriaz ${setup.order.side.toUpperCase()} ${setup.coin} · EN ATTENTE zone · limite paper`
+            : `SMC Boriaz ${setup.order.side.toUpperCase()} ${setup.coin} · structure OK · risque ${setup.risk.riskPct}% · gate ChatGPT`,
           bullets: [
             `Stratégie SMC Boriaz · exec ${setup.execTimeframe ?? "15m"}`,
+            isWaiting
+              ? "Statut EN ATTENTE — limite paper, LIVE seulement à ORDRE PRÊT"
+              : "Statut ORDRE PRÊT — exécution possible",
             setup.signalType === "short_counter_trend"
               ? "SHORT correction (retracement) · M15/M30 only"
               : setup.signalType === "long_counter_trend"
@@ -1429,7 +1437,9 @@ export async function getTradeSignals(options?: {
             smcScan.liveEligible
               ? "LIVE éligible (IA + ORDRE PRÊT)"
               : "LIVE non éligible pour l’instant",
-            smcScan.aiNote || "Gate ChatGPT",
+            isWaiting
+              ? "Paper limite sans LIVE (attendre zone)"
+              : smcScan.aiNote || "Gate ChatGPT",
           ],
           alignmentScore: setup.confidence,
           aiVerified: smcScan.aiApproved,
@@ -1465,9 +1475,10 @@ export async function getTradeSignals(options?: {
           riskPct: 2,
         });
 
-        // LIVE Hyperliquid — uniquement après double gate (réfléchir avant)
+        // LIVE Hyperliquid — uniquement ORDRE PRÊT + double gate (pas EN ATTENTE)
         if (
           opened &&
+          isReady &&
           pf.id === "boriaz" &&
           !opened.note.includes("Cash insuffisant")
         ) {

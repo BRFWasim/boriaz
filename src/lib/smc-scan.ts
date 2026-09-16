@@ -46,10 +46,10 @@ type GateResult = {
 };
 
 function minGateConfidence(setup: SmcSetup): number {
-  // Ultra-strict LIVE-minded : correction plus exigeante
-  if (setup.tradeKind === "correction" || setup.counterTrend) return 72;
-  if (setup.order?.side === "short") return 68;
-  return 70;
+  // LIVE-minded mais exécutable : correction un cran plus exigeante
+  if (setup.tradeKind === "correction" || setup.counterTrend) return 68;
+  if (setup.order?.side === "short") return 64;
+  return 65;
 }
 
 function parseGateJson(
