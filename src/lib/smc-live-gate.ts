@@ -29,8 +29,8 @@ export function noteLiveOpen(coin: string): void {
 }
 
 function minLiveConfidence(setup: SmcSetup): number {
-  if (setup.tradeKind === "correction" || setup.counterTrend) return 70;
-  return 65;
+  if (setup.tradeKind === "correction" || setup.counterTrend) return 78;
+  return 72;
 }
 
 function geometryOk(setup: SmcSetup): { ok: boolean; why: string } {
@@ -172,6 +172,34 @@ export async function validateLiveSmcBeforePlace(opts: {
     };
   }
   checks.push("liveEligible");
+
+  // Range BTC / coin — jamais short en bas de range, jamais long en haut
+  try {
+    const { getTradeRangeGate } = await import("./btc-range");
+    const rg = await getTradeRangeGate({
+      coin: setup.coin,
+      side: setup.order.side,
+      price: setup.price,
+      tradeKind: setup.tradeKind,
+    });
+    checks.push(`range ${rg.btc.summary}`);
+    if (!rg.ok) {
+      return {
+        ok: false,
+        reason: rg.reason,
+        mid: null,
+        checks,
+      };
+    }
+  } catch (e) {
+    return {
+      ok: false,
+      reason: `Range indisponible — pas de LIVE à l’aveugle (${e instanceof Error ? e.message : "err"})`,
+      mid: null,
+      checks,
+    };
+  }
+  checks.push("range OK");
 
   const now = Date.now();
   if (now - lastGlobalLiveOpenAt < GLOBAL_COOLDOWN_MS) {

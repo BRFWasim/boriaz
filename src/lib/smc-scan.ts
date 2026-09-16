@@ -46,10 +46,10 @@ type GateResult = {
 };
 
 function minGateConfidence(setup: SmcSetup): number {
-  // LIVE-minded mais exécutable : correction un cran plus exigeante
-  if (setup.tradeKind === "correction" || setup.counterTrend) return 68;
-  if (setup.order?.side === "short") return 64;
-  return 65;
+  // Qualité > quantité — FAIRE GAGNER DE L'ARGENT
+  if (setup.tradeKind === "correction" || setup.counterTrend) return 78;
+  if (setup.order?.side === "short") return 72;
+  return 70;
 }
 
 function parseGateJson(
@@ -102,21 +102,29 @@ function parseGateJson(
   };
 }
 
-function smcGatePrompt(setup: SmcSetup): string {
+function smcGatePrompt(setup: SmcSetup, rangeNote?: string): string {
   const side = setup.order?.side?.toUpperCase() ?? "?";
   return `${BORIAZ_SMC_SYSTEM_PROMPT}
+
+MISSION : FAIRE GAGNER DE L'ARGENT — refuse tout trade douteux.
 
 Coin: ${setup.coin}
 Sens proposé: ${side}
 Prix: ${setup.price}
+Kind: ${setup.tradeKind ?? "?"}
+Range / macro fourni: ${rangeNote || "non fourni — déduis depuis le rapport"}
+
 Analyse déterministe déjà calculée (à valider ou corriger) :
 
 ${setup.report}
 
 Si TOUTE la checklist structure est VALIDÉE (Sweep + BOS corps + FVG + ÔTE)
-ET le statut est exactement « ORDRE PRÊT À ÊTRE EXÉCUTÉ » (prix dans zone ÔTE/FVG),
+ET le statut est exactement « ORDRE PRÊT À ÊTRE EXÉCUTÉ » (prix dans zone ÔTE/FVG)
+ET le range BTC/actif n’interdit PAS ce sens (pas de SHORT en bas de range, pas de LONG en haut)
+ET l’espérance de gain est claire,
 approve=true.
-Si statut « EN ATTENTE DE RETRACEMENT » → approve=false (pas encore le moment d’exécuter).
+Si statut « EN ATTENTE DE RETRACEMENT » → approve=false.
+Si short en bas de range ou long en haut de range → approve=false (FAIRE GAGNER = attendre le bon setup).
 Correction/retracement OK seulement en M15/M30 (pas M5). Un seul critère manquant → approve=false et « SETUP INVALIDÉ (CRITÈRE MANQUANT) - AUCUN ORDRE ».
 Sinon approve=false.
 Réponds d'abord avec le format [ANALYSE...] complet, puis UNE ligne JSON : {"approve":true|false,"confidence":0-100,"note":"..."}`;
@@ -133,7 +141,10 @@ async function askClaudeSmcGate(setup: SmcSetup): Promise<GateResult | null> {
   */
 }
 
-async function askGptSmcGate(setup: SmcSetup): Promise<GateResult | null> {
+async function askGptSmcGate(
+  setup: SmcSetup,
+  rangeNote?: string,
+): Promise<GateResult | null> {
   const key = process.env.OPENAI_API_KEY?.trim();
   if (!key) return null;
   const model = process.env.OPENAI_MODEL?.trim() || GPT_MODEL_DEFAULT;
@@ -147,10 +158,13 @@ async function askGptSmcGate(setup: SmcSetup): Promise<GateResult | null> {
       body: JSON.stringify({
         model,
         temperature: 0.1,
-        max_tokens: 1400,
+        max_tokens: 1600,
         messages: [
-          { role: "system", content: BORIAZ_SMC_SYSTEM_PROMPT },
-          { role: "user", content: smcGatePrompt(setup) },
+          {
+            role: "system",
+            content: `${BORIAZ_SMC_SYSTEM_PROMPT}\n\nRAPPEL SYSTÈME: FAIRE GAGNER DE L'ARGENT — refuse les setups incohérents avec le range macro.`,
+          },
+          { role: "user", content: smcGatePrompt(setup, rangeNote) },
         ],
       }),
       signal: AbortSignal.timeout(45_000),
@@ -185,14 +199,17 @@ async function askGptSmcGate(setup: SmcSetup): Promise<GateResult | null> {
  * Validation Boriaz : ChatGPT uniquement.
  * Sans OPENAI_API_KEY → gate mécanique checklist.
  */
-async function runSmcAiGates(setup: SmcSetup): Promise<{
+async function runSmcAiGates(
+  setup: SmcSetup,
+  rangeNote?: string,
+): Promise<{
   approved: boolean;
   note: string;
   report: string | null;
   model: string;
   confidence: number;
 }> {
-  const gpt = await askGptSmcGate(setup);
+  const gpt = await askGptSmcGate(setup, rangeNote);
   void askClaudeSmcGate;
   void CLAUDE_MODEL;
   const gates = [gpt].filter(Boolean) as GateResult[];
@@ -392,19 +409,43 @@ export async function scanSmcWatchlist(input: {
   );
   const refusals: string[] = [];
 
+  const { getTradeRangeGate } = await import("./btc-range");
+
   for (const cand of candidates) {
     if (!cand.order || !cand.checklist.allPass) continue;
+
+    // Filtre range BTC / coin AVANT ChatGPT — FAIRE GAGNER = pas de short bas de range
+    let rangeNote = "";
+    try {
+      const rg = await getTradeRangeGate({
+        coin: cand.coin,
+        side: cand.order.side,
+        price: cand.price,
+        tradeKind: cand.tradeKind,
+      });
+      rangeNote = `${rg.reason} | BTC: ${rg.btc.summary}`;
+      if (!rg.ok) {
+        gatedTried += 1;
+        refusals.push(
+          `${cand.coin} ${cand.order.side}: RANGE ${rg.reason}`.slice(0, 140),
+        );
+        aiNote = `Range refuse — ${rg.reason}`;
+        continue;
+      }
+    } catch (e) {
+      rangeNote = e instanceof Error ? e.message : "range err";
+    }
+
     gatedTried += 1;
-    const gate = await runSmcAiGates(cand);
+    const gate = await runSmcAiGates(cand, rangeNote);
     if (gate.approved) {
       best = cand;
       aiApproved = true;
-      aiNote = gate.note;
+      aiNote = `${gate.note} · ${rangeNote}`;
       aiReport = gate.report;
       model = gate.model;
       aiConfidence = gate.confidence;
       if (gate.report) cand.report = gate.report;
-      // Ne pas gonfler artificiellement au-delà de la conf mécanique + gate
       cand.confidence = Math.min(
         95,
         Math.round((cand.confidence + gate.confidence) / 2),

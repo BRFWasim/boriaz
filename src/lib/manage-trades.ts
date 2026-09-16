@@ -125,13 +125,13 @@ export function stabilizeManageAction(opts: {
   const minMs = softPair
     ? 90_000
     : escalateFlip
-      ? 4 * 60_000
+      ? 8 * 60_000
       : escalateClose
-        ? 2.5 * 60_000
+        ? 6 * 60_000
         : deEscalate
-          ? 3 * 60_000
-          : 2 * 60_000;
-  const needConfirms = escalateFlip ? 3 : escalateClose ? 2 : softPair ? 2 : 2;
+          ? 4 * 60_000
+          : 3 * 60_000;
+  const needConfirms = escalateFlip ? 4 : escalateClose ? 3 : softPair ? 2 : 2;
 
   if (heldMs >= minMs && confirmCount >= needConfirms) {
     return {
@@ -474,14 +474,20 @@ async function aiDecision(
     resistance: ind?.resistance ?? null,
     support: ind?.support ?? null,
   };
-  const prompt = `Tu gères un trade OUVERT (${trade.side.toUpperCase()} — long OU short, même rigueur). PnL live en ${u}. FR. PAS un conseil financier.
-Analyse EN DIRECT pendant le trade (comme avant l'entrée, mais pour décider maintenant) :
-viabilité du setup, rebond (long) ou rechute (short), zones S/R, alignement 15m/1h/4h.
+  const prompt = `OBJECTIF ABSOLU : FAIRE GAGNER DE L'ARGENT. Tu gères un trade OUVERT (${trade.side.toUpperCase()}). PnL live en ${u}. FR. PAS un conseil financier.
+
+Priorité : laisser le trade atteindre TP1/TP2 si le setup SMC/macro reste viable. Ne dis "close" QUE si le setup est MORT (structure multi-TF clairement contre + perte qui empire, ou TP presque touché en profit). Un avis "clôturer" trop tôt FAIT PERDRE de l'argent (frais + SL émotionnel).
+
+Analyse EN DIRECT :
+- viabilité du setup, rebond (long) ou rechute (short)
+- zones S/R, alignement 15m/1h/4h
+- si le trade est jeune (<20 min) → préfère "hold" ou "wait" sauf catastrophe évidente
+
 Actions:
-- "close" : sortir (setup mort, zone majeure, perte qui empire, TP proche) — long ET short
-- "flip" : sortir + sens inverse (retournement 1h+4h confirmé)
+- "hold" : laisser courir (choix par défaut si doute) — FAIRE GAGNER
 - "wait" : garder, attendre confirmation
-- "hold" : laisser courir (rebond/rechute encore probable DANS le sens du trade)
+- "close" : sortir SEULEMENT setup mort / zone majeure en profit / perte qui empire sans rebond
+- "flip" : rare — retournement 1h+4h confirmé seulement
 JSON: {"action":"close|flip|wait|hold","reason":"1 phrase avec PnL ${u} et le côté ${trade.side}"}
 Trade: ${JSON.stringify(ctx)}`;
 
@@ -726,12 +732,28 @@ export async function evaluateTradeManage(opts: {
   let providers = ["règles+PnL"];
   let aiUsed = false;
 
+  // Grâce post-entrée : ne pas crier « clôturer » sur un trade tout frais
+  const openedAt = opts.trade.filledAt ?? opts.trade.openedAt ?? 0;
+  const ageMs = openedAt > 0 ? Date.now() - openedAt : 999 * 60_000;
+  const youngTrade = ageMs < 20 * 60_000;
+  if (youngTrade && (action === "close" || action === "flip")) {
+    const allowEarly =
+      (det.action === "close" && pnl.pnlEur > 0 && /Proche TP|Objectif/i.test(det.reason)) ||
+      (pnl.pnlPct <= -12 && /contre|baissier|haussier/i.test(det.reason));
+    if (!allowEarly) {
+      action = pnl.pnlPct < -3 ? "wait" : "hold";
+      reason = `Trade jeune (${Math.round(ageMs / 60_000)} min) — on laisse le setup travailler · ${det.reason}`;
+      outlook =
+        "FAIRE GAGNER : pas de clôture émotionnelle tôt — TP1/structure d’abord.";
+    }
+  }
+
   const lastAt =
     opts.previousSnapshot?.at ?? opts.lastSnapshotAt ?? 0;
   const stale = Date.now() - lastAt > 5 * 60_000;
   const critical = det.action === "close" || det.action === "flip";
   // IA moins souvent : seulement si stale (5 min) ou critique — réduit le flip-flop
-  if (!opts.skipAi && (stale || critical)) {
+  if (!opts.skipAi && (stale || critical) && !youngTrade) {
     const ai = await aiDecision(
       opts.trade,
       opts.frames,
@@ -741,7 +763,11 @@ export async function evaluateTradeManage(opts: {
     );
     if (ai) {
       aiUsed = true;
-      if (ai.action === "close" || ai.action === "flip") {
+      if (
+        (ai.action === "close" || ai.action === "flip") &&
+        (det.action === "close" || det.action === "flip" || det.action === "wait")
+      ) {
+        // IA seule ne force pas close si les règles disent hold
         action = ai.action;
         reason = ai.reason;
         providers = ai.providers;
@@ -749,6 +775,12 @@ export async function evaluateTradeManage(opts: {
           ai.action === "close"
             ? `IA + structure : sortie ${opts.trade.side} recommandée.`
             : `IA + structure : retournement — bascule depuis ${opts.trade.side}.`;
+      } else if (ai.action === "close" || ai.action === "flip") {
+        // Désaccord règles=hold vs IA=close → wait (pas close)
+        action = "wait";
+        reason = `IA veut ${ai.action} mais règles ${det.action} — on attend · ${ai.reason}`;
+        providers = [...ai.providers, "règles+PnL"];
+        outlook = "FAIRE GAGNER : désaccord → pas de clôture précipitée.";
       } else if (det.action === "hold" || det.action === "wait") {
         action = ai.action;
         reason = `${det.reason} · ${ai.reason}`;
@@ -804,7 +836,16 @@ export async function evaluateTradeManage(opts: {
           smc.againstPosition.sweep;
         if (smcAgainstStrong && (action === "hold" || action === "wait")) {
           const prevAct = opts.previousSnapshot?.action;
-          if (prevAct === "wait" || prevAct === "close") {
+          const tradeAge =
+            Date.now() -
+            (opts.trade.filledAt ?? opts.trade.openedAt ?? 0);
+          // Pas de close SMC sur trade < 25 min — FAIRE GAGNER = laisser travailler
+          if (tradeAge < 25 * 60_000) {
+            action = "wait";
+            reason = `SMC contre naissant — trade jeune, on surveille · ${reason}`;
+            outlook =
+              "Structure adverse naissante — confirmation avant toute clôture.";
+          } else if (prevAct === "wait" || prevAct === "close") {
             action = "close";
             reason = `SMC contre ${opts.trade.side} (Sweep+BOS adverses confirmés) · ${reason}`;
             outlook = `Structure SMC adverse confirmée — sortie ${opts.trade.side} recommandée.`;
@@ -819,7 +860,7 @@ export async function evaluateTradeManage(opts: {
           snapshot.bullets = [
             action === "close"
               ? `À faire : clôturer le ${opts.trade.side} (SMC adverse confirmé)`
-              : `À faire : attendre confirmation SMC adverse avant clôture`,
+              : `À faire : laisser travailler / confirmer — pas de clôture précipitée`,
             ...(snapshot.bullets ?? []),
           ].slice(0, 12);
         }
@@ -979,6 +1020,39 @@ export async function manageOpenTrades(opts?: {
           : "IA";
 
       if (action === "close" || action === "flip") {
+        // Paper SMC : ne pas auto-clôturer un trade jeune sauf profit TP / catastrophe
+        const ageMs =
+          Date.now() - (trade.filledAt ?? trade.openedAt ?? 0);
+        const isSmcTrade =
+          trade.strategy === "smc" ||
+          (trade.portfolioId || "") === "boriaz";
+        const catastrophic = pnl.pnlPct <= -15;
+        const takeProfitClose =
+          action === "close" && pnl.pnlEur > 0 && /TP|profits|Objectif/i.test(reason);
+        if (
+          isSmcTrade &&
+          ageMs < 30 * 60_000 &&
+          !catastrophic &&
+          !takeProfitClose
+        ) {
+          trade.note =
+            `Attendre · trade jeune (${Math.round(ageMs / 60_000)} min) — avis ${action} différé · ${reason}`.slice(
+              0,
+              220,
+            );
+          continue;
+        }
+        // Exiger sticky confirm pour close paper (évite clôture 1-shot)
+        if (
+          action === "close" &&
+          (snap.confirmCount ?? 1) < 2 &&
+          !takeProfitClose &&
+          !catastrophic
+        ) {
+          trade.note =
+            `Surveillance · confirmation close en cours · ${reason}`.slice(0, 220);
+          continue;
+        }
         const netEur = pnl.pnlEur;
         trade.status = "closed_manual";
         trade.closedAt = Date.now();

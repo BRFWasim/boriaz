@@ -1375,11 +1375,35 @@ export async function getTradeSignals(options?: {
         }
         const isReady = setup.status === "ORDRE PRÊT À ÊTRE EXÉCUTÉ";
         const isWaiting = setup.status === "EN ATTENTE DE RETRACEMENT";
-        // Paper : ORDRE PRÊT (immédiat/limite) OU EN ATTENTE (limite pendante)
-        // LIVE : uniquement ORDRE PRÊT + gate IA (plus bas)
+        // Paper : ORDRE PRÊT (IA) ; EN ATTENTE seulement continuation (pas correction)
+        // LIVE : uniquement ORDRE PRÊT + gate IA + range
         if (!isReady && !isWaiting) continue;
         if (isReady && !smcScan.aiApproved) continue;
+        if (
+          isWaiting &&
+          (setup.tradeKind === "correction" || setup.counterTrend)
+        ) {
+          continue;
+        }
         if (setup.order.entryMode !== "limit_wait") continue;
+
+        // Range BTC/coin — FAIRE GAGNER : pas de short bas de range
+        try {
+          const { getTradeRangeGate } = await import("./btc-range");
+          const rg = await getTradeRangeGate({
+            coin: setup.coin,
+            side: setup.order.side,
+            price: setup.price,
+            tradeKind: setup.tradeKind,
+          });
+          if (!rg.ok) {
+            console.info("SMC range refuse paper/live", rg.reason);
+            continue;
+          }
+        } catch (e) {
+          console.info("SMC range skip", e);
+          continue;
+        }
 
         const acc = computePaperAccount(paperForCheck, pf.bankrollEur, pf.id);
         if (
