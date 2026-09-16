@@ -107,25 +107,30 @@ export async function getMarketRangeContext(
   const h4r = rangeFromCandles("4h", h4, price, 90);
 
   // Short interdit : bas du range weekly OU daily (demande utilisateur)
-  const macroLow =
-    (weekly && (weekly.band === "bottom" || weekly.band === "lower")) ||
-    (daily && daily.band === "bottom");
-  // Long interdit : haut du range weekly OU daily
-  const macroHigh =
-    (weekly && (weekly.band === "top" || weekly.band === "upper")) ||
-    (daily && daily.band === "top");
+  const weeklyLow =
+    weekly != null && (weekly.band === "bottom" || weekly.band === "lower");
+  const dailyLow = daily != null && daily.band === "bottom";
+  const weeklyHigh =
+    weekly != null && (weekly.band === "top" || weekly.band === "upper");
+  const dailyHigh = daily != null && daily.band === "top";
 
-  const blockShort = Boolean(macroLow);
-  const blockLong = Boolean(macroHigh);
+  const blockShort = Boolean(weeklyLow || dailyLow);
+  const blockLong = Boolean(weeklyHigh || dailyHigh);
 
   let reason = "Range neutre / milieu — direction ouverte si SMC OK";
   if (blockShort && blockLong) {
     reason =
       "Contexte mixte extrême — privilégier attendre (pas d’ordre forcé)";
   } else if (blockShort) {
-    reason = `Prix en ${bandLabel(daily?.band ?? weekly?.band ?? "bottom")} du range long/moyen — SHORT interdit (rebond / liquidité basse)`;
+    const which = weeklyLow
+      ? `W ${bandLabel(weekly!.band)} (${(weekly!.pos * 100).toFixed(0)}%)`
+      : `D1 ${bandLabel(daily!.band)} (${(daily!.pos * 100).toFixed(0)}%)`;
+    reason = `BTC/actif en BAS de range (${which}) — SHORT interdit (rebond / liquidité basse)`;
   } else if (blockLong) {
-    reason = `Prix en ${bandLabel(daily?.band ?? weekly?.band ?? "top")} du range long/moyen — LONG interdit (prise de liquidité haute)`;
+    const which = weeklyHigh
+      ? `W ${bandLabel(weekly!.band)} (${(weekly!.pos * 100).toFixed(0)}%)`
+      : `D1 ${bandLabel(daily!.band)} (${(daily!.pos * 100).toFixed(0)}%)`;
+    reason = `BTC/actif en HAUT de range (${which}) — LONG interdit (prise de liquidité haute)`;
   }
 
   const parts = [
