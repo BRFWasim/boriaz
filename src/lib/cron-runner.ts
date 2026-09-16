@@ -26,6 +26,14 @@ export async function runCronWork(phase: CronPhase = "all"): Promise<{
   // 1) PRIORITÉ : trades déjà ouverts (paper + live SMC) — avant le reste
   if (wantManage) {
     try {
+      // Réconciliation HL ↔ journal (RISK_MANAGEMENT) — bloque nouvelles entrées si divergences
+      try {
+        const { reconcileLiveVsJournal } = await import("@/lib/arch-guards");
+        results.reconcile = await reconcileLiveVsJournal();
+      } catch (e) {
+        results.reconcileError = e instanceof Error ? e.message : "reconcile";
+      }
+
       const { manageOpenTrades } = await import("@/lib/manage-trades");
       const { manageLiveSmcPositions } = await import("@/lib/hl-live");
       const { listUserIds } = await import("@/lib/accounts");

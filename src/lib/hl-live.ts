@@ -784,8 +784,56 @@ export async function placeBoriazLiveTrade(
   if (!ready.ok) {
     return { ok: false, skipped: true, reason: ready.reason };
   }
+
+  // Architecture RISK : bloquer si réconciliation HL↔journal requise
+  try {
+    const { isReconciliationRequired } = await import("./arch-guards");
+    if (await isReconciliationRequired()) {
+      return {
+        ok: false,
+        skipped: true,
+        reason:
+          "réconciliation_required — positions HL hors journal ; pas de nouvelle entrée LIVE",
+      };
+    }
+  } catch {
+    /* ignore */
+  }
+
   const cfg = getLiveConfig();
 
+  if (!(req.entry > 0 && req.tp > 0 && req.sl > 0)) {
+    return { ok: false, reason: "Paramètres entrée/TP/SL invalides." };
+  }
+
+  // Lock anti double-ordre (cron + mirror + manuel)
+  const { acquireLiveLock, releaseLiveLock } = await import("./arch-guards");
+  const locked = await acquireLiveLock(req.coin, req.side, 120);
+  if (!locked) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: `Lock LIVE déjà pris ${req.coin} ${req.side} — anti double entrée`,
+    };
+  }
+
+  try {
+    const result = await placeBoriazLiveTradeInner(req, cfg);
+    if (!result.ok) {
+      await releaseLiveLock(req.coin, req.side).catch(() => undefined);
+    }
+    // Succès : garder le lock ~TTL pour anti double-fire immédiat
+    return result;
+  } catch (e) {
+    await releaseLiveLock(req.coin, req.side).catch(() => undefined);
+    throw e;
+  }
+}
+
+async function placeBoriazLiveTradeInner(
+  req: LiveTradeRequest,
+  cfg: ReturnType<typeof getLiveConfig>,
+): Promise<LiveTradeResult> {
   if (!(req.entry > 0 && req.tp > 0 && req.sl > 0)) {
     return { ok: false, reason: "Paramètres entrée/TP/SL invalides." };
   }
@@ -1329,6 +1377,30 @@ export async function manageLiveSmcPositions(): Promise<{
   const ready = isLiveEnvReady();
   if (!ready.ok) return { checked: 0, updated: 0, notes: [ready.reason || "env"] };
 
+  const { acquireManageSmcLock, releaseManageSmcLock } = await import(
+    "./arch-guards"
+  );
+  const got = await acquireManageSmcLock(90);
+  if (!got) {
+    return {
+      checked: 0,
+      updated: 0,
+      notes: ["manage-smc-lock déjà pris — skip (anti race TP1/BE)"],
+    };
+  }
+
+  try {
+    return await manageLiveSmcPositionsInner();
+  } finally {
+    await releaseManageSmcLock().catch(() => undefined);
+  }
+}
+
+async function manageLiveSmcPositionsInner(): Promise<{
+  checked: number;
+  updated: number;
+  notes: string[];
+}> {
   const { loadLiveJournal, updateLiveJournalEntry } = await import("./live-journal");
   const journal = (await loadLiveJournal()).filter(
     (e) =>
@@ -1927,6 +1999,39 @@ export async function placeBoriazLiveTradeMirrored(
     reason: "LIVE miroir non tenté",
   };
   for (let attempt = 1; attempt <= 3; attempt++) {
+    // Anti double-fire : si position/journal déjà là (timeout précédent) → stop
+    try {
+      const pf = await fetchLivePortfolio();
+      if (pf.ok) {
+        const hit = pf.positions.find(
+          (p) => p.coin.toUpperCase() === req.coin.toUpperCase(),
+        );
+        if (hit) {
+          return {
+            ok: true,
+            skipped: false,
+            reason: `Déjà en position HL ${hit.coin} ${hit.side} — retry annulé`,
+            coin: hit.coin,
+          };
+        }
+      }
+      const { loadLiveJournal, matchJournalToPosition } = await import(
+        "./live-journal"
+      );
+      const open = (await loadLiveJournal()).filter((e) => e.status === "open");
+      const j = matchJournalToPosition(open, req.coin, req.side);
+      if (j) {
+        return {
+          ok: true,
+          skipped: false,
+          reason: `Journal déjà open ${j.coin} — retry annulé`,
+          coin: j.coin,
+        };
+      }
+    } catch {
+      /* best-effort */
+    }
+
     last = await placeBoriazLiveTrade(payload);
     if (last.ok) return last;
     // Échec HL dur (ordre rejeté) → stop ; skip soft → retry

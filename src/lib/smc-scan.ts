@@ -46,10 +46,10 @@ type GateResult = {
 };
 
 function minGateConfidence(setup: SmcSetup): number {
-  // Qualité > quantité — FAIRE GAGNER DE L'ARGENT
-  if (setup.tradeKind === "correction" || setup.counterTrend) return 78;
-  if (setup.order?.side === "short") return 72;
-  return 70;
+  // Qualité > quantité — FAIRE GAGNER DE L'ARGENT (AI_MIN aligné ~75+)
+  if (setup.tradeKind === "correction" || setup.counterTrend) return 82;
+  if (setup.order?.side === "short") return 76;
+  return 75;
 }
 
 function parseGateJson(
@@ -147,8 +147,25 @@ async function askGptSmcGate(
 ): Promise<GateResult | null> {
   const key = process.env.OPENAI_API_KEY?.trim();
   if (!key) return null;
+
+  const { canCallAi, noteAiCall, noteAiFailure, noteAiSuccess } = await import(
+    "./arch-guards"
+  );
+  const budget = await canCallAi(setup.confidence);
+  if (!budget.ok) {
+    return {
+      approved: false,
+      confidence: 0,
+      note: budget.reason,
+      report: setup.report,
+      provider: "chatgpt",
+    };
+  }
+
   const model = process.env.OPENAI_MODEL?.trim() || GPT_MODEL_DEFAULT;
+  const timeoutMs = Number(process.env.AI_TIMEOUT_MS?.trim()) || 12_000;
   try {
+    await noteAiCall();
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -167,9 +184,10 @@ async function askGptSmcGate(
           { role: "user", content: smcGatePrompt(setup, rangeNote) },
         ],
       }),
-      signal: AbortSignal.timeout(45_000),
+      signal: AbortSignal.timeout(Math.max(2500, timeoutMs)),
     });
     if (!res.ok) {
+      await noteAiFailure();
       const errTxt = await res.text().catch(() => "");
       return {
         approved: false,
@@ -183,8 +201,15 @@ async function askGptSmcGate(
       choices?: { message?: { content?: string } }[];
     };
     const text = json.choices?.[0]?.message?.content || "";
-    return parseGateJson(text, setup, "chatgpt");
+    const parsed = parseGateJson(text, setup, "chatgpt");
+    if (!text || parsed.note.includes("illisible")) {
+      await noteAiFailure();
+    } else {
+      await noteAiSuccess();
+    }
+    return parsed;
   } catch (e) {
+    await noteAiFailure();
     return {
       approved: false,
       confidence: 0,
@@ -247,9 +272,16 @@ async function runSmcAiGates(
   };
 }
 
-/** Ordre des candidats : meilleur, meilleur côté opposé, puis suivants. */
+/** Ordre des candidats : CONTINUATION d’abord (FAIRE GAGNER), puis corrections. */
 function pickGateCandidates(actionable: SmcSetup[]): SmcSetup[] {
   if (!actionable.length) return [];
+  const ranked = [...actionable].sort((a, b) => {
+    const cont = (s: SmcSetup) =>
+      s.tradeKind === "continuation" && !s.counterTrend ? 2 : 0;
+    const longBias = (s: SmcSetup) =>
+      s.order?.side === "long" && s.tradeKind === "continuation" ? 1 : 0;
+    return cont(b) + longBias(b) - (cont(a) + longBias(a)) || b.confidence - a.confidence;
+  });
   const out: SmcSetup[] = [];
   const seen = new Set<string>();
   const push = (s: SmcSetup | undefined) => {
@@ -259,18 +291,7 @@ function pickGateCandidates(actionable: SmcSetup[]): SmcSetup[] {
     seen.add(k);
     out.push(s);
   };
-  push(actionable[0]);
-  const topSide = actionable[0]?.order?.side;
-  if (topSide) {
-    push(actionable.find((s) => s.order?.side && s.order.side !== topSide));
-  }
-  // Favoriser un short (aligné ou CT) s’il n’est pas déjà en tête
-  push(
-    actionable.find(
-      (s) => s.order?.side === "short" && s.checklist.allPass,
-    ),
-  );
-  for (const s of actionable) {
+  for (const s of ranked) {
     if (out.length >= 4) break;
     push(s);
   }

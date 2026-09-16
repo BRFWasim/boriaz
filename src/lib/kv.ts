@@ -105,3 +105,39 @@ export async function kvDel(key: string): Promise<void> {
     /* ignore */
   }
 }
+
+/**
+ * SET key NX EX ttl — lock distribué (Upstash) ou mémoire process.
+ * Retourne true si le lock a été acquis.
+ */
+export async function kvSetNxEx(
+  key: string,
+  value: string,
+  ttlSec: number,
+): Promise<boolean> {
+  const ttl = Math.max(1, Math.floor(ttlSec));
+  if (upstashConfigured()) {
+    try {
+      const result = await upstashCommand([
+        "SET",
+        key,
+        value,
+        "EX",
+        ttl,
+        "NX",
+      ]);
+      const ok = result === "OK" || result === true;
+      if (ok) mem.set(key, value);
+      return ok;
+    } catch {
+      // fallback mémoire si Upstash down
+    }
+  }
+  if (mem.has(key)) return false;
+  mem.set(key, value);
+  // TTL approximatif en mémoire
+  setTimeout(() => {
+    if (mem.get(key) === value) mem.delete(key);
+  }, ttl * 1000).unref?.();
+  return true;
+}

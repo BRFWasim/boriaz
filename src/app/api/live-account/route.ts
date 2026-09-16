@@ -38,6 +38,25 @@ export async function GET() {
   let openJournal = await loadLiveJournal().then((all) =>
     all.filter((e) => e.status === "open"),
   );
+
+  let guards: {
+    reconciliationRequired: boolean;
+    reconciliationNote: string | null;
+  } = { reconciliationRequired: false, reconciliationNote: null };
+  try {
+    const { isReconciliationRequired } = await import("@/lib/arch-guards");
+    const { kvGet } = await import("@/lib/kv");
+    const required = await isReconciliationRequired();
+    guards = {
+      reconciliationRequired: required,
+      reconciliationNote: required
+        ? (await kvGet("boriaz:reconciliation_note")) ||
+          "Positions HL hors journal — nouvelles entrées LIVE bloquées"
+        : null,
+    };
+  } catch {
+    /* ignore */
+  }
   const manageSnaps = await loadLiveManageSnapshots();
   const exchangeTpsl = portfolio.ok ? await fetchLiveExchangeTpslMap() : {};
 
@@ -225,5 +244,6 @@ export async function GET() {
             "LIVE = Boriaz uniquement. TP/SL lus sur HL + journal Boriaz.",
         }
       : null,
+    guards,
   });
 }

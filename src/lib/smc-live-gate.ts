@@ -17,20 +17,23 @@ export type LiveSmcGateResult = {
   checks: string[];
 };
 
-const lastLiveOpenAt = new Map<string, number>();
 const GLOBAL_COOLDOWN_MS = 90_000;
 const COIN_COOLDOWN_MS = 5 * 60_000;
-let lastGlobalLiveOpenAt = 0;
+const COOLDOWN_GLOBAL_KEY = "boriaz:live-cd:global";
+const coinCooldownKey = (coin: string) =>
+  `boriaz:live-cd:${coin.toUpperCase()}`;
 
 export function noteLiveOpen(coin: string): void {
   const now = Date.now();
-  lastGlobalLiveOpenAt = now;
-  lastLiveOpenAt.set(coin.toUpperCase(), now);
+  void import("./arch-guards").then(({ setDurableCooldown }) => {
+    void setDurableCooldown(COOLDOWN_GLOBAL_KEY, now, 120);
+    void setDurableCooldown(coinCooldownKey(coin), now, 360);
+  });
 }
 
 function minLiveConfidence(setup: SmcSetup): number {
-  if (setup.tradeKind === "correction" || setup.counterTrend) return 78;
-  return 72;
+  if (setup.tradeKind === "correction" || setup.counterTrend) return 82;
+  return 74;
 }
 
 function geometryOk(setup: SmcSetup): { ok: boolean; why: string } {
@@ -201,9 +204,11 @@ export async function validateLiveSmcBeforePlace(opts: {
   }
   checks.push("range OK");
 
+  const { getDurableCooldown } = await import("./arch-guards");
   const now = Date.now();
-  if (now - lastGlobalLiveOpenAt < GLOBAL_COOLDOWN_MS) {
-    const wait = Math.ceil((GLOBAL_COOLDOWN_MS - (now - lastGlobalLiveOpenAt)) / 1000);
+  const lastGlobal = await getDurableCooldown(COOLDOWN_GLOBAL_KEY);
+  if (lastGlobal > 0 && now - lastGlobal < GLOBAL_COOLDOWN_MS) {
+    const wait = Math.ceil((GLOBAL_COOLDOWN_MS - (now - lastGlobal)) / 1000);
     return {
       ok: false,
       reason: `Cooldown global LIVE encore ${wait}s — on réfléchit entre les trades`,
@@ -211,8 +216,8 @@ export async function validateLiveSmcBeforePlace(opts: {
       checks,
     };
   }
-  const coinLast = lastLiveOpenAt.get(setup.coin.toUpperCase()) ?? 0;
-  if (now - coinLast < COIN_COOLDOWN_MS) {
+  const coinLast = await getDurableCooldown(coinCooldownKey(setup.coin));
+  if (coinLast > 0 && now - coinLast < COIN_COOLDOWN_MS) {
     const wait = Math.ceil((COIN_COOLDOWN_MS - (now - coinLast)) / 1000);
     return {
       ok: false,

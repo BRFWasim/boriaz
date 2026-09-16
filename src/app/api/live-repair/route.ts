@@ -39,6 +39,18 @@ export async function POST(request: Request) {
     }
 
     const coin = String(body.coin || "").trim();
+    if (body && (body as { clearReconcile?: boolean }).clearReconcile) {
+      const { setReconciliationRequired, reconcileLiveVsJournal } =
+        await import("@/lib/arch-guards");
+      const rec = await reconcileLiveVsJournal();
+      if (rec.ok) await setReconciliationRequired(false);
+      return Response.json({
+        mode: "reconcile",
+        ...rec,
+        ok: rec.ok,
+        fetchedAt: Date.now(),
+      });
+    }
     if (coin && (body.forceReplace === true || body.tp || body.sl)) {
       const result = await forceReplaceLiveTpsl({
         coin,

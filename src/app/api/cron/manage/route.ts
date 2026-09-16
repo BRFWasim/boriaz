@@ -5,24 +5,32 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 export const maxDuration = 90;
 
-function authorized(request: Request): boolean {
+function authorized(request: Request): { ok: boolean; error?: string } {
   const secret = process.env.CRON_SECRET?.trim();
-  if (!secret) return true;
+  if (!secret) {
+    return {
+      ok: false,
+      error: "CRON_SECRET manquant — cron/manage refusé (fail-closed)",
+    };
+  }
   const header = request.headers.get("authorization") || "";
   const url = new URL(request.url);
   const q = url.searchParams.get("secret");
-  return header === `Bearer ${secret}` || q === secret;
+  if (header === `Bearer ${secret}` || q === secret) return { ok: true };
+  return { ok: false, error: "Unauthorized" };
 }
 
 /**
  * Job léger dédié aux trades déjà ouverts (paper + live SMC).
- * À appeler toutes les 1–2 min (cron-job.org) en plus du cron principal.
  * ACK immédiat → compatible timeout cron-job.org 30s.
- * Relecture PnL live + structure + snapshot sous chaque trade.
  */
 export async function GET(request: Request) {
-  if (!authorized(request)) {
-    return Response.json({ error: "Unauthorized" }, { status: 401 });
+  const auth = authorized(request);
+  if (!auth.ok) {
+    return Response.json(
+      { error: auth.error || "Unauthorized" },
+      { status: auth.error?.includes("CRON_SECRET") ? 503 : 401 },
+    );
   }
 
   const startedAt = Date.now();
