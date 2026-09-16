@@ -6,7 +6,8 @@ Propositions tirées de `docs/ARCHITECTURE.md`, `RISK_MANAGEMENT.md`, `AI_COST_C
 |---|---|---|
 | 1 | Anti double-ordre | `kvSetNxEx` lock `boriaz:live-lock:{coin}:{side}` dans `placeBoriazLiveTrade` |
 | 2 | Retry miroir sûr | Re-check HL + journal avant chaque retry `placeBoriazLiveTradeMirrored` |
-| 3 | Réconciliation | `reconcileLiveVsJournal` → `reconciliation_required` bloque nouvelles entrées LIVE |
+| 3 | Réconciliation | Auto-adoption journal des positions HL orphelines + repair TP/SL ; bloque seulement si adoption impossible |
+| 9 | UI range BTC | `live-account.guards.btcRange` affiché sur panneau Boriaz (short/long bloqués visibles) |
 | 4 | Cooldown durable | Cooldowns LIVE en Upstash (`boriaz:live-cd:*`) — survit aux cold starts |
 | 5 | Mutex manage TP1 | `boriaz:manage-smc-lock` autour de `manageLiveSmcPositions` |
 | 6 | Budget IA | `canCallAi` score≥75 + quotas h/j + circuit breaker avant ChatGPT |

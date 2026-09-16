@@ -62,18 +62,23 @@ export async function setReconciliationRequired(
 
 /**
  * Compare positions HL vs journal open.
- * Position HL sans journal → reconciliation_required (bloque nouvelles entrées LIVE).
+ * Positions HL sans journal → auto-adoption journal (Boriaz) + repair TP/SL
+ * plutôt que bloquer à vie (sinon plus aucun trade LIVE = perte d’opportunité).
+ * Ne met reconciliation_required que si l’adoption échoue.
  */
 export async function reconcileLiveVsJournal(): Promise<{
   ok: boolean;
   unknownHl: string[];
   orphanJournal: string[];
+  adopted: string[];
   note: string;
 }> {
-  const { fetchLivePortfolio } = await import("./hl-live");
-  const { loadLiveJournal, syncLiveJournalWithPositions } = await import(
-    "./live-journal"
-  );
+  const { fetchLivePortfolio, repairNakedLiveTpsl } = await import("./hl-live");
+  const {
+    loadLiveJournal,
+    syncLiveJournalWithPositions,
+    recordLiveJournalEntry,
+  } = await import("./live-journal");
 
   const portfolio = await fetchLivePortfolio();
   if (!portfolio.ok) {
@@ -81,6 +86,7 @@ export async function reconcileLiveVsJournal(): Promise<{
       ok: false,
       unknownHl: [],
       orphanJournal: [],
+      adopted: [],
       note: portfolio.reason || "Portfolio HL illisible",
     };
   }
@@ -90,16 +96,59 @@ export async function reconcileLiveVsJournal(): Promise<{
     portfolio.positions.map((p) => ({ coin: p.coin, side: p.side })),
   );
 
-  const journal = (await loadLiveJournal()).filter((e) => e.status === "open");
+  let journal = (await loadLiveJournal()).filter((e) => e.status === "open");
   const jKeys = new Set(
     journal.map((e) => `${e.coin.toUpperCase()}:${e.side}`),
   );
   const unknownHl: string[] = [];
+  const adopted: string[] = [];
+
   for (const p of portfolio.positions) {
     const k = `${p.coin.toUpperCase()}:${p.side}`;
-    if (!jKeys.has(k)) unknownHl.push(k);
+    if (jKeys.has(k)) continue;
+    unknownHl.push(k);
+    // Auto-adopt : journal stub + urgences TP/SL plus tard
+    try {
+      const entryPx = p.entryPx > 0 ? p.entryPx : 0;
+      if (!(entryPx > 0)) continue;
+      const risk = entryPx * 0.015;
+      const tp =
+        p.side === "long" ? entryPx + risk * 2 : entryPx - risk * 2;
+      const sl = p.side === "long" ? entryPx - risk : entryPx + risk;
+      await recordLiveJournalEntry({
+        coin: p.coin,
+        side: p.side,
+        entry: entryPx,
+        tp,
+        sl,
+        tp1: p.side === "long" ? entryPx + risk : entryPx - risk,
+        tp2: tp,
+        size: Math.abs(p.size),
+        leverage: p.leverage || 1,
+        riskPct: 2,
+        riskUsd: Math.abs(p.size) * risk,
+        portfolioId: "boriaz",
+        portfolioName: "Boriaz (adopté)",
+        strategy: "smc",
+        botLabel: "Boriaz",
+      });
+      adopted.push(k);
+      jKeys.add(k);
+    } catch (e) {
+      console.info("reconcile adopt fail", k, e);
+    }
   }
 
+  if (adopted.length) {
+    try {
+      await repairNakedLiveTpsl();
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  journal = (await loadLiveJournal()).filter((e) => e.status === "open");
+  const stillUnknown = unknownHl.filter((k) => !jKeys.has(k));
   const hlKeys = new Set(
     portfolio.positions.map((p) => `${p.coin.toUpperCase()}:${p.side}`),
   );
@@ -107,16 +156,17 @@ export async function reconcileLiveVsJournal(): Promise<{
     .filter((e) => !hlKeys.has(`${e.coin.toUpperCase()}:${e.side}`))
     .map((e) => `${e.coin.toUpperCase()}:${e.side}`);
 
-  if (unknownHl.length) {
+  if (stillUnknown.length) {
     await setReconciliationRequired(
       true,
-      `HL sans journal: ${unknownHl.join(", ")}`,
+      `HL non adoptables: ${stillUnknown.join(", ")}`,
     );
     return {
       ok: false,
-      unknownHl,
+      unknownHl: stillUnknown,
       orphanJournal,
-      note: `Réconciliation requise — positions HL inconnues du journal: ${unknownHl.join(", ")}. Nouvelles entrées LIVE bloquées.`,
+      adopted,
+      note: `Réconciliation partielle — non adoptés: ${stillUnknown.join(", ")}. LIVE bloqué jusqu’à sync.`,
     };
   }
 
@@ -125,9 +175,12 @@ export async function reconcileLiveVsJournal(): Promise<{
     ok: true,
     unknownHl: [],
     orphanJournal,
-    note: orphanJournal.length
-      ? `OK HL ; journal orphelin nettoyé/à surveiller: ${orphanJournal.join(", ")}`
-      : "HL ↔ journal OK",
+    adopted,
+    note: adopted.length
+      ? `Adopté ${adopted.join(", ")} dans journal + repair TP/SL`
+      : orphanJournal.length
+        ? `OK HL ; journal orphelin: ${orphanJournal.join(", ")}`
+        : "HL ↔ journal OK",
   };
 }
 
@@ -144,7 +197,7 @@ export async function canCallAi(score: number): Promise<{
   if (process.env.AI_ENABLED?.trim().toLowerCase() === "false") {
     return { ok: false, reason: "AI_ENABLED=false" };
   }
-  const minScore = envInt("AI_MIN_SIGNAL_SCORE", 75);
+  const minScore = envInt("AI_MIN_SIGNAL_SCORE", 70);
   if (score < minScore) {
     return {
       ok: false,

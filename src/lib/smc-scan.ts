@@ -151,7 +151,15 @@ async function askGptSmcGate(
   const { canCallAi, noteAiCall, noteAiFailure, noteAiSuccess } = await import(
     "./arch-guards"
   );
-  const budget = await canCallAi(setup.confidence);
+  const budget = await canCallAi(
+    // Checklist 100% + ORDRE PRÊT → on laisse ChatGPT trancher même si conf mécanique ~70
+    Math.max(
+      setup.confidence,
+      setup.checklist.allPass && setup.status === "ORDRE PRÊT À ÊTRE EXÉCUTÉ"
+        ? 75
+        : 0,
+    ),
+  );
   if (!budget.ok) {
     return {
       approved: false,

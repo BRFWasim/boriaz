@@ -42,7 +42,14 @@ export async function GET() {
   let guards: {
     reconciliationRequired: boolean;
     reconciliationNote: string | null;
-  } = { reconciliationRequired: false, reconciliationNote: null };
+    btcRange?: {
+      summary: string;
+      blockShort: boolean;
+      blockLong: boolean;
+      reason: string;
+      price: number;
+    } | null;
+  } = { reconciliationRequired: false, reconciliationNote: null, btcRange: null };
   try {
     const { isReconciliationRequired } = await import("@/lib/arch-guards");
     const { kvGet } = await import("@/lib/kv");
@@ -53,7 +60,21 @@ export async function GET() {
         ? (await kvGet("boriaz:reconciliation_note")) ||
           "Positions HL hors journal — nouvelles entrées LIVE bloquées"
         : null,
+      btcRange: null,
     };
+    try {
+      const { getMarketRangeContext } = await import("@/lib/btc-range");
+      const btc = await getMarketRangeContext("BTC");
+      guards.btcRange = {
+        summary: btc.summary,
+        blockShort: btc.blockShort,
+        blockLong: btc.blockLong,
+        reason: btc.reason,
+        price: btc.price,
+      };
+    } catch {
+      /* range optionnel */
+    }
   } catch {
     /* ignore */
   }

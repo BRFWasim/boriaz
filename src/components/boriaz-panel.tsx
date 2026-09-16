@@ -46,6 +46,14 @@ type LiveHl = {
   positions: LivePosition[];
 };
 
+type BtcRangeInfo = {
+  summary: string;
+  blockShort: boolean;
+  blockLong: boolean;
+  reason: string;
+  price: number;
+};
+
 type ManualForm = {
   coin: string;
   side: "long" | "short";
@@ -81,6 +89,8 @@ function Stat({
 /** Onglet privé — wallet Hyperliquid réel (après login). */
 export function BoriazPanel({ onOpenLab }: { onOpenLab?: () => void }) {
   const [liveHl, setLiveHl] = useState<LiveHl | null>(null);
+  const [btcRange, setBtcRange] = useState<BtcRangeInfo | null>(null);
+  const [reconcileNote, setReconcileNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [repairMsg, setRepairMsg] = useState<string | null>(null);
@@ -120,12 +130,23 @@ export function BoriazPanel({ onOpenLab }: { onOpenLab?: () => void }) {
           positions?: LivePosition[];
         };
         riskPreview?: { riskUsd?: number } | null;
+        guards?: {
+          reconciliationRequired?: boolean;
+          reconciliationNote?: string | null;
+          btcRange?: BtcRangeInfo | null;
+        };
       }>(lr);
       if (!lr.ok) {
         setError(lj.error || "Wallet réel inaccessible — reconnecte-toi.");
         setLiveHl(null);
         return;
       }
+      if (lj.guards?.btcRange) setBtcRange(lj.guards.btcRange);
+      setReconcileNote(
+        lj.guards?.reconciliationRequired
+          ? lj.guards.reconciliationNote || "Réconciliation LIVE requise"
+          : null,
+      );
       if (lj.portfolio) {
         setLiveHl((prev) => {
           const incoming = lj.portfolio!.positions ?? [];
@@ -353,6 +374,20 @@ export function BoriazPanel({ onOpenLab }: { onOpenLab?: () => void }) {
         {repairMsg ? (
           <p className="mt-3 text-sm text-amber-700 dark:text-amber-300">
             {repairMsg}
+          </p>
+        ) : null}
+        {btcRange ? (
+          <p className="mt-3 text-xs text-muted-foreground">
+            BTC ~{btcRange.price.toFixed(0)} · {btcRange.summary}
+            {btcRange.blockShort
+              ? " · SHORT bloqué (bas de range)"
+              : ""}
+            {btcRange.blockLong ? " · LONG bloqué (haut de range)" : ""}
+          </p>
+        ) : null}
+        {reconcileNote ? (
+          <p className="mt-2 text-sm text-rose-700 dark:text-rose-300">
+            {reconcileNote}
           </p>
         ) : null}
         {loading && !liveHl ? (
