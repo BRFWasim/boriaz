@@ -81,10 +81,10 @@ export async function cleanupStaleLiveLimits(): Promise<{
   // Portfolio : si pas de position, les limits d’entrée sont des GTC resting
   const { fetchLivePortfolio } = await import("./hl-live");
   const portfolio = await fetchLivePortfolio();
-  const posCoins = new Set(
-    (portfolio.ok ? portfolio.positions : []).map((p) =>
-      p.coin.toUpperCase(),
-    ),
+  const positions = portfolio.ok ? portfolio.positions : [];
+  const posCoins = new Set(positions.map((p) => p.coin.toUpperCase()));
+  const posSizeByCoin = new Map(
+    positions.map((p) => [p.coin.toUpperCase(), Math.abs(Number(p.size) || 0)]),
   );
 
   for (const entry of journal) {
@@ -218,6 +218,103 @@ export async function cleanupStaleLiveLimits(): Promise<{
       cancelled += 1;
       notes.push(
         `${coin}: orphan limit cancel oid=${oid} dist=${(distPct * 100).toFixed(1)}%`,
+      );
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // Dédupe TP/SL : trail/repair peut re-placer sans cancel → 2 sets (ex. DOGE)
+  const byCoin = new Map<string, NonNullable<typeof opens>>();
+  for (const o of opens ?? []) {
+    if (!isProtectiveOpenOrder(o)) continue;
+    const coin = String(o.coin || "").toUpperCase();
+    if (!coin || !posCoins.has(coin)) continue;
+    const list = byCoin.get(coin) ?? [];
+    list.push(o);
+    byCoin.set(coin, list);
+  }
+  for (const [coin, list] of byCoin) {
+    const posSz = posSizeByCoin.get(coin) ?? 0;
+    if (!(posSz > 0) || list.length < 2) continue;
+    type Row = {
+      oid: number;
+      ts: number;
+      sz: number;
+      isTp: boolean;
+    };
+    const rows: Row[] = list
+      .map((o) => {
+        const ot = String(o.orderType || "");
+        const isTp = /take\s*profit/i.test(ot);
+        return {
+          oid: Number(o.oid),
+          ts: Number(
+            (o as { timestamp?: number }).timestamp ??
+              (o as { ts?: number }).ts ??
+              0,
+          ),
+          sz: Number(o.sz ?? (o as { origSz?: string | number }).origSz ?? 0),
+          isTp,
+        };
+      })
+      .filter((r) => Number.isFinite(r.oid));
+    // Groupes ≈ même placement (fenêtre 3s)
+    const groups = new Map<number, Row[]>();
+    for (const r of rows) {
+      const key = Math.floor(r.ts / 3000) * 3000;
+      const g = groups.get(key) ?? [];
+      g.push(r);
+      groups.set(key, g);
+    }
+    if (groups.size < 2) {
+      const sls = rows.filter((r) => !r.isTp).sort((a, b) => b.oid - a.oid);
+      if (sls.length > 1) {
+        const asset = assets.get(coin);
+        if (!asset) continue;
+        const drop = sls.slice(1);
+        try {
+          await client.cancel({
+            cancels: drop.map((d) => ({ a: asset.id, o: d.oid })),
+          });
+          cancelled += drop.length;
+          notes.push(
+            `${coin}: dédup SL ×${drop.length} (garde oid=${sls[0]!.oid})`,
+          );
+        } catch {
+          /* ignore */
+        }
+      }
+      continue;
+    }
+    // Score : TP qui collent à la taille + multi TP1/TP2 + au moins 1 SL
+    let bestKey = -1;
+    let bestScore = -Infinity;
+    for (const [key, g] of groups) {
+      const tpSum = g.filter((r) => r.isTp).reduce((s, r) => s + r.sz, 0);
+      const hasSl = g.some((r) => !r.isTp);
+      const tpFit =
+        posSz > 0 ? 1 - Math.min(1, Math.abs(tpSum - posSz) / posSz) : 0;
+      const multiTp = g.filter((r) => r.isTp).length >= 2 ? 0.35 : 0;
+      const score = (hasSl ? 1 : 0) + tpFit + multiTp - key / 1e15;
+      if (score > bestScore) {
+        bestScore = score;
+        bestKey = key;
+      }
+    }
+    if (bestKey < 0) continue;
+    const keepOids = new Set((groups.get(bestKey) ?? []).map((r) => r.oid));
+    const drop = rows.filter((r) => !keepOids.has(r.oid));
+    if (!drop.length) continue;
+    const asset = assets.get(coin);
+    if (!asset) continue;
+    try {
+      await client.cancel({
+        cancels: drop.map((d) => ({ a: asset.id, o: d.oid })),
+      });
+      cancelled += drop.length;
+      notes.push(
+        `${coin}: dédup TPSL ×${drop.length} (garde vague ${bestKey})`,
       );
     } catch {
       /* ignore */
