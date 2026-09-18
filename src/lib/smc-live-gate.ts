@@ -100,15 +100,21 @@ export async function validateLiveSmcBeforePlace(opts: {
   }
   checks.push("checklist 4/4");
 
-  if (setup.status !== "ORDRE PRÊT À ÊTRE EXÉCUTÉ") {
+  const isReady = setup.status === "ORDRE PRÊT À ÊTRE EXÉCUTÉ";
+  const isWaitingArm =
+    setup.status === "EN ATTENTE DE RETRACEMENT" &&
+    setup.tradeKind === "continuation" &&
+    !setup.counterTrend;
+
+  if (!isReady && !isWaitingArm) {
     return {
       ok: false,
-      reason: `LIVE refuse statut « ${setup.status} » — attendre zone ÔTE/FVG (ORDRE PRÊT)`,
+      reason: `LIVE refuse statut « ${setup.status} » — ORDRE PRÊT ou EN ATTENTE continuation requis`,
       mid: null,
       checks,
     };
   }
-  checks.push("statut ORDRE PRÊT");
+  checks.push(isReady ? "statut ORDRE PRÊT" : "statut EN ATTENTE · pré-arm GTC");
 
   if (!setup.order || !setup.risk) {
     return {
@@ -248,59 +254,118 @@ export async function validateLiveSmcBeforePlace(opts: {
     setup.ote?.high ?? o.entry,
     setup.fvg?.high ?? o.entry,
   );
-  // Mid doit être près de la zone d’entrée (LIMIT) — pas déjà au TP / au-delà SL
-  if (o.side === "long") {
-    if (mid <= o.sl) {
-      return {
-        ok: false,
-        reason: `Mid ${mid} ≤ SL ${o.sl} — setup mort`,
-        mid,
-        checks,
-      };
+
+  if (isWaitingArm) {
+    // Pré-arm GTC : le prix DOIT être hors zone (sinon ce serait ORDRE PRÊT).
+    // Long : mid au-dessus de la zone → limite en dessous attend le pullback.
+    // Short : mid en-dessous → limite au-dessus attend le rebond.
+    if (o.side === "long") {
+      if (mid <= o.sl) {
+        return {
+          ok: false,
+          reason: `Mid ${mid} ≤ SL ${o.sl} — setup mort`,
+          mid,
+          checks,
+        };
+      }
+      if (mid >= o.tp1) {
+        return {
+          ok: false,
+          reason: `Mid ${mid} déjà ≥ TP1 — trop tard pour pré-armer`,
+          mid,
+          checks,
+        };
+      }
+      if (mid <= zoneHigh * 1.002) {
+        return {
+          ok: false,
+          reason: `Mid déjà près/dans zone — passer en ORDRE PRÊT, pas pré-arm`,
+          mid,
+          checks,
+        };
+      }
+    } else {
+      if (mid >= o.sl) {
+        return {
+          ok: false,
+          reason: `Mid ${mid} ≥ SL ${o.sl} — setup mort`,
+          mid,
+          checks,
+        };
+      }
+      if (mid <= o.tp1) {
+        return {
+          ok: false,
+          reason: `Mid ${mid} déjà ≤ TP1 — trop tard pour pré-armer`,
+          mid,
+          checks,
+        };
+      }
+      if (mid >= zoneLow * 0.998) {
+        return {
+          ok: false,
+          reason: `Mid déjà près/dans zone — passer en ORDRE PRÊT, pas pré-arm`,
+          mid,
+          checks,
+        };
+      }
     }
-    if (mid >= o.tp1) {
-      return {
-        ok: false,
-        reason: `Mid ${mid} déjà ≥ TP1 — trop tard pour entrer`,
-        mid,
-        checks,
-      };
-    }
-    if (mid > zoneHigh * 1.01) {
-      return {
-        ok: false,
-        reason: `Mid hors zone ÔTE/FVG haute — attendre retracement`,
-        mid,
-        checks,
-      };
-    }
+    checks.push("pré-arm GTC hors zone OK");
   } else {
-    if (mid >= o.sl) {
-      return {
-        ok: false,
-        reason: `Mid ${mid} ≥ SL ${o.sl} — setup mort`,
-        mid,
-        checks,
-      };
+    // ORDRE PRÊT : mid dans / près de la zone
+    if (o.side === "long") {
+      if (mid <= o.sl) {
+        return {
+          ok: false,
+          reason: `Mid ${mid} ≤ SL ${o.sl} — setup mort`,
+          mid,
+          checks,
+        };
+      }
+      if (mid >= o.tp1) {
+        return {
+          ok: false,
+          reason: `Mid ${mid} déjà ≥ TP1 — trop tard pour entrer`,
+          mid,
+          checks,
+        };
+      }
+      if (mid > zoneHigh * 1.01) {
+        return {
+          ok: false,
+          reason: `Mid hors zone ÔTE/FVG haute — pré-armer ou attendre`,
+          mid,
+          checks,
+        };
+      }
+    } else {
+      if (mid >= o.sl) {
+        return {
+          ok: false,
+          reason: `Mid ${mid} ≥ SL ${o.sl} — setup mort`,
+          mid,
+          checks,
+        };
+      }
+      if (mid <= o.tp1) {
+        return {
+          ok: false,
+          reason: `Mid ${mid} déjà ≤ TP1 — trop tard pour entrer`,
+          mid,
+          checks,
+        };
+      }
+      if (mid < zoneLow * 0.99) {
+        return {
+          ok: false,
+          reason: `Mid hors zone ÔTE/FVG basse — pré-armer ou attendre`,
+          mid,
+          checks,
+        };
+      }
     }
-    if (mid <= o.tp1) {
-      return {
-        ok: false,
-        reason: `Mid ${mid} déjà ≤ TP1 — trop tard pour entrer`,
-        mid,
-        checks,
-      };
-    }
-    if (mid < zoneLow * 0.99) {
-      return {
-        ok: false,
-        reason: `Mid hors zone ÔTE/FVG basse — attendre retracement`,
-        mid,
-        checks,
-      };
-    }
+    checks.push("mid dans fenêtre SL/TP + zone");
   }
-  checks.push("mid dans fenêtre SL/TP + zone");
 
   // Pas de position HL déjà ouverte sur ce coin
   try {

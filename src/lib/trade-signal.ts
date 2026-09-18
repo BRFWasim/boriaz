@@ -355,7 +355,7 @@ Trade proposé: ${JSON.stringify(candidate)}`;
   }
 }
 
-const PENDING_EXPIRE_MS = 18 * 3600_000;
+const PENDING_EXPIRE_MS = 6 * 3600_000;
 
 async function refreshPaperTrades(
   prices: Record<string, number>,
@@ -376,7 +376,7 @@ async function refreshPaperTrades(
         t.closedAt = now;
         t.pnlPct = 0;
         t.pnlEur = 0;
-        t.note = "Limite non touchée sous 18h — expirée";
+        t.note = "Limite non touchée sous 6h — expirée (structure morte)";
         closes.push({ ...t });
         continue;
       }
@@ -1377,10 +1377,10 @@ export async function getTradeSignals(options?: {
         }
         const isReady = setup.status === "ORDRE PRÊT À ÊTRE EXÉCUTÉ";
         const isWaiting = setup.status === "EN ATTENTE DE RETRACEMENT";
-        // Paper : ORDRE PRÊT (IA) ; EN ATTENTE seulement continuation (pas correction)
-        // LIVE : uniquement ORDRE PRÊT + gate IA + range
+        // Paper : ORDRE PRÊT (IA) ; EN ATTENTE continuation (pré-arm)
+        // LIVE : ORDRE PRÊT ou EN ATTENTE continuation + IA (GTC en zone)
         if (!isReady && !isWaiting) continue;
-        if (isReady && !smcScan.aiApproved) continue;
+        if (!smcScan.aiApproved) continue;
         if (
           isWaiting &&
           (setup.tradeKind === "correction" || setup.counterTrend)
@@ -1426,12 +1426,12 @@ export async function getTradeSignals(options?: {
 
         const justification: TradeJustification = {
           summary: isWaiting
-            ? `SMC Boriaz ${setup.order.side.toUpperCase()} ${setup.coin} · EN ATTENTE zone · limite paper`
+            ? `SMC Boriaz ${setup.order.side.toUpperCase()} ${setup.coin} · EN ATTENTE · pré-arm GTC zone`
             : `SMC Boriaz ${setup.order.side.toUpperCase()} ${setup.coin} · structure OK · risque ${setup.risk.riskPct}% · gate ChatGPT`,
           bullets: [
             `Stratégie SMC Boriaz · exec ${setup.execTimeframe ?? "15m"}`,
             isWaiting
-              ? "Statut EN ATTENTE — limite paper, LIVE seulement à ORDRE PRÊT"
+              ? "Statut EN ATTENTE — limite GTC pré-armée (paper+LIVE si éligible)"
               : "Statut ORDRE PRÊT — exécution possible",
             setup.signalType === "short_counter_trend"
               ? "SHORT correction (retracement) · M15/M30 only"
@@ -1458,14 +1458,12 @@ export async function getTradeSignals(options?: {
             setup.ote
               ? `ÔTE ${setup.ote.low}–${setup.ote.high} (idéal ${setup.ote.ideal})`
               : "ÔTE manquant",
-            `Risque ${setup.risk.riskEur.toFixed(2)} $ (2%) · notionnel ${setup.risk.notionalEur} $`,
+            `Risque ${setup.risk.riskEur.toFixed(2)} $ (${setup.risk.riskPct}%) · notionnel ${setup.risk.notionalEur} $`,
             `TP1 1R 20% · runner 80% · SL structurel (pas BE) · TP2 ≥2R`,
             smcScan.liveEligible
-              ? "LIVE éligible (IA + ORDRE PRÊT)"
+              ? "LIVE éligible (IA + zone/pré-arm)"
               : "LIVE non éligible pour l’instant",
-            isWaiting
-              ? "Paper limite sans LIVE (attendre zone)"
-              : smcScan.aiNote || "Gate ChatGPT",
+            smcScan.aiNote || "Gate ChatGPT",
           ],
           alignmentScore: setup.confidence,
           aiVerified: smcScan.aiApproved,
@@ -1477,7 +1475,7 @@ export async function getTradeSignals(options?: {
           smcReport: smcScan.aiReport || setup.report,
         };
 
-        const opened = await openPaperTrade({
+        let opened = await openPaperTrade({
           openedAt: Date.now(),
           coin: setup.coin,
           side: setup.order.side,
@@ -1501,11 +1499,52 @@ export async function getTradeSignals(options?: {
           riskPct: setup.risk.riskPct,
         });
 
-        // LIVE Hyperliquid — uniquement ORDRE PRÊT + double gate (pas EN ATTENTE)
+        // Pending déjà là (souvent EN ATTENTE) → réutiliser pour promouvoir LIVE
+        if (!opened && pf.id === "boriaz" && setup.order) {
+          const order = setup.order;
+          const existing = paperForCheck.find(
+            (t) =>
+              (t.portfolioId || "default") === pf.id &&
+              t.coin === setup.coin &&
+              t.side === order.side &&
+              (t.status === "pending" || t.status === "open") &&
+              t.strategy === "smc",
+          );
+          if (existing) {
+            // Mettre à jour niveaux si EN ATTENTE / structure a bougé
+            existing.entry = order.entry;
+            existing.sl = order.sl;
+            existing.tp = order.tp2;
+            existing.tp1 = order.tp1;
+            existing.tp2 = order.tp2;
+            existing.note = `${justification.summary} · promote LIVE`;
+            existing.justification = justification;
+            existing.riskPct = setup.risk.riskPct;
+            existing.leverage = setup.risk.leverage;
+            existing.marginEur = setup.risk.marginEur;
+            existing.notionalEur = setup.risk.notionalEur;
+            try {
+              const { loadPaperTrades, savePaperTrades } = await import(
+                "./persist"
+              );
+              const all = await loadPaperTrades();
+              const row = all.find((t) => t.id === existing.id);
+              if (row) {
+                Object.assign(row, existing);
+                await savePaperTrades(all);
+              }
+            } catch {
+              /* ignore */
+            }
+            opened = existing;
+          }
+        }
+
+        // LIVE Hyperliquid — ORDRE PRÊT ou pré-arm EN ATTENTE continuation
         if (
           opened &&
-          isReady &&
           pf.id === "boriaz" &&
+          smcScan.liveEligible &&
           !opened.note.includes("Cash insuffisant")
         ) {
           try {

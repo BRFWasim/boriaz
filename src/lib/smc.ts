@@ -1006,11 +1006,12 @@ Un seul ✗ → « SETUP INVALIDÉ (CRITÈRE MANQUANT) - AUCUN ORDRE ».
 ### 4. RISQUE & ORDRE
 - Risque **3–10 %** du wallet selon confiance (setup checklist 100 % / continuation claire → **jusqu’à 10 %** pour viser ~100$+ de gain). Entrée LIMIT exclusive dans FVG/ÔTE.
 - SL = 1–2 pips au-delà de la mèche du Sweep (sous swing low long / au-dessus swing high short).
-- TP1 = R:R exact 1:1 → clôturer **20 %** seulement. **PAS de break-even** : SL structurel inchangé, **80 %** court vers TP2.
+- TP1 = R:R exact 1:1 → clôturer **20 %** seulement. **PAS de break-even immédiat**. Si déjà ≥1.5R au TP1 → lock SL à +0.35R. Sinon SL structurel jusqu’à progression.
+- Si structure 100 % mais prix hors zone (EN ATTENTE continuation) → **pré-armer limite GTC** en ÔTE (pas de market chase).
 - TP2 = liquidité opposée / FVG non comblé, minimum 2R.
 
 ### 5. GATE
-approve=true SEULEMENT si statut « ORDRE PRÊT À ÊTRE EXÉCUTÉ », checklist 100 %, range OK, et espérance de gain claire.
-Si « EN ATTENTE DE RETRACEMENT » → approve=false.
+approve=true si checklist 100 %, range OK, espérance claire, ET (ORDRE PRÊT **ou** EN ATTENTE continuation pour pré-arm GTC).
+Si « EN ATTENTE » en correction → approve=false.
 Réponds [ANALYSE MULTI-TIMEFRAME...] complet (D1/H4/H1, range W/D1/H4, checklist, sizing, entry/SL/TP1/TP2, statut), puis UNE ligne JSON :
 {"approve":true|false,"confidence":0-100,"note":"..."}`;

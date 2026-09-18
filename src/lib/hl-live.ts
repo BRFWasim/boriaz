@@ -1534,9 +1534,22 @@ async function manageLiveSmcPositionsInner(): Promise<{
         continue;
       }
 
-      // SL structurel d’origine — JAMAIS break-even (coupe les winners)
-      const structuralSl = Number(entry.sl) > 0 ? Number(entry.sl) : entry.entry;
-      const slPxKeep = formatPx(structuralSl, asset.szDecimals);
+      // SL : structurel, OU lock +0.35R si déjà ≥1.5R (pas BE à TP1 — laisse respirer)
+      const riskDist = Math.abs(entry.entry - Number(entry.sl));
+      const rMult =
+        riskDist > 0
+          ? entry.side === "long"
+            ? (px - entry.entry) / riskDist
+            : (entry.entry - px) / riskDist
+          : 0;
+      let slKeep = Number(entry.sl) > 0 ? Number(entry.sl) : entry.entry;
+      if (rMult >= 1.5 && riskDist > 0) {
+        slKeep =
+          entry.side === "long"
+            ? entry.entry + riskDist * 0.35
+            : entry.entry - riskDist * 0.35;
+      }
+      const slPxKeep = formatPx(slKeep, asset.szDecimals);
       const tp2Px = formatPx(Number(entry.tp2 ?? entry.tp), asset.szDecimals);
       const isBuy = entry.side === "long";
       const placeTp2Sl = async () =>
@@ -1598,11 +1611,12 @@ async function manageLiveSmcPositionsInner(): Promise<{
         side: entry.side,
         entry: entry.entry,
         tp: tp2,
-        sl: structuralSl,
+        sl: slKeep,
         size: remaining,
       });
       await updateLiveJournalEntry(entry.id, {
         tp1Hit: true,
+        sl: slKeep,
         size: remaining,
         tp: tp2,
         tpPnlUsd: outcomes.tpPnlUsd,
@@ -1611,7 +1625,11 @@ async function manageLiveSmcPositionsInner(): Promise<{
         slOid: readOid(st[1]),
       });
       updated += 1;
-      notes.push(`${entry.coin}: TP1 20% + SL structurel · 80% vise TP2`);
+      notes.push(
+        rMult >= 1.5
+          ? `${entry.coin}: TP1 20% + SL lock +0.35R (≥1.5R) · 80% vise TP2`
+          : `${entry.coin}: TP1 20% + SL structurel · 80% vise TP2`,
+      );
     } catch (e) {
       notes.push(
         `${entry.coin}: manage err ${e instanceof Error ? e.message : "x"}`,

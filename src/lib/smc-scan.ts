@@ -80,11 +80,20 @@ function parseGateJson(
     approved = false;
     note = `${provider} OK mais checklist SMC mécanique incomplète.`;
   }
-  if (approved && setup.status !== "ORDRE PRÊT À ÊTRE EXÉCUTÉ") {
+  // ORDRE PRÊT = fill immédiat possible ; EN ATTENTE continuation = pré-armer GTC
+  if (
+    approved &&
+    setup.status !== "ORDRE PRÊT À ÊTRE EXÉCUTÉ" &&
+    !(
+      setup.status === "EN ATTENTE DE RETRACEMENT" &&
+      setup.tradeKind === "continuation" &&
+      !setup.counterTrend
+    )
+  ) {
     approved = false;
     note =
       note ||
-      `${provider}: statut ${setup.status} — attendre ORDRE PRÊT (zone).`;
+      `${provider}: statut ${setup.status} — attendre ORDRE PRÊT ou EN ATTENTE continuation.`;
   }
   const reportBlock = text.includes("[ANALYSE")
     ? text.replace(/\n?\s*\{[\s\S]*\}\s*$/, "").trim()
@@ -119,13 +128,13 @@ Analyse déterministe déjà calculée (à valider ou corriger) :
 ${setup.report}
 
 Si TOUTE la checklist structure est VALIDÉE (Sweep + BOS corps + FVG + ÔTE)
-ET le statut est exactement « ORDRE PRÊT À ÊTRE EXÉCUTÉ » (prix dans zone ÔTE/FVG)
-ET le range BTC/actif n’interdit PAS ce sens (pas de SHORT en bas de range, pas de LONG en haut)
+ET (statut « ORDRE PRÊT À ÊTRE EXÉCUTÉ » OU « EN ATTENTE DE RETRACEMENT » en CONTINUATION — pour pré-armer une limite GTC en zone)
+ET le range BTC/actif n’interdit PAS ce sens (pas de SHORT en vrai bas, pas de LONG en haut D1)
 ET l’espérance de gain est claire,
 approve=true.
-Si statut « EN ATTENTE DE RETRACEMENT » → approve=false.
-Si short en bas de range ou long en haut de range → approve=false (FAIRE GAGNER = attendre le bon setup).
-Correction/retracement OK seulement en M15/M30 (pas M5). Un seul critère manquant → approve=false et « SETUP INVALIDÉ (CRITÈRE MANQUANT) - AUCUN ORDRE ».
+Si EN ATTENTE en CORRECTION / counter-trend → approve=false (pas de limite spéculative).
+Si short en vrai bas de range ou long en haut de range → approve=false.
+Correction/retracement OK seulement en M15/M30 (pas M5). Un seul critère manquant → approve=false.
 Sinon approve=false.
 Réponds d'abord avec le format [ANALYSE...] complet, puis UNE ligne JSON : {"approve":true|false,"confidence":0-100,"note":"..."}`;
 }
@@ -155,7 +164,10 @@ async function askGptSmcGate(
     // Checklist 100% + ORDRE PRÊT → on laisse ChatGPT trancher même si conf mécanique ~70
     Math.max(
       setup.confidence,
-      setup.checklist.allPass && setup.status === "ORDRE PRÊT À ÊTRE EXÉCUTÉ"
+      setup.checklist.allPass &&
+      (setup.status === "ORDRE PRÊT À ÊTRE EXÉCUTÉ" ||
+        (setup.status === "EN ATTENTE DE RETRACEMENT" &&
+          setup.tradeKind === "continuation"))
         ? 75
         : 0,
     ),
@@ -429,12 +441,18 @@ export async function scanSmcWatchlist(input: {
   let gatedTried = 0;
   let aiConfidence = 0;
 
-  // Gate IA : uniquement les ORDRE PRÊT (réfléchir avant d’exécuter)
+  // Gate IA : ORDRE PRÊT d’abord, sinon EN ATTENTE continuation (pré-arm GTC)
   const readyForGate = actionable.filter(
     (s) => s.status === "ORDRE PRÊT À ÊTRE EXÉCUTÉ",
   );
+  const waitingCont = actionable.filter(
+    (s) =>
+      s.status === "EN ATTENTE DE RETRACEMENT" &&
+      s.tradeKind === "continuation" &&
+      !s.counterTrend,
+  );
   const candidates = pickGateCandidates(
-    readyForGate.length ? readyForGate : [],
+    readyForGate.length ? readyForGate : waitingCont,
   );
   const refusals: string[] = [];
 
@@ -491,11 +509,11 @@ export async function scanSmcWatchlist(input: {
   }
 
   if (!aiApproved && candidates.length) {
-    aiNote = `Aucun candidat ORDRE PRÊT validé (${gatedTried}) — ${refusals.slice(0, 3).join(" · ")}`;
+    aiNote = `Aucun candidat validé (${gatedTried}) — ${refusals.slice(0, 3).join(" · ")}`;
   } else if (!candidates.length && best) {
     aiNote =
       best.status === "EN ATTENTE DE RETRACEMENT"
-        ? "EN ATTENTE DE RETRACEMENT — pas d’exécution tant que le prix n’est pas en zone"
+        ? "EN ATTENTE — structure OK, prix hors zone (pré-arm si continuation + IA)"
         : best.cancelReason || "Setup SMC non actionnable";
   }
 
@@ -503,7 +521,10 @@ export async function scanSmcWatchlist(input: {
     aiApproved &&
     best != null &&
     best.checklist.allPass &&
-    best.status === "ORDRE PRÊT À ÊTRE EXÉCUTÉ" &&
+    (best.status === "ORDRE PRÊT À ÊTRE EXÉCUTÉ" ||
+      (best.status === "EN ATTENTE DE RETRACEMENT" &&
+        best.tradeKind === "continuation" &&
+        !best.counterTrend)) &&
     best.order?.entryMode === "limit_wait" &&
     model !== "mechanical-smc" &&
     aiConfidence >= minGateConfidence(best);
