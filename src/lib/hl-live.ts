@@ -794,6 +794,25 @@ export async function placeBoriazLiveTrade(
     return { ok: false, skipped: true, reason: ready.reason };
   }
 
+  // Modes shadow/paper + kill switch (PG/Redis) — pas d’entrée live par défaut
+  try {
+    const { assertLiveEntryAllowed } = await import("./bot/trading-mode");
+    const gate = await assertLiveEntryAllowed();
+    if (!gate.allowed) {
+      return {
+        ok: false,
+        skipped: true,
+        reason: `LIVE bloqué (${gate.mode}): ${gate.reasons.join(" · ")}`,
+      };
+    }
+  } catch (e) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: `Gate live indisponible: ${e instanceof Error ? e.message : "error"}`,
+    };
+  }
+
   // Architecture RISK : bloquer si réconciliation HL↔journal requise
   try {
     const { isReconciliationRequired } = await import("./arch-guards");

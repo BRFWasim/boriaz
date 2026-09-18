@@ -15,12 +15,19 @@ Les clés restent sur Vercel (Environment Variables / Production). Pas de fichie
 ## Lancer en local
 
 ```bash
-cp .env.example .env.local   # colle tes clés
+cp .env.example .env.local   # colle tes clés — TRADING_MODE=shadow par défaut
 npm install
+npm run infra:up             # PostgreSQL + Redis (Docker)
+npm run db:migrate
 npm run dev
 ```
 
 Ouvrir [http://127.0.0.1:4317](http://127.0.0.1:4317).
+
+**Important :** après la migration persistance, le mode par défaut est **shadow** (aucun ordre HL).  
+Pour l’ancien comportement live, il faut explicitement `TRADING_MODE=live`, `LIVE_TRADING_ENABLED=true`, `GLOBAL_KILL_SWITCH=false`, `HL_LIVE_ENABLED=true` + réconciliation OK — voir `docs/OPERATIONS_H24.md`.
+
+Docs : `ARCHITECTURE_AUDIT.md`, `docs/MIGRATION_CHECKLIST.md`, `docs/ARCHITECTURE.md`.
 
 ## Fonctionnalités
 

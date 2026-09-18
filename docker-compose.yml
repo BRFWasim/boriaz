@@ -1,0 +1,139 @@
+# BoriazBot — infra locale PostgreSQL + Redis + workers H24
+# Usage: docker compose up -d postgres redis
+# Puis: npm run db:migrate && npm run workers:dev
+# Défaut trading = shadow (aucun ordre réel).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: boriaz
+      POSTGRES_PASSWORD: boriaz
+      POSTGRES_DB: boriazbot
+    ports:
+      - "5432:5432"
+    volumes:
+      - boriaz_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U boriaz -d boriazbot"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - boriaz_internal
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - boriaz_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - boriaz_internal
+
+  # Workers optionnels (désactivés par profil default — activer: --profile workers)
+  market-data-worker:
+    profiles: ["workers"]
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    restart: unless-stopped
+    command: ["npx", "tsx", "workers/market-data-worker.ts"]
+    env_file: [.env.local]
+    environment:
+      WORKER_NAME: market-data-worker
+      TRADING_MODE: shadow
+      LIVE_TRADING_ENABLED: "false"
+      GLOBAL_KILL_SWITCH: "true"
+      DATABASE_URL: postgresql://boriaz:boriaz@postgres:5432/boriazbot
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - boriaz_internal
+
+  strategy-worker:
+    profiles: ["workers"]
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    restart: unless-stopped
+    command: ["npx", "tsx", "workers/strategy-worker.ts"]
+    env_file: [.env.local]
+    environment:
+      WORKER_NAME: strategy-worker
+      TRADING_MODE: shadow
+      LIVE_TRADING_ENABLED: "false"
+      GLOBAL_KILL_SWITCH: "true"
+      DATABASE_URL: postgresql://boriaz:boriaz@postgres:5432/boriazbot
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - boriaz_internal
+
+  risk-execution-worker:
+    profiles: ["workers"]
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    restart: unless-stopped
+    command: ["npx", "tsx", "workers/risk-execution-worker.ts"]
+    env_file: [.env.local]
+    environment:
+      WORKER_NAME: risk-execution-worker
+      TRADING_MODE: shadow
+      LIVE_TRADING_ENABLED: "false"
+      GLOBAL_KILL_SWITCH: "true"
+      DATABASE_URL: postgresql://boriaz:boriaz@postgres:5432/boriazbot
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - boriaz_internal
+
+  scheduler-worker:
+    profiles: ["workers"]
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    restart: unless-stopped
+    command: ["npx", "tsx", "workers/scheduler-worker.ts"]
+    env_file: [.env.local]
+    environment:
+      WORKER_NAME: scheduler-worker
+      TRADING_MODE: shadow
+      DATABASE_URL: postgresql://boriaz:boriaz@postgres:5432/boriazbot
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - boriaz_internal
+
+volumes:
+  boriaz_pg_data:
+  boriaz_redis_data:
+
+networks:
+  boriaz_internal:
+    driver: bridge

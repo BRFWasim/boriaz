@@ -19,3 +19,7 @@ Les règles SMC objectivées vivent dans `src/lib/smc.ts`, `smc-scan.ts`, `smc-l
 
 Jamais tick → LLM → trade.  
 Toujours : SMC → score (≥75) → range → ChatGPT si budget → risk/live gates → lock → place.
+
+## Roadmap (PG / strategy_versions)
+
+Prochaine étape : extraire un FeatureEngine versionné (`strategy_versions.parameters_json`) avec poids de score configurables (défauts documentés dans l’audit / AI_COST_CONTROL).

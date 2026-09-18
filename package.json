@@ -6,7 +6,18 @@
     "dev": "next dev --hostname 127.0.0.1 --port 4317",
     "build": "next build",
     "start": "next start --hostname 127.0.0.1 --port 4317",
-    "lint": "eslint"
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:migrate": "npx tsx scripts/db-migrate.ts up",
+    "db:migrate:down": "npx tsx scripts/db-migrate.ts down",
+    "workers:market": "npx tsx workers/market-data-worker.ts",
+    "workers:strategy": "npx tsx workers/strategy-worker.ts",
+    "workers:risk": "npx tsx workers/risk-execution-worker.ts",
+    "workers:scheduler": "npx tsx workers/scheduler-worker.ts",
+    "infra:up": "docker compose up -d postgres redis",
+    "infra:down": "docker compose down"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
@@ -14,9 +25,12 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "date-fns": "^4.4.0",
+    "decimal.js": "^10.6.0",
+    "ioredis": "^6.0.0",
     "lightweight-charts": "^5.2.1",
     "lucide-react": "^1.38.0",
     "next": "16.3.3",
+    "pg": "^8.23.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "shadcn": "^4.19.1",
@@ -27,11 +41,14 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.3.3",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "tsx": "^4.23.13",
+    "typescript": "^5",
+    "vitest": "^3.2.4"
   }
 }
