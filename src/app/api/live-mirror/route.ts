@@ -65,9 +65,9 @@ export async function POST(request: Request) {
       return Response.json({ error: "Paper introuvable" }, { status: 404 });
     }
     const { trade: t, trades, scope: paperScope } = found;
-    if (t.portfolioId !== "boriaz" && t.strategy !== "smc") {
+    if (t.portfolioId !== "boriaz") {
       return Response.json(
-        { error: "Copie LIVE réservée aux paper Boriaz / SMC" },
+        { error: "Copie LIVE réservée au paper Boriaz uniquement" },
         { status: 400 },
       );
     }
@@ -122,6 +122,7 @@ export async function POST(request: Request) {
     const live = await placeBoriazLiveTradeMirrored({
       coin: t.coin,
       side: t.side,
+      // SMC : LIMIT — entrée = mid seulement s’il est encore dans la fenêtre
       entry: mid,
       tp: t.tp,
       sl: t.sl,
@@ -129,7 +130,7 @@ export async function POST(request: Request) {
       tp2: t.tp2 ?? t.tp,
       leverage: t.leverage,
       riskPct: boriaz?.riskPct ?? 2,
-      entryMode: "market_now",
+      entryMode: "limit_wait",
       paperId: t.id,
       portfolioId: "boriaz",
       portfolioName: t.portfolioName || "Boriaz",

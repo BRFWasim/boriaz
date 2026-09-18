@@ -44,7 +44,7 @@ export type LiveTradeRequest = {
   portfolioId?: string;
   portfolioName?: string;
   strategy?: "alignment" | "smc";
-  /** TP1 SMC (1R) — 50% + BE comme paper. */
+  /** TP1 SMC (1R) — 20% puis SL structurel, 80% runner (pas BE). */
   tp1?: number | null;
   tp2?: number | null;
 };
@@ -131,7 +131,7 @@ function readAgentPrivateKey(): string {
   ]);
 }
 
-function makeTransport(testnet: boolean) {
+export function makeTransport(testnet: boolean) {
   return new HttpTransport({ isTestnet: testnet });
 }
 
@@ -150,14 +150,14 @@ export function getLiveConfig(): LiveConfigStatus {
     envArmed: envFlagAny(["HL_LIVE_ENABLED", "HL_LIVE_ENABLED"], false),
     hasAgentKey: Boolean(key) && Boolean(agentAddress),
     testnet: envFlagAny(["HL_LIVE_TESTNET", "HL_LIVE_TESTNET"], false),
-    // Défaut 80$ — adapté aux petits comptes (~100 USDC). Override via env.
+    // Défaut large — viser ~100$+ / trade sûr sur compte ~1k (override env).
     maxNotionalUsd: envNumAny(
       ["HL_MAX_NOTIONAL_USD", "HL_MAX_NOTIONAL_USD"],
-      500,
+      15_000,
     ),
     maxLeverage: Math.min(
       10,
-      envNumAny(["HL_MAX_LEVERAGE", "HL_MAX_LEVERAGE"], 3),
+      envNumAny(["HL_MAX_LEVERAGE", "HL_MAX_LEVERAGE"], 8),
     ),
     maxOpenPositions: Math.min(
       10,
@@ -255,7 +255,7 @@ function hlErrMessage(e: unknown): string {
   return String(e || "Erreur Hyperliquid");
 }
 
-async function loadAssetMap(testnet: boolean): Promise<Map<string, AssetMeta>> {
+export async function loadAssetMap(testnet: boolean): Promise<Map<string, AssetMeta>> {
   if (metaCache && Date.now() - metaCache.at < 60_000) return metaCache.assets;
   const info = new InfoClient({ transport: makeTransport(testnet) });
   const meta = await info.meta();
@@ -273,7 +273,7 @@ async function loadAssetMap(testnet: boolean): Promise<Map<string, AssetMeta>> {
   return assets;
 }
 
-function getExchangeClient(testnet: boolean): ExchangeClient {
+export function getExchangeClient(testnet: boolean): ExchangeClient {
   const raw = readAgentPrivateKey();
   const pk = (raw.startsWith("0x") ? raw : `0x${raw}`) as `0x${string}`;
   return new ExchangeClient({
@@ -310,6 +310,136 @@ function readOid(status: unknown): number | null {
   return null;
 }
 
+export type LiveExchangeTpsl = {
+  coin: string;
+  tp: number | null;
+  sl: number | null;
+  tpOid: number | null;
+  slOid: number | null;
+  orderCount: number;
+};
+
+function isTpOrderType(orderType: string): boolean {
+  return /take\s*profit/i.test(orderType) || /\btp\b/i.test(orderType);
+}
+
+function isSlOrderType(orderType: string): boolean {
+  return /stop/i.test(orderType) && !/take\s*profit/i.test(orderType);
+}
+
+/** Extrait TP/SL réels depuis les ordres trigger HL (source de vérité). */
+export function extractTpslFromOpenOrders(
+  opens: Array<{
+    coin?: string;
+    oid?: number;
+    isTrigger?: boolean;
+    isPositionTpsl?: boolean;
+    reduceOnly?: boolean;
+    orderType?: string;
+    triggerPx?: string | number;
+    limitPx?: string | number;
+  }>,
+  coin: string,
+): LiveExchangeTpsl {
+  const c = coin.toUpperCase();
+  const forCoin = opens.filter(
+    (o) => String(o.coin || "").toUpperCase() === c,
+  );
+  const tps = forCoin
+    .filter((o) => isTpOrderType(String(o.orderType || "")))
+    .map((o) => ({
+      px: Number(o.triggerPx || o.limitPx || 0),
+      oid: Number(o.oid) || null,
+    }))
+    .filter((x) => x.px > 0);
+  const sls = forCoin
+    .filter((o) => {
+      const ot = String(o.orderType || "");
+      return (
+        isSlOrderType(ot) ||
+        (Boolean(o.isTrigger || o.isPositionTpsl) && !isTpOrderType(ot))
+      );
+    })
+    .map((o) => ({
+      px: Number(o.triggerPx || o.limitPx || 0),
+      oid: Number(o.oid) || null,
+    }))
+    .filter((x) => x.px > 0);
+
+  let tp: number | null = null;
+  let sl: number | null = null;
+  let tpOid: number | null = null;
+  let slOid: number | null = null;
+
+  if (sls.length) {
+    sl = sls[0]!.px;
+    slOid = sls[0]!.oid;
+  }
+  if (tps.length) {
+    // SMC : 2 TP possibles → afficher le TP final (le plus éloigné du SL / entry)
+    const ref = sl ?? tps[0]!.px;
+    tps.sort((a, b) => Math.abs(b.px - ref) - Math.abs(a.px - ref));
+    tp = tps[0]!.px;
+    tpOid = tps[0]!.oid;
+  }
+
+  return {
+    coin: c,
+    tp,
+    sl,
+    tpOid,
+    slOid,
+    orderCount: forCoin.length,
+  };
+}
+
+/** Charge les TP/SL ouverts sur HL pour un compte. */
+export async function fetchLiveExchangeTpslMap(): Promise<
+  Record<string, LiveExchangeTpsl>
+> {
+  const cfg = getLiveConfig();
+  if (!cfg.accountAddress) return {};
+  try {
+    const info = new InfoClient({ transport: makeTransport(cfg.testnet) });
+    const opens = await info.frontendOpenOrders({
+      user: cfg.accountAddress as `0x${string}`,
+    });
+    const byCoin = new Map<string, typeof opens>();
+    for (const o of opens ?? []) {
+      const c = String(o.coin || "").toUpperCase();
+      if (!c) continue;
+      const arr = byCoin.get(c) ?? [];
+      arr.push(o);
+      byCoin.set(c, arr);
+    }
+    const out: Record<string, LiveExchangeTpsl> = {};
+    for (const [coin, list] of byCoin) {
+      out[coin] = extractTpslFromOpenOrders(list, coin);
+    }
+    return out;
+  } catch (e) {
+    console.info("fetchLiveExchangeTpslMap", e);
+    return {};
+  }
+}
+
+/** True si l’ordre HL est un TP/SL trigger (pas une limit entrée). */
+export function isProtectiveOpenOrder(o: {
+  isTrigger?: boolean;
+  isPositionTpsl?: boolean;
+  reduceOnly?: boolean;
+  orderType?: string;
+}): boolean {
+  const ot = String(o.orderType || "");
+  return (
+    Boolean(o.isTrigger) ||
+    Boolean(o.isPositionTpsl) ||
+    isTpOrderType(ot) ||
+    isSlOrderType(ot) ||
+    (Boolean(o.reduceOnly) && /stop|take\s*profit/i.test(ot))
+  );
+}
+
 
 export type LivePositionRow = {
   coin: string;
@@ -331,6 +461,13 @@ export type LivePositionRow = {
   slPnlUsd?: number | null;
   riskUsd?: number | null;
   paperId?: string | null;
+  /** TP/SL lus sur les ordres trigger HL (source de vérité exchange). */
+  exchangeTp?: number | null;
+  exchangeSl?: number | null;
+  /** true si position ouverte sans TP ni SL sur HL. */
+  nakedTpsl?: boolean;
+  /** journal | exchange | paper | none */
+  tpslSource?: "journal" | "exchange" | "paper" | "none" | null;
 };
 
 export type LivePortfolioSnapshot = {
@@ -496,7 +633,7 @@ export async function fetchLivePortfolio(): Promise<LivePortfolioSnapshot> {
 /**
  * Sizing LIVE sur le solde HL réel.
  * - Mode miroir paper : même % de marge que le paper (marge/bankroll) sur l’equity réelle.
- * - Sinon : riskPct % de l’equity (défaut 2%).
+ * - Sinon : riskPct % de l’equity (défaut 3%, jusqu’à 10% si confiance haute).
  * Seuils assouplis en mirrorPaper pour coller au paper même sur petit solde.
  */
 export function sizeLiveFromRealEquity(input: {
@@ -525,9 +662,15 @@ export function sizeLiveFromRealEquity(input: {
   const minEquity = mirror ? 5 : 20;
   const minNotional = mirror ? 1 : 8;
   const minMargin = mirror ? 0.5 : 2;
-  const freeFrac = mirror ? 0.85 : 0.45;
-
-  const riskPct = input.riskPct && input.riskPct > 0 ? input.riskPct : 2;
+  const riskPct = input.riskPct && input.riskPct > 0 ? input.riskPct : 3;
+  // Plus le risque cible est haut, plus on autorise la marge (viser ~100$ / trade sûr)
+  const freeFrac = mirror
+    ? riskPct >= 7
+      ? 0.95
+      : 0.9
+    : riskPct >= 7
+      ? 0.85
+      : 0.6;
   const equityUsd = Math.max(0, input.equityUsd);
   if (!(equityUsd >= minEquity)) {
     return {
@@ -570,7 +713,10 @@ export function sizeLiveFromRealEquity(input: {
     paperBankroll > 0
   ) {
     // Même fraction de capital engagée en marge que le paper
-    const marginFrac = Math.min(0.5, Math.max(0.002, paperMargin / paperBankroll));
+    const marginFrac = Math.min(
+      riskPct >= 7 ? 0.9 : 0.65,
+      Math.max(0.002, paperMargin / paperBankroll),
+    );
     let marginUsd = equityUsd * marginFrac;
     leverage = Math.min(
       input.maxLeverage,
@@ -648,7 +794,7 @@ export async function placeBoriazLiveTrade(
     return { ok: false, skipped: true, reason: ready.reason };
   }
 
-  // Modes shadow/paper + kill switch + Redis/PG — jamais d’entrée live par défaut
+  // Modes shadow/paper + kill switch (PG/Redis) — pas d’entrée live par défaut
   try {
     const { assertLiveEntryAllowed } = await import("./bot/trading-mode");
     const gate = await assertLiveEntryAllowed();
@@ -667,8 +813,55 @@ export async function placeBoriazLiveTrade(
     };
   }
 
+  // Architecture RISK : bloquer si réconciliation HL↔journal requise
+  try {
+    const { isReconciliationRequired } = await import("./arch-guards");
+    if (await isReconciliationRequired()) {
+      return {
+        ok: false,
+        skipped: true,
+        reason:
+          "réconciliation_required — positions HL hors journal ; pas de nouvelle entrée LIVE",
+      };
+    }
+  } catch {
+    /* ignore */
+  }
+
   const cfg = getLiveConfig();
 
+  if (!(req.entry > 0 && req.tp > 0 && req.sl > 0)) {
+    return { ok: false, reason: "Paramètres entrée/TP/SL invalides." };
+  }
+
+  // Lock anti double-ordre (cron + mirror + manuel)
+  const { acquireLiveLock, releaseLiveLock } = await import("./arch-guards");
+  const locked = await acquireLiveLock(req.coin, req.side, 120);
+  if (!locked) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: `Lock LIVE déjà pris ${req.coin} ${req.side} — anti double entrée`,
+    };
+  }
+
+  try {
+    const result = await placeBoriazLiveTradeInner(req, cfg);
+    if (!result.ok) {
+      await releaseLiveLock(req.coin, req.side).catch(() => undefined);
+    }
+    // Succès : garder le lock ~TTL pour anti double-fire immédiat
+    return result;
+  } catch (e) {
+    await releaseLiveLock(req.coin, req.side).catch(() => undefined);
+    throw e;
+  }
+}
+
+async function placeBoriazLiveTradeInner(
+  req: LiveTradeRequest,
+  cfg: ReturnType<typeof getLiveConfig>,
+): Promise<LiveTradeResult> {
   if (!(req.entry > 0 && req.tp > 0 && req.sl > 0)) {
     return { ok: false, reason: "Paramètres entrée/TP/SL invalides." };
   }
@@ -698,15 +891,26 @@ export async function placeBoriazLiveTrade(
   const openN = portfolio.ok
     ? portfolio.openPositionCount
     : await countOpenPositions(cfg.testnet, user);
-  // Miroir paper Boriaz : on tente quand même (cap soft élevé). Sinon cap strict.
+  // Miroir paper Boriaz : cap soft modéré (pas 8 aveugle).
   const softCap = mirror
-    ? Math.max(cfg.maxOpenPositions, 8)
+    ? Math.max(cfg.maxOpenPositions, Math.min(4, cfg.maxOpenPositions + 1))
     : cfg.maxOpenPositions;
   if (openN >= softCap) {
     return {
       ok: false,
       skipped: true,
       reason: `Déjà ${openN} positions ≥ cap ${softCap}`,
+    };
+  }
+
+  // Refuse double entrée sur le même coin
+  const already = portfolio.positions.find(
+    (p) => p.coin.toUpperCase() === req.coin.toUpperCase(),
+  );
+  if (already) {
+    return {
+      ok: false,
+      reason: `Position HL déjà ouverte ${already.coin} ${already.side}`,
     };
   }
 
@@ -722,7 +926,7 @@ export async function placeBoriazLiveTrade(
     sl: req.sl,
     maxLeverage: Math.min(lev, cfg.maxLeverage, asset.maxLeverage),
     maxNotionalUsd: cfg.maxNotionalUsd,
-    riskPct: req.riskPct ?? 2,
+    riskPct: req.riskPct ?? 3,
     paperMarginEur: req.paperMarginEur,
     paperBankrollEur: req.paperBankrollEur,
     mirrorPaper: mirror,
@@ -773,7 +977,10 @@ export async function placeBoriazLiveTrade(
     Number(req.tp1) > 0 &&
     Math.abs(Number(req.tp1) - req.tp) > 1e-12;
 
-  const halfSz = formatSz(sizeNum / 2, asset.szDecimals);
+  const { SMC_TP1_CLOSE_FRAC } = await import("./smc");
+  const tp1Frac = SMC_TP1_CLOSE_FRAC;
+  const tp1Sz = formatSz(sizeNum * tp1Frac, asset.szDecimals);
+  const tp2Sz = formatSz(sizeNum * (1 - tp1Frac), asset.szDecimals);
   const tp1Px = useSmcSplit
     ? formatPx(Number(req.tp1), asset.szDecimals)
     : tpPx;
@@ -787,8 +994,8 @@ export async function placeBoriazLiveTrade(
   let slOid: number | null = null;
 
   try {
-    if (useSmcSplit && halfSz && Number(halfSz) > 0) {
-      // Comme paper : entrée pleine, TP1 50%, TP2 50%, SL 100%.
+    if (useSmcSplit && tp1Sz && tp2Sz && Number(tp1Sz) > 0 && Number(tp2Sz) > 0) {
+      // Comme paper : entrée pleine, TP1 20%, TP2 80%, SL 100%.
       const entryRes = await client.order({
         orders: [
           {
@@ -828,7 +1035,7 @@ export async function placeBoriazLiveTrade(
             a: asset.id,
             b: !isBuy,
             p: tp1Px,
-            s: halfSz,
+            s: tp1Sz,
             r: true,
             t: {
               trigger: {
@@ -842,7 +1049,7 @@ export async function placeBoriazLiveTrade(
             a: asset.id,
             b: !isBuy,
             p: tp2Px,
-            s: halfSz,
+            s: tp2Sz,
             r: true,
             t: {
               trigger: {
@@ -869,14 +1076,104 @@ export async function placeBoriazLiveTrade(
         ],
         grouping: "na",
       });
-      const statuses = result.response?.data?.statuses ?? [];
-      const err = statuses.find(
+      let statuses = result.response?.data?.statuses ?? [];
+      let err = statuses.find(
         (s) => s && typeof s === "object" && "error" in s,
       ) as { error?: string } | undefined;
+      // Retry 1× si le batch protecteur échoue (évite position nue)
       if (err?.error) {
+        await new Promise((r) => setTimeout(r, 800));
+        try {
+          result = await client.order({
+            orders: [
+              {
+                a: asset.id,
+                b: !isBuy,
+                p: tp1Px,
+                s: tp1Sz,
+                r: true,
+                t: {
+                  trigger: {
+                    isMarket: true,
+                    triggerPx: tp1Px,
+                    tpsl: "tp",
+                  },
+                },
+              },
+              {
+                a: asset.id,
+                b: !isBuy,
+                p: tp2Px,
+                s: tp2Sz,
+                r: true,
+                t: {
+                  trigger: {
+                    isMarket: true,
+                    triggerPx: tp2Px,
+                    tpsl: "tp",
+                  },
+                },
+              },
+              {
+                a: asset.id,
+                b: !isBuy,
+                p: slPx,
+                s: size,
+                r: true,
+                t: {
+                  trigger: {
+                    isMarket: true,
+                    triggerPx: slPx,
+                    tpsl: "sl",
+                  },
+                },
+              },
+            ],
+            grouping: "na",
+          });
+          statuses = result.response?.data?.statuses ?? [];
+          err = statuses.find(
+            (s) => s && typeof s === "object" && "error" in s,
+          ) as { error?: string } | undefined;
+        } catch (retryErr) {
+          err = { error: hlErrMessage(retryErr) };
+        }
+      }
+      if (err?.error) {
+        // Dernier recours : flatten pour ne pas laisser une position sans TP/SL
+        try {
+          const midInfo = new InfoClient({
+            transport: makeTransport(cfg.testnet),
+          });
+          const mids = await midInfo.allMids();
+          const mid = Number(
+            mids[asset.name] ?? mids[asset.name.toUpperCase()] ?? req.entry,
+          );
+          const flatPx = aggressivePx(
+            req.side === "long" ? "short" : "long",
+            mid > 0 ? mid : req.entry,
+            req.entry,
+            asset.szDecimals,
+          );
+          await client.order({
+            orders: [
+              {
+                a: asset.id,
+                b: !isBuy,
+                p: flatPx,
+                s: size,
+                r: true,
+                t: { limit: { tif: "FrontendMarket" } },
+              },
+            ],
+            grouping: "na",
+          });
+        } catch (flatErr) {
+          console.error("SMC live flatten after naked TP/SL fail", flatErr);
+        }
         return {
           ok: false,
-          reason: err.error,
+          reason: `TP/SL refusés après entrée (${err.error}) — tentative de flatten`,
           coin: asset.name,
           assetId: asset.id,
           size,
@@ -983,6 +1280,8 @@ export async function placeBoriazLiveTrade(
   const tpPnlUsd = outcomes.tpPnlUsd;
   const slPnlUsd = outcomes.slPnlUsd;
 
+  // 1) Journal d’abord (pour que repair voie l’entrée)
+  let journalOk = false;
   try {
     const { recordLiveJournalEntry } = await import("./live-journal");
     await recordLiveJournalEntry({
@@ -996,19 +1295,84 @@ export async function placeBoriazLiveTrade(
       tp1Hit: false,
       size: sizeNum,
       leverage: liveLev,
-      riskPct: req.riskPct ?? 2,
+      riskPct: req.riskPct ?? 3,
       riskUsd: sized.riskUsd,
       portfolioId: req.portfolioId || "boriaz",
       portfolioName: req.portfolioName || botLabel,
       strategy: req.strategy === "smc" ? "smc" : "alignment",
-      botLabel,
+      botLabel: "Boriaz",
       paperId: req.paperId,
       entryOid,
       tpOid,
       slOid,
     });
+    journalOk = true;
   } catch (e) {
     console.error("live journal record failed", e);
+  }
+
+  // 2) Confirmer TP/SL sur le carnet ; repair si besoin
+  let protectedOk = Boolean(tpOid && slOid);
+  try {
+    await new Promise((r) => setTimeout(r, 350));
+    const tpslMap = await fetchLiveExchangeTpslMap();
+    const ex = tpslMap[asset.name.toUpperCase()];
+    if (ex?.tp != null && ex?.sl != null) {
+      protectedOk = true;
+      if (!tpOid && ex.tpOid) tpOid = ex.tpOid;
+      if (!slOid && ex.slOid) slOid = ex.slOid;
+    } else {
+      const repair = await repairNakedLiveTpsl();
+      void repair;
+      await new Promise((r) => setTimeout(r, 400));
+      const again = await fetchLiveExchangeTpslMap();
+      const ex2 = again[asset.name.toUpperCase()];
+      if (ex2?.tp != null && ex2?.sl != null) {
+        protectedOk = true;
+        if (ex2.tpOid) tpOid = ex2.tpOid;
+        if (ex2.slOid) slOid = ex2.slOid;
+      }
+    }
+  } catch (e) {
+    console.info("post-place TP/SL confirm", e);
+  }
+
+  if (!journalOk) {
+    return {
+      ok: false,
+      reason:
+        "Ordre placé mais journal LIVE échoué — position à surveiller manuellement",
+      coin: asset.name,
+      assetId: asset.id,
+      size,
+      entryOid,
+      tpOid,
+      slOid,
+      riskUsd: sized.riskUsd,
+      tpPnlUsd,
+      slPnlUsd,
+      botLabel: "Boriaz",
+      raw: result,
+    };
+  }
+
+  if (!protectedOk) {
+    return {
+      ok: false,
+      reason:
+        "Entrée journalée mais TP/SL non confirmés sur HL — repair cron suivra",
+      coin: asset.name,
+      assetId: asset.id,
+      size,
+      entryOid,
+      tpOid,
+      slOid,
+      riskUsd: sized.riskUsd,
+      tpPnlUsd,
+      slPnlUsd,
+      botLabel: "Boriaz",
+      raw: result,
+    };
   }
 
   return {
@@ -1022,7 +1386,7 @@ export async function placeBoriazLiveTrade(
     riskUsd: sized.riskUsd,
     tpPnlUsd,
     slPnlUsd,
-    botLabel,
+    botLabel: "Boriaz",
     reason: sized.note,
     raw: result,
   };
@@ -1033,7 +1397,8 @@ export async function placeBoriazLiveTrade(
 
 /**
  * Miroir paper SMC sur le live :
- * TP1 touché → (si besoin) réduire 50% + SL → BE + TP2 sur le reste.
+ * TP1 touché → (si besoin) réduire 20% + SL structurel inchangé + TP2 sur le reste (80%).
+ * Pas de break-even : un pullback vers l’entry ne doit plus tuer le runner.
  * Appelé par le cron / getTradeSignals — ne change pas le paper.
  */
 export async function manageLiveSmcPositions(): Promise<{
@@ -1044,6 +1409,30 @@ export async function manageLiveSmcPositions(): Promise<{
   const ready = isLiveEnvReady();
   if (!ready.ok) return { checked: 0, updated: 0, notes: [ready.reason || "env"] };
 
+  const { acquireManageSmcLock, releaseManageSmcLock } = await import(
+    "./arch-guards"
+  );
+  const got = await acquireManageSmcLock(90);
+  if (!got) {
+    return {
+      checked: 0,
+      updated: 0,
+      notes: ["manage-smc-lock déjà pris — skip (anti race TP1)"],
+    };
+  }
+
+  try {
+    return await manageLiveSmcPositionsInner();
+  } finally {
+    await releaseManageSmcLock().catch(() => undefined);
+  }
+}
+
+async function manageLiveSmcPositionsInner(): Promise<{
+  checked: number;
+  updated: number;
+  notes: string[];
+}> {
   const { loadLiveJournal, updateLiveJournalEntry } = await import("./live-journal");
   const journal = (await loadLiveJournal()).filter(
     (e) =>
@@ -1053,19 +1442,35 @@ export async function manageLiveSmcPositions(): Promise<{
       Number(e.tp1) > 0 &&
       !e.tp1Hit,
   );
-  if (!journal.length) return { checked: 0, updated: 0, notes: [] };
 
   const cfg = getLiveConfig();
+  const notes: string[] = [];
+  let updated = 0;
+  let checked = 0;
+
+  if (!journal.length) {
+    const repaired = await repairNakedLiveTpsl();
+    return {
+      checked: repaired.checked,
+      updated: repaired.updated,
+      notes: repaired.notes,
+    };
+  }
+
   const portfolio = await fetchLivePortfolio();
   if (!portfolio.ok) {
-    return { checked: journal.length, updated: 0, notes: [portfolio.reason || "portfolio"] };
+    const repaired = await repairNakedLiveTpsl();
+    return {
+      checked: journal.length + repaired.checked,
+      updated: repaired.updated,
+      notes: [portfolio.reason || "portfolio", ...repaired.notes],
+    };
   }
   const info = new InfoClient({ transport: makeTransport(cfg.testnet) });
   const mids = await info.allMids();
   const assets = await loadAssetMap(cfg.testnet);
   const client = getExchangeClient(cfg.testnet);
-  const notes: string[] = [];
-  let updated = 0;
+  checked = journal.length;
 
   for (const entry of journal) {
     const pos = portfolio.positions.find(
@@ -1079,22 +1484,27 @@ export async function manageLiveSmcPositions(): Promise<{
     const tp1 = Number(entry.tp1);
     const hitTp1 =
       entry.side === "long" ? px >= tp1 : px <= tp1;
-    // Position déjà ~50% (TP1 ordre auto rempli) ou prix a touché TP1
+    // Position déjà ~80% (TP1 20% auto rempli) ou prix a touché TP1
     const sizeNow = Math.abs(pos.size);
-    const halfish = sizeNow <= entry.size * 0.65;
-    if (!hitTp1 && !halfish) continue;
+    const { SMC_TP1_CLOSE_FRAC } = await import("./smc");
+    const alreadyPartial = sizeNow <= entry.size * (1 - SMC_TP1_CLOSE_FRAC * 0.5);
+    if (!hitTp1 && !alreadyPartial) continue;
 
     const asset = assets.get(entry.coin.toUpperCase());
     if (!asset) continue;
 
     try {
-      // Annuler TP/SL restants pour recaler BE + TP2
+      // Annuler UNIQUEMENT les TP/SL trigger (pas d’autres ordres limit)
       try {
         const opens = await info.frontendOpenOrders({
           user: cfg.accountAddress as `0x${string}`,
         });
         const cancels = (opens ?? [])
-          .filter((o) => String(o.coin || "").toUpperCase() === entry.coin.toUpperCase())
+          .filter(
+            (o) =>
+              String(o.coin || "").toUpperCase() ===
+                entry.coin.toUpperCase() && isProtectiveOpenOrder(o),
+          )
           .map((o) => ({ a: asset.id, o: Number(o.oid) }))
           .filter((c) => Number.isFinite(c.o));
         if (cancels.length) {
@@ -1104,10 +1514,10 @@ export async function manageLiveSmcPositions(): Promise<{
         console.info("manageLiveSmc cancel", e);
       }
 
-      // Si encore pleine taille : clôturer 50% market (comme paper TP1)
+      // Si encore pleine taille : clôturer 20% market (comme paper TP1)
       let remaining = sizeNow;
-      if (!halfish && sizeNow > 0) {
-        const closeSz = formatSz(sizeNow / 2, asset.szDecimals);
+      if (!alreadyPartial && sizeNow > 0) {
+        const closeSz = formatSz(sizeNow * SMC_TP1_CLOSE_FRAC, asset.szDecimals);
         if (closeSz && Number(closeSz) > 0) {
           const isBuy = entry.side === "short"; // close long = sell
           const closePx = aggressivePx(
@@ -1129,7 +1539,7 @@ export async function manageLiveSmcPositions(): Promise<{
             ],
             grouping: "na",
           });
-          remaining = sizeNow / 2;
+          remaining = sizeNow * (1 - SMC_TP1_CLOSE_FRAC);
         }
       }
 
@@ -1137,17 +1547,244 @@ export async function manageLiveSmcPositions(): Promise<{
       if (!remSz || Number(remSz) <= 0) {
         await updateLiveJournalEntry(entry.id, {
           tp1Hit: true,
-          sl: entry.entry,
         });
         updated += 1;
-        notes.push(`${entry.coin}: TP1/BE (size flat)`);
+        notes.push(`${entry.coin}: TP1 (size flat)`);
         continue;
       }
 
-      const bePx = formatPx(entry.entry, asset.szDecimals);
+      // SL : structurel, OU lock +0.35R si déjà ≥1.5R (pas BE à TP1 — laisse respirer)
+      const riskDist = Math.abs(entry.entry - Number(entry.sl));
+      const rMult =
+        riskDist > 0
+          ? entry.side === "long"
+            ? (px - entry.entry) / riskDist
+            : (entry.entry - px) / riskDist
+          : 0;
+      let slKeep = Number(entry.sl) > 0 ? Number(entry.sl) : entry.entry;
+      if (rMult >= 1.5 && riskDist > 0) {
+        slKeep =
+          entry.side === "long"
+            ? entry.entry + riskDist * 0.35
+            : entry.entry - riskDist * 0.35;
+      }
+      const slPxKeep = formatPx(slKeep, asset.szDecimals);
       const tp2Px = formatPx(Number(entry.tp2 ?? entry.tp), asset.szDecimals);
       const isBuy = entry.side === "long";
-      const tpsl = await client.order({
+      const placeTp2Sl = async () =>
+        client.order({
+          orders: [
+            {
+              a: asset.id,
+              b: !isBuy,
+              p: tp2Px,
+              s: remSz,
+              r: true,
+              t: {
+                trigger: {
+                  isMarket: true,
+                  triggerPx: tp2Px,
+                  tpsl: "tp",
+                },
+              },
+            },
+            {
+              a: asset.id,
+              b: !isBuy,
+              p: slPxKeep,
+              s: remSz,
+              r: true,
+              t: {
+                trigger: {
+                  isMarket: true,
+                  triggerPx: slPxKeep,
+                  tpsl: "sl",
+                },
+              },
+            },
+          ],
+          grouping: "na",
+        });
+      let tpsl = await placeTp2Sl();
+      let st = tpsl.response?.data?.statuses ?? [];
+      let tpslErr = st.find(
+        (s) => s && typeof s === "object" && "error" in s,
+      ) as { error?: string } | undefined;
+      if (tpslErr?.error) {
+        await new Promise((r) => setTimeout(r, 700));
+        tpsl = await placeTp2Sl();
+        st = tpsl.response?.data?.statuses ?? [];
+        tpslErr = st.find(
+          (s) => s && typeof s === "object" && "error" in s,
+        ) as { error?: string } | undefined;
+      }
+      if (tpslErr?.error) {
+        notes.push(
+          `${entry.coin}: TP2/SL refusés après cancel (${tpslErr.error}) — position peut être nue`,
+        );
+        continue;
+      }
+      const tp2 = Number(entry.tp2 ?? entry.tp);
+      const { tradeOutcomesUsd } = await import("./trade-outcomes");
+      const outcomes = tradeOutcomesUsd({
+        side: entry.side,
+        entry: entry.entry,
+        tp: tp2,
+        sl: slKeep,
+        size: remaining,
+      });
+      await updateLiveJournalEntry(entry.id, {
+        tp1Hit: true,
+        sl: slKeep,
+        size: remaining,
+        tp: tp2,
+        tpPnlUsd: outcomes.tpPnlUsd,
+        slPnlUsd: outcomes.slPnlUsd,
+        tpOid: readOid(st[0]),
+        slOid: readOid(st[1]),
+      });
+      updated += 1;
+      notes.push(
+        rMult >= 1.5
+          ? `${entry.coin}: TP1 20% + SL lock +0.35R (≥1.5R) · 80% vise TP2`
+          : `${entry.coin}: TP1 20% + SL structurel · 80% vise TP2`,
+      );
+    } catch (e) {
+      notes.push(
+        `${entry.coin}: manage err ${e instanceof Error ? e.message : "x"}`,
+      );
+    }
+  }
+
+  // Trail structurel sur runners déjà TP1
+  try {
+    const trailed = await trailStructuralRunnersAfterTp1({
+      portfolio,
+      mids,
+      assets,
+      client,
+      info,
+      cfg,
+    });
+    notes.push(...trailed.notes);
+    updated += trailed.updated;
+    checked += trailed.checked;
+  } catch (e) {
+    notes.push(`trail err ${e instanceof Error ? e.message : "x"}`);
+  }
+
+  const repaired = await repairNakedLiveTpsl();
+  notes.push(...repaired.notes);
+  updated += repaired.updated;
+
+  return { checked: checked + repaired.checked, updated, notes };
+}
+
+/**
+ * Après TP1 : si nouveau BOS dans le sens du trade, remonter le SL
+ * sous/sur le dernier swing structurel (pas BE émotionnel).
+ */
+async function trailStructuralRunnersAfterTp1(ctx: {
+  portfolio: Awaited<ReturnType<typeof fetchLivePortfolio>>;
+  mids: Record<string, string>;
+  assets: Awaited<ReturnType<typeof loadAssetMap>>;
+  client: ReturnType<typeof getExchangeClient>;
+  info: InfoClient;
+  cfg: ReturnType<typeof getLiveConfig>;
+}): Promise<{ checked: number; updated: number; notes: string[] }> {
+  const { loadLiveJournal, updateLiveJournalEntry } = await import(
+    "./live-journal"
+  );
+  const { loadCandles } = await import("./market-analysis");
+  const { findSwings } = await import("./smc");
+  const notes: string[] = [];
+  let updated = 0;
+  const runners = (await loadLiveJournal()).filter(
+    (e) => e.status === "open" && e.strategy === "smc" && e.tp1Hit,
+  );
+  if (!runners.length || !ctx.portfolio.ok) {
+    return { checked: 0, updated: 0, notes };
+  }
+
+  for (const entry of runners) {
+    const pos = ctx.portfolio.positions.find(
+      (p) =>
+        p.coin.toUpperCase() === entry.coin.toUpperCase() &&
+        p.side === entry.side,
+    );
+    if (!pos) continue;
+    const mid = Number(
+      ctx.mids[entry.coin] ?? ctx.mids[entry.coin.toUpperCase()] ?? 0,
+    );
+    const px = mid > 0 ? mid : pos.entryPx;
+    try {
+      const m15 = await loadCandles(entry.coin, "15m");
+      const swings = findSwings(m15.slice(-48), 2);
+      const pip = Math.max(px * 0.00015, px >= 1000 ? 0.5 : 0.01);
+      let newSl = entry.sl;
+      if (entry.side === "long") {
+        const lows = swings.filter((s) => s.kind === "low").slice(-4);
+        const swing = lows.at(-1);
+        if (swing && swing.price > entry.sl && swing.price < px) {
+          // Nouveau higher-low structurel
+          const candidate = swing.price - pip;
+          if (candidate > entry.sl && candidate < px) {
+            newSl = candidate;
+          }
+        }
+        // Lock progressif : si ≥2R, floor à +0.7R
+        const risk0 = Math.abs(entry.entry - Number(entry.sl));
+        if (risk0 > 0 && (px - entry.entry) / risk0 >= 2) {
+          const lock = entry.entry + risk0 * 0.7;
+          newSl = Math.max(newSl, lock);
+        }
+      } else {
+        const highs = swings.filter((s) => s.kind === "high").slice(-4);
+        const swing = highs.at(-1);
+        if (swing && swing.price < entry.sl && swing.price > px) {
+          const candidate = swing.price + pip;
+          if (candidate < entry.sl && candidate > px) {
+            newSl = candidate;
+          }
+        }
+        const risk0 = Math.abs(entry.entry - Number(entry.sl));
+        if (risk0 > 0 && (entry.entry - px) / risk0 >= 2) {
+          const lock = entry.entry - risk0 * 0.7;
+          newSl = Math.min(newSl, lock);
+        }
+      }
+      if (Math.abs(newSl - entry.sl) / entry.sl < 0.0005) continue;
+
+      const asset = ctx.assets.get(entry.coin.toUpperCase());
+      if (!asset) continue;
+      // Cancel protective + replace TP2 + new SL (fail → pas de double set)
+      const opens = await ctx.info.frontendOpenOrders({
+        user: ctx.cfg.accountAddress as `0x${string}`,
+      });
+      const cancels = (opens ?? [])
+        .filter(
+          (o) =>
+            String(o.coin || "").toUpperCase() === entry.coin.toUpperCase() &&
+            isProtectiveOpenOrder(o),
+        )
+        .map((o) => ({ a: asset.id, o: Number(o.oid) }))
+        .filter((c) => Number.isFinite(c.o));
+      if (cancels.length) {
+        try {
+          await ctx.client.cancel({ cancels });
+        } catch (e) {
+          notes.push(
+            `${entry.coin}: trail abort — cancel protectifs échoué (${e instanceof Error ? e.message : "x"})`,
+          );
+          continue;
+        }
+      }
+      const remSz = formatSz(Math.abs(pos.size), asset.szDecimals);
+      if (!remSz || Number(remSz) <= 0) continue;
+      const tp2Px = formatPx(Number(entry.tp2 ?? entry.tp), asset.szDecimals);
+      const slPx = formatPx(newSl, asset.szDecimals);
+      const isBuy = entry.side === "long";
+      const tpsl = await ctx.client.order({
         orders: [
           {
             a: asset.id,
@@ -1166,13 +1803,13 @@ export async function manageLiveSmcPositions(): Promise<{
           {
             a: asset.id,
             b: !isBuy,
-            p: bePx,
+            p: slPx,
             s: remSz,
             r: true,
             t: {
               trigger: {
                 isMarket: true,
-                triggerPx: bePx,
+                triggerPx: slPx,
                 tpsl: "sl",
               },
             },
@@ -1181,35 +1818,402 @@ export async function manageLiveSmcPositions(): Promise<{
         grouping: "na",
       });
       const st = tpsl.response?.data?.statuses ?? [];
-      const tp2 = Number(entry.tp2 ?? entry.tp);
-      const { tradeOutcomesUsd } = await import("./trade-outcomes");
-      const outcomes = tradeOutcomesUsd({
-        side: entry.side,
-        entry: entry.entry,
-        tp: tp2,
-        sl: entry.entry,
-        size: remaining,
-      });
+      const err = st.find(
+        (s) => s && typeof s === "object" && "error" in s,
+      ) as { error?: string } | undefined;
+      if (err?.error) {
+        notes.push(`${entry.coin}: trail refuse ${err.error}`);
+        continue;
+      }
       await updateLiveJournalEntry(entry.id, {
-        tp1Hit: true,
-        sl: entry.entry,
-        size: remaining,
-        tp: tp2,
-        tpPnlUsd: outcomes.tpPnlUsd,
-        slPnlUsd: outcomes.slPnlUsd,
+        sl: newSl,
         tpOid: readOid(st[0]),
         slOid: readOid(st[1]),
       });
       updated += 1;
-      notes.push(`${entry.coin}: TP1 50% + SL→BE · vise TP2`);
+      notes.push(`${entry.coin}: trail SL ${entry.sl} → ${newSl}`);
     } catch (e) {
       notes.push(
-        `${entry.coin}: manage err ${e instanceof Error ? e.message : "x"}`,
+        `${entry.coin}: trail err ${e instanceof Error ? e.message : "x"}`,
+      );
+    }
+  }
+  return { checked: runners.length, updated, notes };
+}
+function synthesizeEmergencyTpsl(
+  side: "long" | "short",
+  entry: number,
+): { tp: number; sl: number } {
+  const risk = entry * 0.015;
+  if (side === "long") {
+    return { sl: entry - risk, tp: entry + risk * 2 };
+  }
+  return { sl: entry + risk, tp: entry - risk * 2 };
+}
+
+/**
+ * Si une position Boriaz (journal) n’a plus de TP/SL sur HL → re-place.
+ * Si le journal n’a pas de niveaux : synthétise SL 1.5% / TP 2R (urgence).
+ * Couvre aussi les positions HL nues sans journal.
+ */
+export async function repairNakedLiveTpsl(): Promise<{
+  checked: number;
+  updated: number;
+  notes: string[];
+}> {
+  const ready = isLiveEnvReady();
+  if (!ready.ok) return { checked: 0, updated: 0, notes: [] };
+  const cfg = getLiveConfig();
+  const { loadLiveJournal, updateLiveJournalEntry } = await import(
+    "./live-journal"
+  );
+  const journal = (await loadLiveJournal()).filter((e) => e.status === "open");
+
+  const portfolio = await fetchLivePortfolio();
+  if (!portfolio.ok) return { checked: 0, updated: 0, notes: [] };
+  if (!portfolio.positions.length) {
+    return { checked: 0, updated: 0, notes: [] };
+  }
+
+  const info = new InfoClient({ transport: makeTransport(cfg.testnet) });
+  const opens = await info.frontendOpenOrders({
+    user: cfg.accountAddress as `0x${string}`,
+  }).catch(() => []);
+  const assets = await loadAssetMap(cfg.testnet);
+  const client = getExchangeClient(cfg.testnet);
+  const notes: string[] = [];
+  let updated = 0;
+  let checked = 0;
+
+  type Job = {
+    coin: string;
+    side: "long" | "short";
+    entry: number;
+    size: number;
+    tp: number;
+    sl: number;
+    journalId: string | null;
+    synthesized: boolean;
+  };
+  const jobs: Job[] = [];
+
+  for (const pos of portfolio.positions) {
+    const tpsl = extractTpslFromOpenOrders(opens ?? [], pos.coin);
+    if (tpsl.tp != null && tpsl.sl != null) continue;
+    checked += 1;
+    const entry =
+      journal.find(
+        (e) =>
+          e.coin.toUpperCase() === pos.coin.toUpperCase() &&
+          e.side === pos.side,
+      ) ?? null;
+    let tp = entry && entry.tp > 0 ? entry.tp : 0;
+    let sl = entry && entry.sl > 0 ? entry.sl : 0;
+    let synthesized = false;
+    if (!(tp > 0 && sl > 0)) {
+      const syn = synthesizeEmergencyTpsl(
+        pos.side,
+        pos.entryPx > 0 ? pos.entryPx : entry?.entry || 0,
+      );
+      if (!(syn.tp > 0 && syn.sl > 0)) continue;
+      tp = syn.tp;
+      sl = syn.sl;
+      synthesized = true;
+    }
+    const entryPx =
+      entry && entry.entry > 0
+        ? entry.entry
+        : pos.entryPx > 0
+          ? pos.entryPx
+          : 0;
+    if (!(entryPx > 0)) continue;
+    jobs.push({
+      coin: pos.coin,
+      side: pos.side,
+      entry: entryPx,
+      size: Math.abs(pos.size),
+      tp,
+      sl,
+      journalId: entry?.id ?? null,
+      synthesized,
+    });
+  }
+
+  for (const job of jobs) {
+    const asset = assets.get(job.coin.toUpperCase());
+    if (!asset) continue;
+    const size = formatSz(job.size, asset.szDecimals);
+    if (!size || Number(size) <= 0) continue;
+
+    const isBuy = job.side === "long";
+    const tpPx = formatPx(job.tp, asset.szDecimals);
+    const slPx = formatPx(job.sl, asset.szDecimals);
+    try {
+      const res = await client.order({
+        orders: [
+          {
+            a: asset.id,
+            b: !isBuy,
+            p: tpPx,
+            s: size,
+            r: true,
+            t: {
+              trigger: {
+                isMarket: true,
+                triggerPx: tpPx,
+                tpsl: "tp",
+              },
+            },
+          },
+          {
+            a: asset.id,
+            b: !isBuy,
+            p: slPx,
+            s: size,
+            r: true,
+            t: {
+              trigger: {
+                isMarket: true,
+                triggerPx: slPx,
+                tpsl: "sl",
+              },
+            },
+          },
+        ],
+        grouping: "na",
+      });
+      const st = res.response?.data?.statuses ?? [];
+      const err = st.find(
+        (s) => s && typeof s === "object" && "error" in s,
+      ) as { error?: string } | undefined;
+      if (err?.error) {
+        notes.push(`${job.coin}: repair TP/SL refusé (${err.error})`);
+        continue;
+      }
+      const tpOid = readOid(st[0]);
+      const slOid = readOid(st[1]);
+      if (job.journalId) {
+        await updateLiveJournalEntry(job.journalId, {
+          tp: job.tp,
+          sl: job.sl,
+          tpOid,
+          slOid,
+        });
+      }
+      updated += 1;
+      notes.push(
+        job.synthesized
+          ? `${job.coin}: TP/SL d’urgence placés (SL 1.5% / TP 2R) @ ${slPx}/${tpPx}`
+          : `${job.coin}: TP/SL journal re-placés sur HL`,
+      );
+    } catch (e) {
+      notes.push(
+        `${job.coin}: repair err ${e instanceof Error ? e.message : "x"}`,
       );
     }
   }
 
-  return { checked: journal.length, updated, notes };
+  return { checked, updated, notes };
+}
+
+/**
+ * Force cancel + re-place TP/SL sur UNE position LIVE (même si déjà protégés).
+ * Niveaux : journal si dispo, sinon SL 1.5% / TP 2R, sinon opts.tp/sl fournis.
+ */
+export async function forceReplaceLiveTpsl(opts: {
+  coin: string;
+  side?: LiveSide;
+  tp?: number;
+  sl?: number;
+}): Promise<{
+  ok: boolean;
+  reason?: string;
+  coin?: string;
+  side?: LiveSide;
+  tp?: number;
+  sl?: number;
+  synthesized?: boolean;
+  notes: string[];
+}> {
+  const ready = isLiveEnvReady();
+  if (!ready.ok) {
+    return { ok: false, reason: ready.reason || "LIVE non prêt", notes: [] };
+  }
+  const coin = String(opts.coin || "").trim().toUpperCase();
+  if (!coin) return { ok: false, reason: "coin requis", notes: [] };
+
+  const cfg = getLiveConfig();
+  const portfolio = await fetchLivePortfolio();
+  if (!portfolio.ok) {
+    return { ok: false, reason: portfolio.reason || "Portfolio illisible", notes: [] };
+  }
+  const pos = portfolio.positions.find(
+    (p) =>
+      p.coin.toUpperCase() === coin &&
+      (opts.side == null || p.side === opts.side),
+  );
+  if (!pos) {
+    return {
+      ok: false,
+      reason: opts.side
+        ? `Pas de position ${opts.side} ${coin}`
+        : `Pas de position ${coin}`,
+      notes: [],
+    };
+  }
+
+  const { loadLiveJournal, matchJournalToPosition, updateLiveJournalEntry } =
+    await import("./live-journal");
+  const journal = (await loadLiveJournal()).filter((e) => e.status === "open");
+  const entry = matchJournalToPosition(journal, pos.coin, pos.side);
+
+  let tp =
+    opts.tp != null && opts.tp > 0
+      ? opts.tp
+      : entry && entry.tp > 0
+        ? entry.tp
+        : 0;
+  let sl =
+    opts.sl != null && opts.sl > 0
+      ? opts.sl
+      : entry && entry.sl > 0
+        ? entry.sl
+        : 0;
+  let synthesized = false;
+  const entryPx =
+    entry && entry.entry > 0
+      ? entry.entry
+      : pos.entryPx > 0
+        ? pos.entryPx
+        : 0;
+  if (!(tp > 0 && sl > 0)) {
+    const syn = synthesizeEmergencyTpsl(pos.side, entryPx);
+    tp = syn.tp;
+    sl = syn.sl;
+    synthesized = true;
+  }
+  if (!(entryPx > 0 && tp > 0 && sl > 0)) {
+    return {
+      ok: false,
+      reason: "Impossible de déterminer entry/TP/SL",
+      notes: [],
+    };
+  }
+
+  const assets = await loadAssetMap(cfg.testnet);
+  const asset = assets.get(coin);
+  if (!asset) {
+    return { ok: false, reason: `Asset ${coin} inconnu`, notes: [] };
+  }
+
+  const info = new InfoClient({ transport: makeTransport(cfg.testnet) });
+  const client = getExchangeClient(cfg.testnet);
+  const notes: string[] = [];
+
+  try {
+    const opens = await info.frontendOpenOrders({
+      user: cfg.accountAddress as `0x${string}`,
+    });
+    const cancels = (opens ?? [])
+      .filter((o) => String(o.coin || "").toUpperCase() === coin)
+      .map((o) => ({ a: asset.id, o: Number(o.oid) }))
+      .filter((c) => Number.isFinite(c.o));
+    if (cancels.length) {
+      await client.cancel({ cancels });
+      notes.push(`Annulé ${cancels.length} ordre(s) ouverts ${coin}`);
+    }
+  } catch (e) {
+    notes.push(
+      `Cancel partiel: ${e instanceof Error ? e.message : "err"}`,
+    );
+  }
+
+  const size = formatSz(Math.abs(pos.size), asset.szDecimals);
+  if (!size || Number(size) <= 0) {
+    return { ok: false, reason: "Taille nulle", notes };
+  }
+  const isBuy = pos.side === "long";
+  const tpPx = formatPx(tp, asset.szDecimals);
+  const slPx = formatPx(sl, asset.szDecimals);
+
+  try {
+    const res = await client.order({
+      orders: [
+        {
+          a: asset.id,
+          b: !isBuy,
+          p: tpPx,
+          s: size,
+          r: true,
+          t: {
+            trigger: {
+              isMarket: true,
+              triggerPx: tpPx,
+              tpsl: "tp",
+            },
+          },
+        },
+        {
+          a: asset.id,
+          b: !isBuy,
+          p: slPx,
+          s: size,
+          r: true,
+          t: {
+            trigger: {
+              isMarket: true,
+              triggerPx: slPx,
+              tpsl: "sl",
+            },
+          },
+        },
+      ],
+      grouping: "na",
+    });
+    const st = res.response?.data?.statuses ?? [];
+    const err = st.find(
+      (s) => s && typeof s === "object" && "error" in s,
+    ) as { error?: string } | undefined;
+    if (err?.error) {
+      return {
+        ok: false,
+        reason: err.error,
+        coin: pos.coin,
+        side: pos.side,
+        notes: [...notes, `HL refuse TP/SL: ${err.error}`],
+      };
+    }
+    if (entry) {
+      await updateLiveJournalEntry(entry.id, {
+        tp,
+        sl,
+        tpOid: readOid(st[0]),
+        slOid: readOid(st[1]),
+      });
+    }
+    notes.push(
+      synthesized
+        ? `TP/SL urgence re-placés @ ${slPx}/${tpPx}`
+        : `TP/SL re-placés @ ${slPx}/${tpPx}`,
+    );
+    return {
+      ok: true,
+      coin: pos.coin,
+      side: pos.side,
+      tp,
+      sl,
+      synthesized,
+      notes,
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      reason: hlErrMessage(e),
+      coin: pos.coin,
+      side: pos.side,
+      notes,
+    };
+  }
 }
 
 export async function placeBoriazLiveTradeMirrored(
@@ -1222,6 +2226,39 @@ export async function placeBoriazLiveTradeMirrored(
     reason: "LIVE miroir non tenté",
   };
   for (let attempt = 1; attempt <= 3; attempt++) {
+    // Anti double-fire : si position/journal déjà là (timeout précédent) → stop
+    try {
+      const pf = await fetchLivePortfolio();
+      if (pf.ok) {
+        const hit = pf.positions.find(
+          (p) => p.coin.toUpperCase() === req.coin.toUpperCase(),
+        );
+        if (hit) {
+          return {
+            ok: true,
+            skipped: false,
+            reason: `Déjà en position HL ${hit.coin} ${hit.side} — retry annulé`,
+            coin: hit.coin,
+          };
+        }
+      }
+      const { loadLiveJournal, matchJournalToPosition } = await import(
+        "./live-journal"
+      );
+      const open = (await loadLiveJournal()).filter((e) => e.status === "open");
+      const j = matchJournalToPosition(open, req.coin, req.side);
+      if (j) {
+        return {
+          ok: true,
+          skipped: false,
+          reason: `Journal déjà open ${j.coin} — retry annulé`,
+          coin: j.coin,
+        };
+      }
+    } catch {
+      /* best-effort */
+    }
+
     last = await placeBoriazLiveTrade(payload);
     if (last.ok) return last;
     // Échec HL dur (ordre rejeté) → stop ; skip soft → retry

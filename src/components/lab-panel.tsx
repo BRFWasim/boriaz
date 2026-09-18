@@ -102,6 +102,9 @@ export function LabPanel() {
       tpPnlUsd?: number | null;
       slPnlUsd?: number | null;
       riskUsd?: number | null;
+      nakedTpsl?: boolean;
+      journalMissing?: boolean;
+      tpslSource?: string | null;
       manageSnapshot?: TradeManageSnapshot | null;
     }[];
   } | null>(null);
@@ -161,9 +164,24 @@ export function LabPanel() {
         dirtyRef.current = false;
       }
       setJournal(j.entries ?? []);
-      setPaper(pa.trades ?? []);
+      setPaper((prev) => {
+        const incoming = pa.trades ?? [];
+        if (!incoming.length) return prev;
+        const byId = new Map(prev.map((t) => [t.id, t]));
+        for (const t of incoming) {
+          const old = byId.get(t.id);
+          byId.set(t.id, {
+            ...t,
+            manageSnapshot: t.manageSnapshot ?? old?.manageSnapshot ?? null,
+          });
+        }
+        const merged = [...byId.values()].sort(
+          (a, b) => b.openedAt - a.openedAt,
+        );
+        writeLocalPaper(merged);
+        return merged;
+      });
       setAccount(pa.account ?? null);
-      if (pa.trades) writeLocalPaper(pa.trades);
       if (!c.error || c.latest) setCorr(c);
       const st = await fetch("/api/status").then((r) => readResponseJson<NonNullable<typeof status>>(r));
       setStatus(st);
@@ -187,7 +205,30 @@ export function LabPanel() {
             portfolio?: NonNullable<typeof livePortfolio>;
           }>(r),
         );
-        if (liveAcc?.portfolio) setLivePortfolio(liveAcc.portfolio);
+        if (liveAcc?.portfolio) {
+          setLivePortfolio((prev) => {
+            const incoming = liveAcc.portfolio!;
+            if (!prev?.positions?.length) return incoming;
+            const prevByKey = new Map(
+              prev.positions.map((p) => [
+                `${p.coin.toUpperCase()}:${p.side}`,
+                p,
+              ]),
+            );
+            return {
+              ...incoming,
+              positions: incoming.positions.map((p) => {
+                const key = `${p.coin.toUpperCase()}:${p.side}`;
+                const old = prevByKey.get(key);
+                return {
+                  ...p,
+                  manageSnapshot:
+                    p.manageSnapshot ?? old?.manageSnapshot ?? null,
+                };
+              }),
+            };
+          });
+        }
         if (liveAcc?.env) {
           setLiveStatus({
             env: liveAcc.env,
@@ -229,7 +270,7 @@ export function LabPanel() {
       /* ignore */
     }
     void syncPaperFromBrowser().then(() => void refresh());
-    const id = window.setInterval(() => void refresh(), 12_000);
+    const id = window.setInterval(() => void refresh(), 30_000);
 
     async function reviewFast() {
       try {
@@ -246,11 +287,41 @@ export function LabPanel() {
           };
         }>(res);
         if (res.ok && Array.isArray(json.trades)) {
-          setPaper(json.trades);
-          writeLocalPaper(json.trades);
+          setPaper((prev) => {
+            const byId = new Map(prev.map((t) => [t.id, t]));
+            for (const t of json.trades!) {
+              const old = byId.get(t.id);
+              byId.set(t.id, {
+                ...t,
+                manageSnapshot: t.manageSnapshot ?? old?.manageSnapshot ?? null,
+              });
+            }
+            const merged = [...byId.values()].sort(
+              (a, b) => b.openedAt - a.openedAt,
+            );
+            writeLocalPaper(merged);
+            return merged;
+          });
         }
         if (json.account) setAccount(json.account);
-        // Rafraîchir positions live pour attacher les snapshots
+        // Appliquer snapshots live immédiatement depuis /api/manage
+        const snaps = json.live?.snapshots;
+        if (snaps && typeof snaps === "object") {
+          setLivePortfolio((prev) => {
+            if (!prev?.positions?.length) return prev;
+            return {
+              ...prev,
+              positions: prev.positions.map((p) => {
+                const key = `${p.coin.toUpperCase()}:${p.side}`;
+                const snap = snaps[key];
+                return snap
+                  ? { ...p, manageSnapshot: snap }
+                  : p;
+              }),
+            };
+          });
+        }
+        // Rafraîchir positions live (en préservant manageSnapshot déjà affiché)
         if (res.ok) {
           try {
             const liveAcc = await fetch("/api/live-account").then((r) =>
@@ -258,7 +329,33 @@ export function LabPanel() {
                 portfolio?: NonNullable<typeof livePortfolio>;
               }>(r),
             );
-            if (liveAcc?.portfolio) setLivePortfolio(liveAcc.portfolio);
+            if (liveAcc?.portfolio) {
+              setLivePortfolio((prev) => {
+                const incoming = liveAcc.portfolio!;
+                if (!prev?.positions?.length) return incoming;
+                const prevByKey = new Map(
+                  prev.positions.map((p) => [
+                    `${p.coin.toUpperCase()}:${p.side}`,
+                    p,
+                  ]),
+                );
+                return {
+                  ...incoming,
+                  positions: incoming.positions.map((p) => {
+                    const key = `${p.coin.toUpperCase()}:${p.side}`;
+                    const old = prevByKey.get(key);
+                    return {
+                      ...p,
+                      manageSnapshot:
+                        p.manageSnapshot ??
+                        snaps?.[key] ??
+                        old?.manageSnapshot ??
+                        null,
+                    };
+                  }),
+                };
+              });
+            }
           } catch {
             /* ignore */
           }
@@ -267,8 +364,8 @@ export function LabPanel() {
         /* ignore */
       }
     }
-    const reviewSoon = window.setTimeout(() => void reviewFast(), 6_000);
-    const reviewId = window.setInterval(() => void reviewFast(), 45_000);
+    const reviewSoon = window.setTimeout(() => void reviewFast(), 8_000);
+    const reviewId = window.setInterval(() => void reviewFast(), 90_000);
 
     return () => {
       window.clearInterval(id);
@@ -314,7 +411,7 @@ export function LabPanel() {
 
   function updatePortfolio(id: string, patch: Partial<PortfolioProfile>) {
     if (!prefs) return;
-    // LIVE : Défaut + Boriaz + Scalp. Risqué / autres forcé paper-only.
+    // LIVE : seul Boriaz autorisé. Défaut / Scalp / autres = paper only.
     const target = ensurePortfolios(prefs.portfolios).find((p) => p.id === id);
     const allowsLive = target ? portfolioAllowsLive(target) : false;
     const finalPatch =
@@ -518,8 +615,21 @@ export function LabPanel() {
           `Relecture ${json.reviewed ?? 0} trade(s)${json.aiUsed ? " (IA)" : " (règles)"}${acts ? " · " + acts : " · rien à faire"}`,
         );
         if (json.trades) {
-          setPaper(json.trades);
-          writeLocalPaper(json.trades);
+          setPaper((prev) => {
+            const byId = new Map(prev.map((t) => [t.id, t]));
+            for (const t of json.trades as PaperTrade[]) {
+              const old = byId.get(t.id);
+              byId.set(t.id, {
+                ...t,
+                manageSnapshot: t.manageSnapshot ?? old?.manageSnapshot ?? null,
+              });
+            }
+            const merged = [...byId.values()].sort(
+              (a, b) => b.openedAt - a.openedAt,
+            );
+            writeLocalPaper(merged);
+            return merged;
+          });
         }
       }
     } catch (e) {
@@ -862,13 +972,11 @@ export function LabPanel() {
                   void savePrefs(next);
                 }}
               />
-              LIVE master (Défaut / Scalp toggles) — Boriaz paper → live miroir
+              LIVE master (legacy — n’active plus Défaut/Scalp)
             </label>
             <p className="text-[11px] text-muted-foreground sm:col-span-2">
-              LIVE réel : <strong>Défaut</strong>, <strong>Boriaz</strong>,{" "}
-              <strong>Scalp</strong> (petites mises ~0,25 % equity).{" "}
-              <strong>Risqué</strong> = paper only, jamais HL. Scalp se
-              désactive via sa case LIVE HL ci-dessous. Kill-switch env{" "}
+              LIVE réel : <strong>Boriaz uniquement</strong> (SMC). Défaut /
+              Scalp / Risqué = paper only, jamais HL. Kill-switch env{" "}
               <code className="text-[10px]">HL_LIVE_ENABLED</code> obligatoire.
             </p>
           </div>
@@ -1009,10 +1117,20 @@ export function LabPanel() {
                               {p.botLabel}
                             </span>
                           ) : (
-                            <span className="ml-2 text-[10px] text-muted-foreground">
-                              bot ?
+                            <span className="ml-2 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-300">
+                              Boriaz
                             </span>
                           )}
+                          {p.nakedTpsl ? (
+                            <span className="ml-2 rounded border border-rose-500/40 bg-rose-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700 dark:text-rose-300">
+                              sans TP/SL HL
+                            </span>
+                          ) : null}
+                          {p.journalMissing ? (
+                            <span className="ml-2 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800 dark:text-amber-300">
+                              journal manquant
+                            </span>
+                          ) : null}
                         </span>
                         <span className={signedClass(p.unrealizedPnlUsd)}>
                           {p.unrealizedPnlUsd >= 0 ? "+" : ""}
@@ -1021,11 +1139,24 @@ export function LabPanel() {
                       </div>
                       <p className="mt-1 text-xs text-muted-foreground">
                         size {p.size} · entry {p.entryPx}
-                        {p.tp != null ? ` · TP ${p.tp}` : ""}
-                        {p.sl != null ? ` · SL ${p.sl}` : ""}
+                        {p.tp != null ? ` · TP ${p.tp}` : " · TP —"}
+                        {p.sl != null ? ` · SL ${p.sl}` : " · SL —"}
+                        {p.tpslSource ? ` · src ${p.tpslSource}` : ""}
                         {" · "}notionnel {p.positionValueUsd.toFixed(2)} $ · marge{" "}
                         {p.marginUsedUsd.toFixed(2)} $
                       </p>
+                      {p.nakedTpsl ? (
+                        <p className="mt-0.5 text-[11px] text-rose-700 dark:text-rose-300">
+                          Aucun TP/SL trigger sur Hyperliquid (Boriaz — réparation
+                          auto au cron).
+                        </p>
+                      ) : null}
+                      {p.journalMissing ? (
+                        <p className="mt-0.5 text-[11px] text-amber-800 dark:text-amber-300">
+                          Métadonnées journal absentes — toujours Boriaz (seul
+                          bot LIVE), pas un autre bot.
+                        </p>
+                      ) : null}
                       <p className="mt-0.5 text-xs">
                         <span className="text-emerald-700 dark:text-emerald-400">
                           Si TP{" "}
@@ -1169,19 +1300,9 @@ export function LabPanel() {
                           }
                         />
                         LIVE HL
-                        {pf.id === "default" ? (
-                          <span className="text-[10px] text-muted-foreground">
-                            (Défaut)
-                          </span>
-                        ) : pf.id === "boriaz" ? (
-                          <span className="text-[10px] text-muted-foreground">
-                            (Boriaz)
-                          </span>
-                        ) : isScalpPortfolio(pf) ? (
-                          <span className="text-[10px] text-muted-foreground">
-                            (Scalp · petites mises)
-                          </span>
-                        ) : null}
+                        <span className="text-[10px] text-muted-foreground">
+                          (Boriaz seul · illimité)
+                        </span>
                       </label>
                     ) : (
                       <span className="text-[10px] text-muted-foreground">
@@ -1202,10 +1323,10 @@ export function LabPanel() {
                 </div>
                 {pf.strategy === "smc" ? (
                   <p className="mt-2 text-xs text-muted-foreground">
-                    Bot SMC : D1→H4→H1→M15 · paper size sur capital simu · LIVE =
-                    2% du solde HL réel · TP1 1R (50 %+BE) · TP2 2R · gate
-                    ChatGPT (Claude off).
-                  </p>
+              Bot SMC ultra-strict : Continuation D1+H4 (M5/15/30) ·
+              Correction M15/M30 only · Sweep+BOS corps+FVG+ÔTE · 2 % ·
+              TP1 1R 50 %+BE · TP2 liq. ≥2R · LIMIT only · LIVE illimité.
+            </p>
                 ) : null}
                 {(() => {
                   const acc = computePaperAccount(paper, pf.bankrollEur, pf.id);
@@ -1423,10 +1544,11 @@ export function LabPanel() {
           <div>
             <h3 className="font-medium">Boriaz · Smart Money Concepts</h3>
             <p className="mt-1 text-sm text-muted-foreground">
-              Analyse top-down D1→H4→H1→M15. Entrée si structure SMC (sweep /
-              BOS + ÔTE, FVG recommandé). Risque exact 2 %. TP1 1R (50 %+
-              break-even) puis TP2 2R. Gate IA :{" "}
-              <code className="text-xs">ChatGPT</code> (Claude commenté / off).
+              Continuation D1+H4 (M5/M15/M30). Correction : SHORT si D1
+              haussier / LONG si D1 baissier — M15/M30 only. Checklist 100%
+              (Sweep + BOS corps + FVG + ÔTE) sinon AUCUN ORDRE. Risque 2 %.
+              SL 1–2 pips mèche · TP1 1R 50 %+BE · TP2 liq. ≥2R. Gate :{" "}
+              <code className="text-xs">ChatGPT</code>.
             </p>
           </div>
           <Button

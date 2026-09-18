@@ -6,13 +6,20 @@ export const runtime = "nodejs";
 /** Travail continue après la réponse HTTP (cron-job.org = 30s max). */
 export const maxDuration = 120;
 
-function authorized(request: Request): boolean {
+function authorized(request: Request): { ok: boolean; error?: string } {
   const secret = process.env.CRON_SECRET?.trim();
-  if (!secret) return true;
+  // Fail-closed (ARCHITECTURE_AUDIT / RISK) — sans secret le cron ne doit pas trader
+  if (!secret) {
+    return {
+      ok: false,
+      error: "CRON_SECRET manquant — cron refusé (fail-closed)",
+    };
+  }
   const header = request.headers.get("authorization") || "";
   const url = new URL(request.url);
   const q = url.searchParams.get("secret");
-  return header === `Bearer ${secret}` || q === secret;
+  if (header === `Bearer ${secret}` || q === secret) return { ok: true };
+  return { ok: false, error: "Unauthorized" };
 }
 
 function parsePhase(request: Request): CronPhase {
@@ -31,8 +38,12 @@ function parsePhase(request: Request): CronPhase {
  * - /api/cron?secret=XXX&phase=signals → seulement nouveaux signaux
  */
 export async function GET(request: Request) {
-  if (!authorized(request)) {
-    return Response.json({ error: "Unauthorized" }, { status: 401 });
+  const auth = authorized(request);
+  if (!auth.ok) {
+    return Response.json(
+      { error: auth.error || "Unauthorized" },
+      { status: auth.error?.includes("CRON_SECRET") ? 503 : 401 },
+    );
   }
 
   const phase = parsePhase(request);

@@ -1,16 +1,15 @@
 import { after } from "next/server";
-import { runCronWork } from "@/lib/cron-runner";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-export const maxDuration = 90;
+export const maxDuration = 60;
 
 function authorized(request: Request): { ok: boolean; error?: string } {
   const secret = process.env.CRON_SECRET?.trim();
   if (!secret) {
     return {
       ok: false,
-      error: "CRON_SECRET manquant — cron/manage refusé (fail-closed)",
+      error: "CRON_SECRET manquant — cron/zone refusé (fail-closed)",
     };
   }
   const header = request.headers.get("authorization") || "";
@@ -21,8 +20,8 @@ function authorized(request: Request): { ok: boolean; error?: string } {
 }
 
 /**
- * Job léger dédié aux trades déjà ouverts (paper + live SMC).
- * ACK immédiat → compatible timeout cron-job.org 30s.
+ * Poll rapide zones armées (mid ∈ ÔTE) → force scan.
+ * Remplace un worker WS sur Vercel.
  */
 export async function GET(request: Request) {
   const auth = authorized(request);
@@ -36,17 +35,24 @@ export async function GET(request: Request) {
   const startedAt = Date.now();
   after(async () => {
     try {
-      await runCronWork("manage");
-      console.info("cron/manage after done", { ms: Date.now() - startedAt });
+      const { checkArmedZonesAndScan } = await import("@/lib/zone-watch");
+      const { cleanupStaleLiveLimits } = await import("@/lib/live-cleanup");
+      const zone = await checkArmedZonesAndScan();
+      const cleanup = await cleanupStaleLiveLimits();
+      console.info("cron/zone after done", {
+        ms: Date.now() - startedAt,
+        zone,
+        cleanupCancelled: cleanup.cancelled,
+      });
     } catch (e) {
-      console.error("cron/manage after failed", e);
+      console.error("cron/zone after failed", e);
     }
   });
 
   return Response.json({
     ok: true,
     accepted: true,
-    phase: "manage",
+    phase: "zone",
     mode: "ack-after",
     at: startedAt,
   });

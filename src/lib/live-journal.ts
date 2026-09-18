@@ -22,7 +22,7 @@ export type LiveJournalEntry = {
   entry: number;
   tp: number;
   sl: number;
-  /** TP1 SMC (1R) — clôture 50% + BE comme paper. */
+  /** TP1 SMC (1R) — clôture 20%, SL structurel (pas BE), 80% runner. */
   tp1?: number | null;
   tp2?: number | null;
   tp1Hit?: boolean;

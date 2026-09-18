@@ -8,7 +8,7 @@ import { sendTelegramMessage } from "./telegram";
 import { correlateSetup } from "./signal-score";
 import { computeAlignment, type AlignmentScore } from "./alignment";
 import { stabilizeDirection } from "./signal-sticky";
-import { kvGetJson, kvSetJsonEx } from "./kv";
+import { kvDel, kvGetJson, kvSetJsonEx } from "./kv";
 import {
   aggregatePaperAccount,
   appendBook,
@@ -20,6 +20,7 @@ import {
   openPaperTrade,
   loadPaperTrades,
   loadBook,
+  persistUserId,
   savePaperTrades,
   storageInfo,
   type PaperAccount,
@@ -36,6 +37,7 @@ import {
   scalpLiveRiskPct,
 } from "./user-types";
 import type { BuyTimingAction, SignalBias } from "./types";
+import { SMC_TP1_CLOSE_FRAC } from "./smc";
 
 export interface DirectionSignal {
   coin: string;
@@ -97,6 +99,16 @@ const TG_COOLDOWN = 8 * 60_000;
 let cache: { at: number; value: TradeSignalPayload } | null = null;
 let lastTgKey = "";
 let lastTgAt = 0;
+
+function tradeSignalsCacheKey(): string {
+  return `boriaz:trade-signals-v1:${persistUserId()}`;
+}
+
+/** Invalide le cache signaux (mémoire + KV) après manage — garde manageSnapshot à jour. */
+export function invalidateTradeSignalsCache(): void {
+  cache = null;
+  void kvDel(tradeSignalsCacheKey());
+}
 
 function leverageFor(confidence: number, adx: number | null, maxLev: number): string {
   let sug = 1;
@@ -343,7 +355,7 @@ Trade proposé: ${JSON.stringify(candidate)}`;
   }
 }
 
-const PENDING_EXPIRE_MS = 18 * 3600_000;
+const PENDING_EXPIRE_MS = 6 * 3600_000;
 
 async function refreshPaperTrades(
   prices: Record<string, number>,
@@ -364,7 +376,7 @@ async function refreshPaperTrades(
         t.closedAt = now;
         t.pnlPct = 0;
         t.pnlEur = 0;
-        t.note = "Limite non touchée sous 18h — expirée";
+        t.note = "Limite non touchée sous 6h — expirée (structure morte)";
         closes.push({ ...t });
         continue;
       }
@@ -398,7 +410,7 @@ async function refreshPaperTrades(
     t.pnlPct = pnlPct;
     t.pnlEur = pnlEur;
 
-    // SMC : TP1 (1R) → clôturer 50 % + Break-Even, puis TP2 sur le reste
+    // SMC : TP1 (1R) → clôturer 20 %, SL structurel inchangé (pas de BE), 80% → TP2
     const tp1 = t.tp1 != null && t.tp1 > 0 ? t.tp1 : null;
     const tp2 = t.tp2 != null && t.tp2 > 0 ? t.tp2 : null;
     const isSmc = t.strategy === "smc" || (tp1 != null && tp2 != null);
@@ -407,22 +419,24 @@ async function refreshPaperTrades(
       const hitTp1 =
         t.side === "long" ? px >= tp1 : px <= tp1;
       if (hitTp1) {
-        const halfMargin = t.marginEur * 0.5;
+        const closeFrac = SMC_TP1_CLOSE_FRAC;
+        const keepFrac = 1 - closeFrac;
+        const closeMargin = t.marginEur * closeFrac;
         const halfMove =
           t.side === "long"
             ? ((tp1 - t.entry) / t.entry) * 100
             : ((t.entry - tp1) / t.entry) * 100;
-        const halfPnl = halfMargin * ((halfMove * t.leverage) / 100);
-        const halfFees = (t.feesEur ?? 0) * 0.5;
-        t.realizedPartialEur = (t.realizedPartialEur ?? 0) + halfPnl - halfFees;
-        t.marginEur = halfMargin;
-        t.notionalEur = halfMargin * t.leverage;
-        t.remainingQtyPct = 0.5;
+        const closePnl = closeMargin * ((halfMove * t.leverage) / 100);
+        const closeFees = (t.feesEur ?? 0) * closeFrac;
+        t.realizedPartialEur = (t.realizedPartialEur ?? 0) + closePnl - closeFees;
+        t.marginEur = t.marginEur * keepFrac;
+        t.notionalEur = t.marginEur * t.leverage;
+        t.remainingQtyPct = keepFrac;
         t.tp1Hit = true;
-        t.sl = t.entry; // Break-even absolu
+        // SL structurel conservé — plus de BE qui coupe les runners
         t.tp = tp2 ?? t.tp;
-        t.feesEur = halfFees; // frais restants sur demi-position
-        t.note = `TP1 50% @ ${tp1} (+${(halfPnl - halfFees).toFixed(2)} €) · SL → BE · vise TP2`;
+        t.feesEur = (t.feesEur ?? 0) * keepFrac;
+        t.note = `TP1 ${Math.round(closeFrac * 100)}% @ ${tp1} (+${(closePnl - closeFees).toFixed(2)} €) · SL structurel · ${Math.round(keepFrac * 100)}% vise TP2`;
         t.pnlEur =
           t.realizedPartialEur +
           t.marginEur * (pnlPct / 100) -
@@ -431,7 +445,7 @@ async function refreshPaperTrades(
       }
     }
 
-    // SL / TP final (TP2 après BE, ou TP simple)
+    // SL / TP final (TP2 après TP1, ou TP simple)
     const activeTp = t.tp1Hit && tp2 != null ? tp2 : t.tp;
     let hit: PaperTrade["status"] | null = null;
     if (t.side === "long") {
@@ -448,12 +462,11 @@ async function refreshPaperTrades(
       const finalUnreal = t.marginEur * (pnlPct / 100) - (t.feesEur ?? 0);
       const totalEur = (t.realizedPartialEur ?? 0) + finalUnreal;
       t.pnlEur = totalEur;
-      const beNote = t.tp1Hit && hit === "sl" ? " (BE après TP1)" : "";
       t.note =
         hit === "tp"
           ? `${t.tp1Hit ? "TP2" : "TP"} touché — +${totalEur.toFixed(2)} €`
           : hit === "sl"
-            ? `SL touché${beNote} — ${totalEur.toFixed(2)} €`
+            ? `SL touché — ${totalEur.toFixed(2)} €`
             : `Invalidation — fermeture ${totalEur.toFixed(2)} €`;
       closes.push({ ...t });
     } else if (pnlPct <= -4 && !t.tp1Hit) {
@@ -486,15 +499,44 @@ export async function getTradeSignals(options?: {
   const cacheTtl = liveArmed ? CACHE_TTL_LIVE : CACHE_TTL_IDLE;
 
   if (!options?.force && cache && Date.now() - cache.at < cacheTtl) {
+    // Paper depuis disk : manageSnapshot ne doit pas rester figé dans le cache
+    try {
+      const freshPaper = await loadPaperTrades();
+      const prefsFresh = await loadPrefs();
+      cache.value = {
+        ...cache.value,
+        paper: freshPaper.slice(0, 40),
+        account: aggregatePaperAccount(
+          freshPaper,
+          ensurePortfolios(prefsFresh.portfolios),
+        ),
+      };
+    } catch {
+      /* garde cache.value */
+    }
     return cache.value;
   }
 
   // Cache Upstash : survit aux cold starts Vercel (mémoire process seule = 504 fréquents)
   if (!options?.force) {
     const shared = await kvGetJson<{ at: number; value: TradeSignalPayload }>(
-      "boriaz:trade-signals-v1",
+      tradeSignalsCacheKey(),
     );
     if (shared && Date.now() - shared.at < cacheTtl) {
+      try {
+        const freshPaper = await loadPaperTrades();
+        const prefsFresh = await loadPrefs();
+        shared.value = {
+          ...shared.value,
+          paper: freshPaper.slice(0, 40),
+          account: aggregatePaperAccount(
+            freshPaper,
+            ensurePortfolios(prefsFresh.portfolios),
+          ),
+        };
+      } catch {
+        /* garde shared.value */
+      }
       cache = { at: shared.at, value: shared.value };
       return shared.value;
     }
@@ -522,7 +564,7 @@ export async function getTradeSignals(options?: {
 
   const { paper, closes } = await refreshPaperTrades(priceMap);
 
-  // Miroir paper SMC sur le LIVE : TP1 50% → SL→BE → vise TP2
+  // Miroir paper SMC sur le LIVE : TP1 20% → SL structurel → 80% vise TP2 (pas de BE)
   try {
     const { manageLiveSmcPositions } = await import("./hl-live");
     const managed = await manageLiveSmcPositions();
@@ -1268,93 +1310,7 @@ export async function getTradeSignals(options?: {
         justification,
         strategy: "alignment",
       });
-      // LIVE Hyperliquid — Défaut / Boriaz / Scalp (toggle Lab).
-      // Risqué & autres = jamais. Scalp = petites mises (riskPct ~0.25%).
-      if (
-        opened &&
-        !opened.note.includes("Cash insuffisant") &&
-        portfolioAllowsLive(pf) &&
-        (pf.id === "boriaz" ||
-          (prefs.liveTradeEnabled && pf.liveTradeEnabled))
-      ) {
-        try {
-          const { placeBoriazLiveTrade, placeBoriazLiveTradeMirrored } =
-            await import("./hl-live");
-          const { loadPaperTrades, savePaperTrades } = await import("./persist");
-          const scalp = isScalpPortfolio(pf);
-          const place =
-            pf.id === "boriaz"
-              ? placeBoriazLiveTradeMirrored
-              : placeBoriazLiveTrade;
-          const liveRiskPct = scalp
-            ? scalpLiveRiskPct(pf.riskPct)
-            : (pf.riskPct ?? 2);
-          // Scalp : taille paper déjà petite ; live = riskPct minuscule (pas miroir plein)
-          const live = await place({
-            coin: chosen.coin,
-            side,
-            entry: chosen.entry!,
-            tp: chosen.tp!,
-            sl: chosen.sl!,
-            leverage: scalp ? Math.min(levNum, 3) : levNum,
-            riskPct: liveRiskPct,
-            entryMode:
-              chosen.entryMode === "limit_wait" ? "limit_wait" : "market_now",
-            paperId: opened.id,
-            portfolioId: pf.id,
-            portfolioName: pf.name,
-            strategy: "alignment",
-            paperMarginEur: scalp
-              ? Math.min(opened.marginEur, pf.bankrollEur * 0.01)
-              : opened.marginEur,
-            paperBankrollEur: pf.bankrollEur,
-            mirrorPaper: pf.id === "boriaz",
-          });
-          if (live.ok) {
-            const bot = live.botLabel || pf.name;
-            const tpTxt =
-              live.tpPnlUsd != null ? ` · si TP ${live.tpPnlUsd >= 0 ? "+" : ""}${live.tpPnlUsd.toFixed(2)}$` : "";
-            const slTxt =
-              live.slPnlUsd != null ? ` · si SL ${live.slPnlUsd >= 0 ? "+" : ""}${live.slPnlUsd.toFixed(2)}$` : "";
-            opened.note = `${opened.note} · LIVE HL [${bot}] size=${live.size} entryOid=${live.entryOid ?? "?"}${tpTxt}${slTxt}`;
-            try {
-              const all = await loadPaperTrades();
-              const row = all.find((t) => t.id === opened.id);
-              if (row) {
-                row.note = opened.note;
-                await savePaperTrades(all);
-              }
-            } catch {
-              /* ignore */
-            }
-            if (notify && !hush) {
-              await sendTelegramMessage(
-                [
-                  `LIVE ${pf.name.toUpperCase()} · ${side.toUpperCase()} ${chosen.coin}`,
-                  `Size ${live.size} · entryOid ${live.entryOid ?? "—"}`,
-                  live.tpPnlUsd != null
-                    ? `Si TP ${live.tpPnlUsd >= 0 ? "+" : ""}${live.tpPnlUsd.toFixed(2)}$ · Si SL ${live.slPnlUsd != null && live.slPnlUsd >= 0 ? "+" : ""}${(live.slPnlUsd ?? 0).toFixed(2)}$`
-                    : live.reason
-                      ? `Sizing: ${live.reason}`
-                      : "Sizing: 2% equity HL",
-                  "Ordre réel Hyperliquid — vérifie sur l’app HL.",
-                ].join("\n"),
-              );
-            }
-          } else if (!live.skipped) {
-            console.error("LIVE alignment order failed", live.reason);
-            if (notify && !hush) {
-              await sendTelegramMessage(
-                `LIVE ${pf.name} ÉCHEC · ${chosen.coin}: ${live.reason || "erreur"}`,
-              );
-            }
-          } else {
-            console.info("LIVE alignment skipped", live.reason);
-          }
-        } catch (e) {
-          console.error("LIVE alignment exception", e);
-        }
-      }
+      // LIVE : uniquement Boriaz SMC (plus bas). Défaut / Scalp = paper only.
 
       if (opened && !opened.note.includes("Cash insuffisant")) {
         anyOpened = true;
@@ -1415,12 +1371,41 @@ export async function getTradeSignals(options?: {
           !setup ||
           !setup.order ||
           !setup.risk ||
-          !setup.checklist.allPass ||
-          !smcScan.aiApproved
+          !setup.checklist.allPass
         ) {
           continue;
         }
-        if (setup.status === "ANNULÉ") continue;
+        const isReady = setup.status === "ORDRE PRÊT À ÊTRE EXÉCUTÉ";
+        const isWaiting = setup.status === "EN ATTENTE DE RETRACEMENT";
+        // Paper : ORDRE PRÊT (IA) ; EN ATTENTE continuation (pré-arm)
+        // LIVE : ORDRE PRÊT ou EN ATTENTE continuation + IA (GTC en zone)
+        if (!isReady && !isWaiting) continue;
+        if (!smcScan.aiApproved) continue;
+        if (
+          isWaiting &&
+          (setup.tradeKind === "correction" || setup.counterTrend)
+        ) {
+          continue;
+        }
+        if (setup.order.entryMode !== "limit_wait") continue;
+
+        // Range BTC/coin — FAIRE GAGNER : pas de short bas de range
+        try {
+          const { getTradeRangeGate } = await import("./btc-range");
+          const rg = await getTradeRangeGate({
+            coin: setup.coin,
+            side: setup.order.side,
+            price: setup.price,
+            tradeKind: setup.tradeKind,
+          });
+          if (!rg.ok) {
+            console.info("SMC range refuse paper/live", rg.reason);
+            continue;
+          }
+        } catch (e) {
+          console.info("SMC range skip", e);
+          continue;
+        }
 
         const acc = computePaperAccount(paperForCheck, pf.bankrollEur, pf.id);
         if (
@@ -1440,24 +1425,44 @@ export async function getTradeSignals(options?: {
         }
 
         const justification: TradeJustification = {
-          summary: `SMC Boriaz ${setup.order.side.toUpperCase()} ${setup.coin} · structure OK · risque ${setup.risk.riskPct}% · gate ChatGPT`,
+          summary: isWaiting
+            ? `SMC Boriaz ${setup.order.side.toUpperCase()} ${setup.coin} · EN ATTENTE · pré-arm GTC zone`
+            : `SMC Boriaz ${setup.order.side.toUpperCase()} ${setup.coin} · structure OK · risque ${setup.risk.riskPct}% · gate ChatGPT`,
           bullets: [
-            `Stratégie SMC top-down D1→H4→H1→M15`,
+            `Stratégie SMC Boriaz · exec ${setup.execTimeframe ?? "15m"}`,
+            isWaiting
+              ? "Statut EN ATTENTE — limite GTC pré-armée (paper+LIVE si éligible)"
+              : "Statut ORDRE PRÊT — exécution possible",
+            setup.signalType === "short_counter_trend"
+              ? "SHORT correction (retracement) · M15/M30 only"
+              : setup.signalType === "long_counter_trend"
+                ? "LONG correction (retracement) · M15/M30 only"
+                : setup.signalType === "long_aligned"
+                  ? "LONG continuation D1+H4"
+                  : setup.signalType === "short_aligned"
+                    ? "SHORT continuation D1+H4"
+                    : `Signal ${setup.signalType ?? setup.order.side}`,
+            setup.tradeKind === "correction"
+              ? "Kind correction — M5 interdit"
+              : "Kind continuation — M5/M15/M30 OK",
             `MTF ${setup.bias.d1}/${setup.bias.h4}/${setup.bias.h1}`,
             setup.liquidityLevel != null
               ? `Liquidity sweep @ ${setup.liquidityLevel}`
               : setup.checklist.liquiditySweep
                 ? "Liquidity sweep validé"
-                : "Sweep soft / BOS",
-            setup.checklist.chochBos ? "CHoCH + BOS" : "Structure soft",
+                : "Sweep manquant",
+            setup.checklist.chochBos ? "CHoCH + BOS validé" : "CHoCH/BOS manquant",
             setup.fvg
               ? `FVG ${setup.fvg.low}–${setup.fvg.high}`
-              : "FVG optionnel",
+              : "FVG manquant",
             setup.ote
               ? `ÔTE ${setup.ote.low}–${setup.ote.high} (idéal ${setup.ote.ideal})`
-              : "ÔTE",
-            `Risque ${setup.risk.riskEur.toFixed(2)} € (2%) · notionnel ${setup.risk.notionalEur} €`,
-            `TP1 1R 50%+BE · TP2 2R`,
+              : "ÔTE manquant",
+            `Risque ${setup.risk.riskEur.toFixed(2)} $ (${setup.risk.riskPct}%) · notionnel ${setup.risk.notionalEur} $`,
+            `TP1 1R 20% · runner 80% · SL structurel (pas BE) · TP2 ≥2R`,
+            smcScan.liveEligible
+              ? "LIVE éligible (IA + zone/pré-arm)"
+              : "LIVE non éligible pour l’instant",
             smcScan.aiNote || "Gate ChatGPT",
           ],
           alignmentScore: setup.confidence,
@@ -1470,7 +1475,7 @@ export async function getTradeSignals(options?: {
           smcReport: smcScan.aiReport || setup.report,
         };
 
-        const opened = await openPaperTrade({
+        let opened = await openPaperTrade({
           openedAt: Date.now(),
           coin: setup.coin,
           side: setup.order.side,
@@ -1491,18 +1496,93 @@ export async function getTradeSignals(options?: {
           portfolioName: pf.name,
           justification,
           strategy: "smc",
-          riskPct: 2,
+          riskPct: setup.risk.riskPct,
         });
 
-        // LIVE Hyperliquid — OBLIGATOIRE dès qu’un paper Boriaz ouvre
-        // (toggles Lab ignorés ; kill-switch env HL_LIVE_ENABLED reste).
-        // Marge live = même % du solde réel que le paper a engagé.
+        // Pending déjà là (souvent EN ATTENTE) → réutiliser pour promouvoir LIVE
+        if (!opened && pf.id === "boriaz" && setup.order) {
+          const order = setup.order;
+          const existing = paperForCheck.find(
+            (t) =>
+              (t.portfolioId || "default") === pf.id &&
+              t.coin === setup.coin &&
+              t.side === order.side &&
+              (t.status === "pending" || t.status === "open") &&
+              t.strategy === "smc",
+          );
+          if (existing) {
+            // Mettre à jour niveaux si EN ATTENTE / structure a bougé
+            existing.entry = order.entry;
+            existing.sl = order.sl;
+            existing.tp = order.tp2;
+            existing.tp1 = order.tp1;
+            existing.tp2 = order.tp2;
+            existing.note = `${justification.summary} · promote LIVE`;
+            existing.justification = justification;
+            existing.riskPct = setup.risk.riskPct;
+            existing.leverage = setup.risk.leverage;
+            existing.marginEur = setup.risk.marginEur;
+            existing.notionalEur = setup.risk.notionalEur;
+            try {
+              const { loadPaperTrades, savePaperTrades } = await import(
+                "./persist"
+              );
+              const all = await loadPaperTrades();
+              const row = all.find((t) => t.id === existing.id);
+              if (row) {
+                Object.assign(row, existing);
+                await savePaperTrades(all);
+              }
+            } catch {
+              /* ignore */
+            }
+            opened = existing;
+          }
+        }
+
+        // LIVE Hyperliquid — ORDRE PRÊT ou pré-arm EN ATTENTE continuation
         if (
           opened &&
           pf.id === "boriaz" &&
+          smcScan.liveEligible &&
           !opened.note.includes("Cash insuffisant")
         ) {
           try {
+            const {
+              validateLiveSmcBeforePlace,
+              noteLiveOpen,
+            } = await import("./smc-live-gate");
+            const gate = await validateLiveSmcBeforePlace({
+              setup,
+              scan: smcScan,
+            });
+            if (!gate.ok) {
+              console.info("LIVE Boriaz gate refuse", gate.reason, gate.checks);
+              if (notify && !hush) {
+                await sendTelegramMessage(
+                  [
+                    `LIVE BORIAZ REFUS (réflexion) · ${setup.coin}`,
+                    gate.reason,
+                    gate.checks.slice(0, 6).join(" · ") || "—",
+                    "Paper ouvert — LIVE non placé.",
+                  ].join("\n"),
+                );
+              }
+              opened.note = `${opened.note} · LIVE refusé: ${gate.reason}`;
+              try {
+                const { loadPaperTrades, savePaperTrades } = await import(
+                  "./persist"
+                );
+                const all = await loadPaperTrades();
+                const row = all.find((t) => t.id === opened.id);
+                if (row) {
+                  row.note = opened.note;
+                  await savePaperTrades(all);
+                }
+              } catch {
+                /* ignore */
+              }
+            } else {
             const { placeBoriazLiveTradeMirrored } = await import("./hl-live");
             const { loadPaperTrades, savePaperTrades } = await import("./persist");
             const live = await placeBoriazLiveTradeMirrored({
@@ -1514,11 +1594,8 @@ export async function getTradeSignals(options?: {
               tp1: setup.order.tp1,
               tp2: setup.order.tp2,
               leverage: setup.risk.leverage,
-              riskPct: pf.riskPct ?? 2,
-              entryMode:
-                setup.order.entryMode === "limit_wait"
-                  ? "limit_wait"
-                  : "market_now",
+              riskPct: setup.risk.riskPct,
+              entryMode: "limit_wait",
               paperId: opened.id,
               portfolioId: pf.id,
               portfolioName: pf.name,
@@ -1528,7 +1605,39 @@ export async function getTradeSignals(options?: {
               mirrorPaper: true,
             });
             if (live.ok) {
+              noteLiveOpen(setup.coin);
+              // Armer zone watch : scan forcé dès que mid entre dans ÔTE
+              try {
+                const { saveArmedZone } = await import("./zone-watch");
+                const zLo = Math.min(
+                  setup.ote?.low ?? setup.order.entry,
+                  setup.fvg?.low ?? setup.order.entry,
+                );
+                const zHi = Math.max(
+                  setup.ote?.high ?? setup.order.entry,
+                  setup.fvg?.high ?? setup.order.entry,
+                );
+                await saveArmedZone({
+                  coin: setup.coin,
+                  side: setup.order.side,
+                  zoneLow: zLo,
+                  zoneHigh: zHi,
+                  entry: setup.order.entry,
+                  tp1: setup.order.tp1,
+                  sl: setup.order.sl,
+                  at: Date.now(),
+                  paperId: opened.id,
+                });
+              } catch {
+                /* zone watch best-effort */
+              }
               const bot = live.botLabel || "Boriaz";
+              const style =
+                setup.entryStyle === "shallow"
+                  ? "shallow 0.5–0.618"
+                  : setup.h4Lead
+                    ? "H4-lead"
+                    : "deep ÔTE";
               const tpTxt =
                 live.tpPnlUsd != null
                   ? ` · si TP ${live.tpPnlUsd >= 0 ? "+" : ""}${live.tpPnlUsd.toFixed(2)}$`
@@ -1537,7 +1646,7 @@ export async function getTradeSignals(options?: {
                 live.slPnlUsd != null
                   ? ` · si SL ${live.slPnlUsd >= 0 ? "+" : ""}${live.slPnlUsd.toFixed(2)}$`
                   : "";
-              opened.note = `${opened.note} · LIVE HL [${bot}] size=${live.size} entryOid=${live.entryOid ?? "?"}${tpTxt}${slTxt}`;
+              opened.note = `${opened.note} · LIVE HL [${bot}] ${style} size=${live.size} entryOid=${live.entryOid ?? "?"}${tpTxt}${slTxt}`;
               try {
                 const all = await loadPaperTrades();
                 const row = all.find((t) => t.id === opened.id);
@@ -1554,6 +1663,7 @@ export async function getTradeSignals(options?: {
                     `LIVE BORIAZ · ${setup.order.side.toUpperCase()} ${setup.coin}`,
                     `Size ${live.size} · entryOid ${live.entryOid ?? "—"}`,
                     `TP oid ${live.tpOid ?? "—"} · SL oid ${live.slOid ?? "—"}`,
+                    `Gate: ${gate.checks.slice(0, 4).join(" · ")}`,
                     live.tpPnlUsd != null
                       ? `Si TP ${live.tpPnlUsd >= 0 ? "+" : ""}${live.tpPnlUsd.toFixed(2)}$ · Si SL ${live.slPnlUsd != null && live.slPnlUsd >= 0 ? "+" : ""}${(live.slPnlUsd ?? 0).toFixed(2)}$`
                       : live.reason
@@ -1578,6 +1688,7 @@ export async function getTradeSignals(options?: {
                 );
               }
             }
+            } // end gate.ok else
           } catch (e) {
             console.error("LIVE Boriaz exception", e);
             if (notify && !hush) {
@@ -1634,7 +1745,7 @@ export async function getTradeSignals(options?: {
                   `SMC BORIAZ · ${setup.order.side.toUpperCase()} ${setup.coin}`,
                   setup.status,
                   `E ${setup.order.entry} · SL ${setup.order.sl}`,
-                  `TP1 ${setup.order.tp1} (50%+BE) · TP2 ${setup.order.tp2}`,
+                  `TP1 ${setup.order.tp1} (20%) · TP2 ${setup.order.tp2} · risque ${setup.risk.riskPct}%`,
                   `Risque 2% = ${setup.risk.riskEur.toFixed(2)} €`,
                   smcScan.aiNote || "",
                   "",
@@ -1722,7 +1833,7 @@ export async function getTradeSignals(options?: {
   };
   cache = { at: Date.now(), value };
   void kvSetJsonEx(
-    "boriaz:trade-signals-v1",
+    tradeSignalsCacheKey(),
     { at: cache.at, value },
     Math.ceil(cacheTtl / 1000),
   );

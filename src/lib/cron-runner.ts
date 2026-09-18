@@ -26,6 +26,14 @@ export async function runCronWork(phase: CronPhase = "all"): Promise<{
   // 1) PRIORITÉ : trades déjà ouverts (paper + live SMC) — avant le reste
   if (wantManage) {
     try {
+      // Réconciliation HL ↔ journal (RISK_MANAGEMENT) — bloque nouvelles entrées si divergences
+      try {
+        const { reconcileLiveVsJournal } = await import("@/lib/arch-guards");
+        results.reconcile = await reconcileLiveVsJournal();
+      } catch (e) {
+        results.reconcileError = e instanceof Error ? e.message : "reconcile";
+      }
+
       const { manageOpenTrades } = await import("@/lib/manage-trades");
       const { manageLiveSmcPositions } = await import("@/lib/hl-live");
       const { listUserIds } = await import("@/lib/accounts");
@@ -38,6 +46,18 @@ export async function runCronWork(phase: CronPhase = "all"): Promise<{
         manage.liveSmc = await manageLiveSmcPositions();
       } catch (e) {
         manage.liveSmcError = e instanceof Error ? e.message : "liveSmc";
+      }
+      try {
+        const { cleanupStaleLiveLimits } = await import("@/lib/live-cleanup");
+        manage.liveCleanup = await cleanupStaleLiveLimits();
+      } catch (e) {
+        manage.liveCleanupError = e instanceof Error ? e.message : "cleanup";
+      }
+      try {
+        const { checkArmedZonesAndScan } = await import("@/lib/zone-watch");
+        manage.zoneWatch = await checkArmedZonesAndScan();
+      } catch (e) {
+        manage.zoneWatchError = e instanceof Error ? e.message : "zone";
       }
       try {
         const { manageLivePositionReviews } = await import(
@@ -94,6 +114,14 @@ export async function runCronWork(phase: CronPhase = "all"): Promise<{
           reason: liveReady.reason ?? null,
         },
       };
+      // Après signaux : repair TP/SL nues (nouvelles entrées du tick)
+      try {
+        const { repairNakedLiveTpsl } = await import("@/lib/hl-live");
+        results.liveRepairAfterSignals = await repairNakedLiveTpsl();
+      } catch (e) {
+        results.liveRepairAfterSignalsError =
+          e instanceof Error ? e.message : "repair";
+      }
     } catch (e) {
       results.signalsError = e instanceof Error ? e.message : "signals";
     }

@@ -26,6 +26,9 @@ import { dataPath, ensureDataDir } from "./data-dir";
 const SNAPS_KEY = "boriazbot:hl-live-manage-snaps";
 const memSnaps = new Map<string, string>();
 
+/** Budget TF par coin — le poll UI ne doit pas rester bloqué. */
+const FRAMES_TIMEOUT_MS = 8_000;
+
 export type LiveManageDecision = {
   coin: string;
   side: "long" | "short";
@@ -163,6 +166,78 @@ function stubPaperFromLive(input: {
   };
 }
 
+
+async function analyzeFramesWithTimeout(
+  coin: string,
+  ms: number,
+): Promise<TimeframeFrame[]> {
+  try {
+    return await Promise.race([
+      analyzeCoinFrames(coin, [
+        { interval: "15m", horizon: "très court (15m)" },
+        { interval: "1h", horizon: "court (1h)" },
+        { interval: "4h", horizon: "moyen (4h)" },
+      ]),
+      new Promise<TimeframeFrame[]>((resolve) =>
+        setTimeout(() => resolve([]), ms),
+      ),
+    ]);
+  } catch {
+    return [];
+  }
+}
+
+function buildLiveFallbackSnapshot(input: {
+  side: "long" | "short";
+  price: number;
+  pnlUsd: number;
+  pnlPct: number;
+  previous: TradeManageSnapshot | null;
+}): TradeManageSnapshot {
+  const { side, price, pnlUsd, pnlPct, previous } = input;
+  const sign = pnlUsd >= 0 ? "+" : "";
+  const action = previous?.action ?? (pnlPct <= -8 ? "wait" : "hold");
+  return {
+    at: Date.now(),
+    action,
+    reason: (
+      previous?.reason ??
+      `Live ${side.toUpperCase()} · mid ${price} · PnL ${sign}${pnlUsd.toFixed(2)} $ (${sign}${pnlPct.toFixed(1)} %)`
+    ).slice(0, 280),
+    price,
+    pnlEur: Math.round(pnlUsd * 100) / 100,
+    pnlPct: Math.round(pnlPct * 100) / 100,
+    bias1h: previous?.bias1h ?? "neutre",
+    bias4h: previous?.bias4h ?? "neutre",
+    bias15m: previous?.bias15m,
+    support: previous?.support ?? null,
+    resistance: previous?.resistance ?? null,
+    providers: previous
+      ? Array.from(new Set([...(previous.providers ?? []), "mid+PnL"]))
+      : ["mid+PnL"],
+    outlook: (
+      previous?.outlook ??
+      (pnlUsd >= 0
+        ? "Position en gain — laisser courir, surveiller structure au prochain scan."
+        : "Position en perte — attendre confirmation multi-TF avant de couper.")
+    ).slice(0, 280),
+    side,
+    currency: "$",
+    bullets: [
+      `${side.toUpperCase()} live · PnL ${sign}${pnlUsd.toFixed(2)} $ (${sign}${pnlPct.toFixed(1)} %)`,
+      `Spot ~${price}`,
+      previous
+        ? "Dernier avis conservé — TF/SMC en rafraîchissement"
+        : "Analyse mid+PnL immédiate — structure TF dès que HL répond",
+      ...(previous?.bullets ?? []),
+    ].slice(0, 8),
+    smc: previous?.smc ?? null,
+    rawAction: previous?.rawAction,
+    actionSince: previous?.actionSince,
+    confirmCount: previous?.confirmCount,
+  };
+}
+
 /**
  * Relit chaque position HL ouverte : mid + TF + PnL $ → snapshot.
  * Advisory only — aucune clôture HL ici.
@@ -171,6 +246,11 @@ export async function manageLivePositionReviews(opts?: {
   notify?: boolean;
   max?: number;
   skipAi?: boolean;
+  /** Skip FVG/BOS (poll UI ~45s) — évite 429 HL. */
+  skipSmc?: boolean;
+  /** Forcer la relecture d’une seule position. */
+  coin?: string;
+  side?: "long" | "short";
 }): Promise<LiveManageResult> {
   const prefs = await loadPrefs();
   const notify =
@@ -187,6 +267,17 @@ export async function manageLivePositionReviews(opts?: {
     };
   }
 
+  // Positions nues (sans TP/SL HL) → re-place d’urgence avant l’analyse
+  try {
+    const { repairNakedLiveTpsl } = await import("./hl-live");
+    const repaired = await repairNakedLiveTpsl();
+    if (repaired.updated > 0) {
+      console.info("LIVE repair TP/SL", repaired.notes.join(" | "));
+    }
+  } catch (e) {
+    console.info("LIVE repair TP/SL skip", e);
+  }
+
   let openJournal = await syncLiveJournalWithPositions(
     portfolio.positions.map((p) => ({ coin: p.coin, side: p.side })),
   );
@@ -199,111 +290,205 @@ export async function manageLivePositionReviews(opts?: {
   const notes: string[] = [];
   let aiUsed = false;
   const max = opts?.max ?? 8;
+  const filterCoin = opts?.coin?.trim().toUpperCase() || null;
+  const filterSide = opts?.side ?? null;
 
-  for (const pos of portfolio.positions.slice(0, max)) {
-    const j = matchJournalToPosition(openJournal, pos.coin, pos.side);
-    const entryPx = j?.entry && j.entry > 0 ? j.entry : pos.entryPx;
-    const tp = j?.tp && j.tp > 0 ? j.tp : entryPx * (pos.side === "long" ? 1.02 : 0.98);
-    const sl = j?.sl && j.sl > 0 ? j.sl : entryPx * (pos.side === "long" ? 0.98 : 1.02);
+  const positions = portfolio.positions.filter((p) => {
+    if (filterCoin && p.coin.toUpperCase() !== filterCoin) return false;
+    if (filterSide && p.side !== filterSide) return false;
+    return true;
+  });
 
-    let frames: TimeframeFrame[] = [];
+  for (const pos of positions.slice(0, max)) {
+    const key = snapKey(pos.coin, pos.side);
     try {
-      frames = await analyzeCoinFrames(pos.coin, [
-        { interval: "15m", horizon: "très court (15m)" },
-        { interval: "1h", horizon: "court (1h)" },
-        { interval: "4h", horizon: "moyen (4h)" },
-      ]);
-    } catch {
-      frames = [];
-    }
-    if (!frames.length) continue;
+      const j = matchJournalToPosition(openJournal, pos.coin, pos.side);
+      const entryPx = j?.entry && j.entry > 0 ? j.entry : pos.entryPx;
+      const hasRealTp = Boolean(j?.tp && j.tp > 0);
+      const hasRealSl = Boolean(j?.sl && j.sl > 0);
+      const levelsAreReal = hasRealTp && hasRealSl;
+      const tp = hasRealTp
+        ? j!.tp
+        : entryPx * (pos.side === "long" ? 1.25 : 0.75);
+      const sl = hasRealSl
+        ? j!.sl
+        : entryPx * (pos.side === "long" ? 0.75 : 1.25);
 
-    const candlePx =
-      frames.find((f) => f.interval === "1h")?.indicators?.price ??
-      frames[0]?.indicators?.price ??
-      0;
-    const mid = mids[pos.coin.toUpperCase()] ?? 0;
-    const price = mid > 0 ? mid : candlePx > 0 ? candlePx : entryPx;
+      const mid = mids[pos.coin.toUpperCase()] ?? 0;
+      const priceEarly = mid > 0 ? mid : entryPx;
+      const movePctEarly =
+        pos.side === "long"
+          ? ((priceEarly - entryPx) / Math.max(entryPx, 1e-9)) * 100
+          : ((entryPx - priceEarly) / Math.max(entryPx, 1e-9)) * 100;
+      const lev = pos.leverage || j?.leverage || 1;
+      const pnlPctEarly = movePctEarly * lev;
+      const pnlUsd = pos.unrealizedPnlUsd;
+      const previousSnapshot =
+        j?.manageSnapshot ?? orphan[key] ?? null;
 
-    const movePct =
-      pos.side === "long"
-        ? ((price - entryPx) / entryPx) * 100
-        : ((entryPx - price) / entryPx) * 100;
-    const lev = pos.leverage || j?.leverage || 1;
-    const pnlPct = movePct * lev;
-    // TradeManageSnapshot.pnlEur stocke le $ pour le live (UI affiche $)
-    const pnlUsd = pos.unrealizedPnlUsd;
+      // Snapshot immédiat (garantit l’UI même si HL candles timeout)
+      let snapshot = buildLiveFallbackSnapshot({
+        side: pos.side,
+        price: priceEarly,
+        pnlUsd,
+        pnlPct: pnlPctEarly,
+        previous: previousSnapshot,
+      });
+      orphan[key] = snapshot;
+      await saveOrphanSnaps(orphan);
 
-    const stub = stubPaperFromLive({
-      coin: pos.coin,
-      side: pos.side,
-      entry: entryPx,
-      tp,
-      sl,
-      leverage: lev,
-      marginUsd: pos.marginUsedUsd,
-      size: Math.abs(pos.size),
-      portfolioId: j?.portfolioId || "boriaz",
-      portfolioName: j?.portfolioName || j?.botLabel || "Live",
-    });
-
-    const lastAt =
-      j?.manageSnapshot?.at ?? orphan[snapKey(pos.coin, pos.side)]?.at ?? 0;
-
-    const evaluated = await evaluateTradeManage({
-      trade: stub,
-      frames,
-      price,
-      pnl: { pnlPct, pnlEur: pnlUsd, movePct },
-      skipAi: opts?.skipAi,
-      lastSnapshotAt: lastAt,
-      currency: "$",
-    });
-    if (evaluated.aiUsed) aiUsed = true;
-
-    const snapshot: TradeManageSnapshot = {
-      ...evaluated.snapshot,
-      pnlEur: Math.round(pnlUsd * 100) / 100,
-      pnlPct: Math.round(pnlPct * 100) / 100,
-      currency: "$",
-      side: pos.side,
-    };
-
-    if (j) {
-      await updateLiveJournalEntry(j.id, { manageSnapshot: snapshot });
-      // garder openJournal à jour localement
-      const idx = openJournal.findIndex((e) => e.id === j.id);
-      if (idx >= 0) {
-        openJournal[idx] = { ...openJournal[idx]!, manageSnapshot: snapshot };
-      }
-    } else {
-      orphan[snapKey(pos.coin, pos.side)] = snapshot;
-    }
-
-    decisions.push({
-      coin: pos.coin,
-      side: pos.side,
-      action: evaluated.action,
-      reason: snapshot.reason,
-      outlook: snapshot.outlook,
-      price,
-      pnlUsd,
-      providers: evaluated.providers,
-      journalId: j?.id ?? null,
-    });
-
-    if (
-      notify &&
-      (evaluated.action === "close" || evaluated.action === "flip")
-    ) {
-      notes.push(
-        [
-          `📡 LIVE conseil · ${evaluated.action === "flip" ? "bascule" : "sortie"} ${pos.side.toUpperCase()} ${pos.coin}`,
-          `Spot ~${price} · PnL ${pnlUsd >= 0 ? "+" : ""}${pnlUsd.toFixed(2)} $`,
-          snapshot.reason,
-          "Advisory live — pas de clôture auto. Pas un conseil financier.",
-        ].join("\n"),
+      const frames = await analyzeFramesWithTimeout(
+        pos.coin,
+        FRAMES_TIMEOUT_MS,
       );
+
+      const candlePx =
+        frames.find((f) => f.interval === "1h")?.indicators?.price ??
+        frames[0]?.indicators?.price ??
+        0;
+      const price = mid > 0 ? mid : candlePx > 0 ? candlePx : entryPx;
+      const movePct =
+        pos.side === "long"
+          ? ((price - entryPx) / Math.max(entryPx, 1e-9)) * 100
+          : ((entryPx - price) / Math.max(entryPx, 1e-9)) * 100;
+      const pnlPct = movePct * lev;
+
+      const stub = stubPaperFromLive({
+        coin: pos.coin,
+        side: pos.side,
+        entry: entryPx,
+        tp,
+        sl,
+        leverage: lev,
+        marginUsd: pos.marginUsedUsd,
+        size: Math.abs(pos.size),
+        portfolioId: j?.portfolioId || "boriaz",
+        portfolioName: j?.portfolioName || j?.botLabel || "Live",
+      });
+
+      let evaluatedAction: LiveManageDecision["action"] = snapshot.action;
+      let evaluatedProviders = snapshot.providers;
+
+      if (frames.length) {
+        try {
+          const evaluated = await evaluateTradeManage({
+            trade: stub,
+            frames,
+            price,
+            pnl: { pnlPct, pnlEur: pnlUsd, movePct },
+            skipAi: opts?.skipAi,
+            skipSmc: opts?.skipSmc,
+            lastSnapshotAt: previousSnapshot?.at ?? 0,
+            previousSnapshot,
+            levelsAreReal,
+            currency: "$",
+          });
+          if (evaluated.aiUsed) aiUsed = true;
+          snapshot = {
+            ...evaluated.snapshot,
+            pnlEur: Math.round(pnlUsd * 100) / 100,
+            pnlPct: Math.round(pnlPct * 100) / 100,
+            currency: "$",
+            side: pos.side,
+          };
+          evaluatedAction = evaluated.action;
+          evaluatedProviders = evaluated.providers;
+        } catch {
+          snapshot = {
+            ...snapshot,
+            price,
+            pnlEur: Math.round(pnlUsd * 100) / 100,
+            pnlPct: Math.round(pnlPct * 100) / 100,
+            at: Date.now(),
+          };
+        }
+      } else {
+        snapshot = {
+          ...snapshot,
+          price,
+          pnlEur: Math.round(pnlUsd * 100) / 100,
+          pnlPct: Math.round(pnlPct * 100) / 100,
+          at: Date.now(),
+          bullets: [
+            `${pos.side.toUpperCase()} live · PnL ${pnlUsd >= 0 ? "+" : ""}${pnlUsd.toFixed(2)} $ (${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(1)} %)`,
+            `Spot ~${price}`,
+            "TF HL timeout/vides — avis mid+PnL (structure au prochain scan)",
+            ...(previousSnapshot?.bullets ?? []),
+          ].slice(0, 8),
+        };
+      }
+
+      // Dual-write : orphelin toujours + journal si dispo
+      orphan[key] = snapshot;
+      if (j) {
+        await updateLiveJournalEntry(j.id, { manageSnapshot: snapshot });
+        const idx = openJournal.findIndex((e) => e.id === j.id);
+        if (idx >= 0) {
+          openJournal[idx] = { ...openJournal[idx]!, manageSnapshot: snapshot };
+        }
+      }
+      await saveOrphanSnaps(orphan);
+
+      decisions.push({
+        coin: pos.coin,
+        side: pos.side,
+        action: evaluatedAction,
+        reason: snapshot.reason,
+        outlook: snapshot.outlook,
+        price,
+        pnlUsd,
+        providers: evaluatedProviders,
+        journalId: j?.id ?? null,
+      });
+
+      if (
+        notify &&
+        (evaluatedAction === "close" || evaluatedAction === "flip")
+      ) {
+        notes.push(
+          [
+            `📡 LIVE conseil · ${evaluatedAction === "flip" ? "bascule" : "sortie"} ${pos.side.toUpperCase()} ${pos.coin}`,
+            `Spot ~${price} · PnL ${pnlUsd >= 0 ? "+" : ""}${pnlUsd.toFixed(2)} $`,
+            snapshot.reason,
+            "Advisory live — pas de clôture auto. Pas un conseil financier.",
+          ].join("\n"),
+        );
+      }
+    } catch {
+      try {
+        const entryPx = pos.entryPx > 0 ? pos.entryPx : 1;
+        const mid = mids[pos.coin.toUpperCase()] ?? entryPx;
+        const lev = pos.leverage || 1;
+        const movePct =
+          pos.side === "long"
+            ? ((mid - entryPx) / entryPx) * 100
+            : ((entryPx - mid) / entryPx) * 100;
+        const snap = buildLiveFallbackSnapshot({
+          side: pos.side,
+          price: mid,
+          pnlUsd: pos.unrealizedPnlUsd,
+          pnlPct: movePct * lev,
+          previous: orphan[key] ?? null,
+        });
+        snap.reason =
+          "Erreur relecture — PnL mid affiché, nouvel essai au prochain scan";
+        snap.providers = ["erreur", "mid+PnL"];
+        orphan[key] = snap;
+        await saveOrphanSnaps(orphan);
+        decisions.push({
+          coin: pos.coin,
+          side: pos.side,
+          action: snap.action,
+          reason: snap.reason,
+          outlook: snap.outlook,
+          price: mid,
+          pnlUsd: pos.unrealizedPnlUsd,
+          providers: snap.providers,
+          journalId: null,
+        });
+      } catch {
+        /* ignore */
+      }
     }
   }
 

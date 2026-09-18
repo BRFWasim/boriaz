@@ -51,7 +51,14 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
     if (!next?.length) return;
     setPaperLive((prev) => {
       const byId = new Map(prev.map((t) => [t.id, t]));
-      for (const t of next) byId.set(t.id, t);
+      for (const t of next) {
+        const old = byId.get(t.id);
+        byId.set(t.id, {
+          ...t,
+          // Ne pas perdre une analyse déjà affichée si la réponse n'en a pas
+          manageSnapshot: t.manageSnapshot ?? old?.manageSnapshot ?? null,
+        });
+      }
       const merged = [...byId.values()].sort((a, b) => b.openedAt - a.openedAt);
       writeLocalPaper(merged);
       return merged;
@@ -202,7 +209,7 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
     });
     void loadFull();
     const fullId = window.setInterval(() => void loadFull(), 60_000);
-    const liveId = window.setInterval(() => void loadLive(), 4_000);
+    const liveId = window.setInterval(() => void loadLive(), 15_000);
 
     // Relecture rapide des trades ouverts (PnL + structure, sans IA lourde)
     async function reviewOpenFast() {
@@ -226,7 +233,7 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
       }
     }
     const reviewSoon = window.setTimeout(() => void reviewOpenFast(), 8_000);
-    const reviewId = window.setInterval(() => void reviewOpenFast(), 45_000);
+    const reviewId = window.setInterval(() => void reviewOpenFast(), 90_000);
 
     return () => {
       alive = false;
@@ -418,8 +425,8 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
             Portefeuilles fictifs (paper)
           </h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Books de simulation. Le wallet réel est dans la carte verte
-            ci-dessus. Défaut / Boriaz / Scalp : réglages dans le Lab.
+            Books de simulation. Le wallet réel (LIVE) = Boriaz SMC
+            uniquement. Défaut / Scalp : paper only — réglages dans le Lab.
           </p>
         </div>
         {portfolioViews.length === 0 ? (
@@ -485,7 +492,7 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
                     </p>
                     <p className="mt-0.5 text-xs text-muted-foreground">
                       {pf.profile.strategy === "smc"
-                        ? `SMC top-down · risque ${pf.profile.riskPct ?? 2}% · TP1 50%+BE`
+                        ? `SMC ultra-strict · cont. D1+H4 · corr. M15/30 · risque ${pf.profile.riskPct ?? 5}% · TP1 20% runner 80% (pas BE)`
                         : `TF ${pf.profile.timeframe} · risque ${pf.profile.riskLevel}/5`}
                       {" · "}lev max {pf.profile.maxLeverage}× · R:R ≥{" "}
                       {pf.profile.minRR}
