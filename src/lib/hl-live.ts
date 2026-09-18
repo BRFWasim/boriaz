@@ -1738,22 +1738,27 @@ async function trailStructuralRunnersAfterTp1(ctx: {
 
       const asset = ctx.assets.get(entry.coin.toUpperCase());
       if (!asset) continue;
-      // Cancel protective + replace TP2 + new SL
-      try {
-        const opens = await ctx.info.frontendOpenOrders({
-          user: ctx.cfg.accountAddress as `0x${string}`,
-        });
-        const cancels = (opens ?? [])
-          .filter(
-            (o) =>
-              String(o.coin || "").toUpperCase() === entry.coin.toUpperCase() &&
-              isProtectiveOpenOrder(o),
-          )
-          .map((o) => ({ a: asset.id, o: Number(o.oid) }))
-          .filter((c) => Number.isFinite(c.o));
-        if (cancels.length) await ctx.client.cancel({ cancels });
-      } catch {
-        /* continue */
+      // Cancel protective + replace TP2 + new SL (fail → pas de double set)
+      const opens = await ctx.info.frontendOpenOrders({
+        user: ctx.cfg.accountAddress as `0x${string}`,
+      });
+      const cancels = (opens ?? [])
+        .filter(
+          (o) =>
+            String(o.coin || "").toUpperCase() === entry.coin.toUpperCase() &&
+            isProtectiveOpenOrder(o),
+        )
+        .map((o) => ({ a: asset.id, o: Number(o.oid) }))
+        .filter((c) => Number.isFinite(c.o));
+      if (cancels.length) {
+        try {
+          await ctx.client.cancel({ cancels });
+        } catch (e) {
+          notes.push(
+            `${entry.coin}: trail abort — cancel protectifs échoué (${e instanceof Error ? e.message : "x"})`,
+          );
+          continue;
+        }
       }
       const remSz = formatSz(Math.abs(pos.size), asset.szDecimals);
       if (!remSz || Number(remSz) <= 0) continue;
