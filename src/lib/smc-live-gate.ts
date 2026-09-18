@@ -4,6 +4,7 @@
  */
 
 import type { SmcSetup } from "./smc";
+import { minSlDistancePct } from "./smc";
 import type { SmcScanResult } from "./smc-scan";
 import { fetchLivePortfolio } from "./hl-live";
 import { loadLiveJournal, matchJournalToPosition } from "./live-journal";
@@ -19,9 +20,15 @@ export type LiveSmcGateResult = {
 
 const GLOBAL_COOLDOWN_MS = 90_000;
 const COIN_COOLDOWN_MS = 5 * 60_000;
+/** Après un stop-out : pas de revenge trade pendant 2h sur le coin. */
+const STOPOUT_COIN_COOLDOWN_MS = 2 * 60 * 60_000;
+const STOPOUT_GLOBAL_COOLDOWN_MS = 10 * 60_000;
 const COOLDOWN_GLOBAL_KEY = "boriaz:live-cd:global";
 const coinCooldownKey = (coin: string) =>
   `boriaz:live-cd:${coin.toUpperCase()}`;
+const coinStopKey = (coin: string) =>
+  `boriaz:live-stopout:${coin.toUpperCase()}`;
+const GLOBAL_STOP_KEY = "boriaz:live-stopout:global";
 
 export function noteLiveOpen(coin: string): void {
   const now = Date.now();
@@ -48,6 +55,13 @@ function geometryOk(setup: SmcSetup): { ok: boolean; why: string } {
   const risk =
     o.side === "long" ? o.entry - o.sl : o.sl - o.entry;
   if (!(risk > 0)) return { ok: false, why: "SL du mauvais côté / risque ≤ 0" };
+  const minPct = minSlDistancePct(o.entry);
+  if (risk / o.entry < minPct * 0.95) {
+    return {
+      ok: false,
+      why: `SL trop serré (${((risk / o.entry) * 100).toFixed(2)}% < min ${(minPct * 100).toFixed(1)}%) — noise-stop`,
+    };
+  }
   const r1 =
     o.side === "long" ? o.tp1 - o.entry : o.entry - o.tp1;
   const r2 =
@@ -212,6 +226,36 @@ export async function validateLiveSmcBeforePlace(opts: {
 
   const { getDurableCooldown } = await import("./arch-guards");
   const now = Date.now();
+  const lastStopGlobal = await getDurableCooldown(GLOBAL_STOP_KEY);
+  if (
+    lastStopGlobal > 0 &&
+    now - lastStopGlobal < STOPOUT_GLOBAL_COOLDOWN_MS
+  ) {
+    const wait = Math.ceil(
+      (STOPOUT_GLOBAL_COOLDOWN_MS - (now - lastStopGlobal)) / 1000,
+    );
+    return {
+      ok: false,
+      reason: `Cooldown post-stop global encore ${wait}s — on digère la perte`,
+      mid: null,
+      checks,
+    };
+  }
+  const lastStopCoin = await getDurableCooldown(coinStopKey(setup.coin));
+  if (
+    lastStopCoin > 0 &&
+    now - lastStopCoin < STOPOUT_COIN_COOLDOWN_MS
+  ) {
+    const waitMin = Math.ceil(
+      (STOPOUT_COIN_COOLDOWN_MS - (now - lastStopCoin)) / 60_000,
+    );
+    return {
+      ok: false,
+      reason: `Cooldown post-stop ${setup.coin} encore ~${waitMin} min — pas de revenge trade`,
+      mid: null,
+      checks,
+    };
+  }
   const lastGlobal = await getDurableCooldown(COOLDOWN_GLOBAL_KEY);
   if (lastGlobal > 0 && now - lastGlobal < GLOBAL_COOLDOWN_MS) {
     const wait = Math.ceil((GLOBAL_COOLDOWN_MS - (now - lastGlobal)) / 1000);
@@ -244,6 +288,27 @@ export async function validateLiveSmcBeforePlace(opts: {
     };
   }
   checks.push(`mid ${mid}`);
+
+  // Refuse limite « marketable » (short entry sous mid = fill immédiat taker)
+  {
+    const o0 = setup.order;
+    if (o0.side === "short" && o0.entry < mid * 0.999) {
+      return {
+        ok: false,
+        reason: `Limite short ${o0.entry} < mid ${mid} — fill marché immédiat interdit`,
+        mid,
+        checks,
+      };
+    }
+    if (o0.side === "long" && o0.entry > mid * 1.001) {
+      return {
+        ok: false,
+        reason: `Limite long ${o0.entry} > mid ${mid} — fill marché immédiat interdit`,
+        mid,
+        checks,
+      };
+    }
+  }
 
   const o = setup.order;
   const zoneLow = Math.min(

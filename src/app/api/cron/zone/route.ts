@@ -37,12 +37,20 @@ export async function GET(request: Request) {
     try {
       const { checkArmedZonesAndScan } = await import("@/lib/zone-watch");
       const { cleanupStaleLiveLimits } = await import("@/lib/live-cleanup");
+      const {
+        detectStopOutsAndArmCooldown,
+        widenTightLiveStops,
+      } = await import("@/lib/live-protect");
       const zone = await checkArmedZonesAndScan();
       const cleanup = await cleanupStaleLiveLimits();
+      const stopOuts = await detectStopOutsAndArmCooldown();
+      const widen = await widenTightLiveStops();
       console.info("cron/zone after done", {
         ms: Date.now() - startedAt,
         zone,
         cleanupCancelled: cleanup.cancelled,
+        stopOuts,
+        widen,
       });
     } catch (e) {
       console.error("cron/zone after failed", e);

@@ -432,6 +432,45 @@ export function computeOteShallow(
 }
 
 /**
+ * Distance SL minimale vs entry — sinon le bruit (surtout alts) stop-out
+ * avant que le trade respire. Majors plus serrés OK.
+ */
+export function minSlDistancePct(entry: number): number {
+  if (!(entry > 0)) return 0.01;
+  if (entry < 1) return 0.012; // alts type DOGE : ≥1.2%
+  if (entry < 50) return 0.008;
+  return 0.005; // BTC/ETH ~0.5%
+}
+
+/** Élargit le SL si trop collé à l’entry ; recalcule TP1=1R et TP2≥2R. */
+export function enforceMinSlBreathingRoom(input: {
+  side: SmcSide;
+  entry: number;
+  sl: number;
+  tp1: number;
+  tp2: number;
+}): { sl: number; tp1: number; tp2: number; widened: boolean } {
+  const { side, entry } = input;
+  let { sl, tp1, tp2 } = input;
+  const minPct = minSlDistancePct(entry);
+  const risk = side === "long" ? entry - sl : sl - entry;
+  const minRisk = entry * minPct;
+  if (!(risk > 0) || risk >= minRisk * 0.999) {
+    return { sl, tp1, tp2, widened: false };
+  }
+  if (side === "long") {
+    sl = entry - minRisk;
+    tp1 = entry + minRisk;
+    tp2 = Math.max(tp2, entry + minRisk * 2);
+  } else {
+    sl = entry + minRisk;
+    tp1 = entry - minRisk;
+    tp2 = Math.min(tp2, entry - minRisk * 2);
+  }
+  return { sl, tp1, tp2, widened: true };
+}
+
+/**
  * Fraction clôturée au TP1 (1R). Le reste court vers TP2 (≥2R).
  * 20% lock + 80% runner → viser ~100$ sur compte ~950$ quand risque ~8–10%.
  */
@@ -565,6 +604,12 @@ export function buildSmcOrder(input: {
       ? structural
       : entry - min2r;
   }
+
+  // Anti noise-stop : SL trop collé → élargir + recalculer 1R/2R
+  const room = enforceMinSlBreathingRoom({ side, entry, sl, tp1, tp2 });
+  sl = room.sl;
+  tp1 = room.tp1;
+  tp2 = room.tp2;
 
   // Ultra-strict : LIMIT exclusively dans ÔTE/FVG — jamais market
   return {

@@ -54,6 +54,16 @@ export async function runCronWork(phase: CronPhase = "all"): Promise<{
         manage.liveCleanupError = e instanceof Error ? e.message : "cleanup";
       }
       try {
+        const {
+          detectStopOutsAndArmCooldown,
+          widenTightLiveStops,
+        } = await import("@/lib/live-protect");
+        manage.stopOuts = await detectStopOutsAndArmCooldown();
+        manage.widenStops = await widenTightLiveStops();
+      } catch (e) {
+        manage.liveProtectError = e instanceof Error ? e.message : "protect";
+      }
+      try {
         const { checkArmedZonesAndScan } = await import("@/lib/zone-watch");
         manage.zoneWatch = await checkArmedZonesAndScan();
       } catch (e) {
