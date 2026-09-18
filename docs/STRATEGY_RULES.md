@@ -11,7 +11,7 @@ Les règles SMC objectivées vivent dans `src/lib/smc.ts`, `smc-scan.ts`, `smc-l
 5. H4-lead si D1 neutre (taille réduite) — early trend
 6. Correction : M15/M30 only (pas M5)
 7. Range : pas SHORT vrai bas, pas LONG D1 top
-8. Pré-arm GTC + zone-watch */2 min + cancel GTC morts / trop loin
+8. Pré-arm GTC + zone-watch */2 min + cancel GTC morts / trop loin + TP/SL orphelins sans position
 9. Cron signaux */5 · sizing 3–10%
 10. Objectif : **FAIRE GAGNER** — pas de chase ; cash = survie si pas d’edge
 

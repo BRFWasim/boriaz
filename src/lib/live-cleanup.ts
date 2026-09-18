@@ -174,33 +174,51 @@ export async function cleanupStaleLiveLimits(): Promise<{
     }
   }
 
-  // Orphan HL limits (pas de journal) : cancel reduceOnly=false sans position si mid a bougé fort
+  // Orphan HL : limites d’entrée trop loin OU TP/SL protectifs sans position
   for (const o of opens ?? []) {
     const coin = String(o.coin || "").toUpperCase();
-    if (!coin || isProtectiveOpenOrder(o)) continue;
+    if (!coin) continue;
     if (posCoins.has(coin)) continue;
     const inJournal = journal.some(
       (e) => e.coin.toUpperCase() === coin && e.status === "open",
     );
+    // Journal open géré plus haut (structure/surpassed) — ici orphelins purs
     if (inJournal) continue;
+
+    const protective = isProtectiveOpenOrder(o);
     const mid = Number(mids[coin] ?? 0);
     const limitPx = Number(
       (o as { limitPx?: string | number }).limitPx ??
         (o as { px?: string | number }).px ??
         0,
     );
-    if (!(mid > 0 && limitPx > 0)) continue;
-    const distPct = Math.abs(mid - limitPx) / mid;
-    // Limite orpheline >1.5% du mid → nettoyer
-    if (distPct < 0.015) continue;
     const asset = assets.get(coin);
     if (!asset) continue;
     const oid = Number(o.oid);
     if (!Number.isFinite(oid)) continue;
+
+    if (protective) {
+      // TP/SL reduceOnly sans position = mort → libère le book HL
+      try {
+        await client.cancel({ cancels: [{ a: asset.id, o: oid }] });
+        cancelled += 1;
+        notes.push(`${coin}: orphan TP/SL cancel oid=${oid}`);
+      } catch {
+        /* ignore */
+      }
+      continue;
+    }
+
+    if (!(mid > 0 && limitPx > 0)) continue;
+    const distPct = Math.abs(mid - limitPx) / mid;
+    // Limite orpheline >1.5% du mid → nettoyer
+    if (distPct < 0.015) continue;
     try {
       await client.cancel({ cancels: [{ a: asset.id, o: oid }] });
       cancelled += 1;
-      notes.push(`${coin}: orphan limit cancel oid=${oid} dist=${(distPct * 100).toFixed(1)}%`);
+      notes.push(
+        `${coin}: orphan limit cancel oid=${oid} dist=${(distPct * 100).toFixed(1)}%`,
+      );
     } catch {
       /* ignore */
     }
