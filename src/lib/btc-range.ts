@@ -106,31 +106,58 @@ export async function getMarketRangeContext(
   const daily = rangeFromCandles("1d", d, price, 90);
   const h4r = rangeFromCandles("4h", h4, price, 90);
 
-  // Short interdit : bas du range weekly OU daily (demande utilisateur)
-  const weeklyLow =
-    weekly != null && (weekly.band === "bottom" || weekly.band === "lower");
-  const dailyLow = daily != null && daily.band === "bottom";
+  /**
+   * Short interdit = vrai BAS (W bottom, ou D1 bottom/lower).
+   * W « lower » seul ne doit PAS geler les shorts si D1/H4 sont déjà hauts :
+   * sinon un pump depuis le bas de W (range large 57k–126k) bloque LONG (D1 top)
+   * ET SHORT (W lower) → zéro trade pendant la montée / au sommet.
+   */
+  const weeklyBottom = weekly != null && weekly.band === "bottom";
+  const weeklyLower = weekly != null && weekly.band === "lower";
+  const dailyLow =
+    daily != null && (daily.band === "bottom" || daily.band === "lower");
   const weeklyHigh =
     weekly != null && (weekly.band === "top" || weekly.band === "upper");
   const dailyHigh = daily != null && daily.band === "top";
+  const dailyUpper = daily != null && daily.band === "upper";
+  const h4High =
+    h4r != null && (h4r.band === "top" || h4r.band === "upper");
+  const elevated = Boolean(dailyHigh || dailyUpper || h4High);
 
-  const blockShort = Boolean(weeklyLow || dailyLow);
-  const blockLong = Boolean(weeklyHigh || dailyHigh);
+  let blockShort = Boolean(weeklyBottom || dailyLow);
+  if (weeklyLower && !elevated) {
+    blockShort = true;
+  }
+  let blockLong = Boolean(weeklyHigh || dailyHigh);
+
+  // Paradoxe mixte : le TF tactique (D1/H4) prime sur W
+  if (blockShort && blockLong) {
+    if (elevated) {
+      blockShort = false; // sommet D1/H4 → short possible si SMC ; long reste interdit
+    } else if (weeklyBottom || dailyLow) {
+      blockLong = false; // vrai bas → long possible si SMC ; short reste interdit
+    }
+  }
 
   let reason = "Range neutre / milieu — direction ouverte si SMC OK";
   if (blockShort && blockLong) {
     reason =
       "Contexte mixte extrême — privilégier attendre (pas d’ordre forcé)";
   } else if (blockShort) {
-    const which = weeklyLow
+    const which = weeklyBottom
       ? `W ${bandLabel(weekly!.band)} (${(weekly!.pos * 100).toFixed(0)}%)`
-      : `D1 ${bandLabel(daily!.band)} (${(daily!.pos * 100).toFixed(0)}%)`;
+      : weeklyLower && !elevated
+        ? `W ${bandLabel(weekly!.band)} (${(weekly!.pos * 100).toFixed(0)}%)`
+        : `D1 ${bandLabel(daily!.band)} (${(daily!.pos * 100).toFixed(0)}%)`;
     reason = `BTC/actif en BAS de range (${which}) — SHORT interdit (rebond / liquidité basse)`;
   } else if (blockLong) {
     const which = weeklyHigh
       ? `W ${bandLabel(weekly!.band)} (${(weekly!.pos * 100).toFixed(0)}%)`
       : `D1 ${bandLabel(daily!.band)} (${(daily!.pos * 100).toFixed(0)}%)`;
-    reason = `BTC/actif en HAUT de range (${which}) — LONG interdit (prise de liquidité haute)`;
+    reason = `BTC/actif en HAUT de range (${which}) — LONG interdit (prise de liquidité haute) · short OK si SMC`;
+  } else if (elevated && weeklyLower) {
+    reason =
+      "D1/H4 élevés alors que W encore bas-médian — LONG prudent / SHORT si rejet SMC (pas de chase)";
   }
 
   const parts = [
