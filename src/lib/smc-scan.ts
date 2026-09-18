@@ -376,7 +376,7 @@ export async function scanSmcWatchlist(input: {
               candlesH1: h1,
               candlesExec: ex.candles,
               walletEur: input.walletEur,
-              maxLeverage: input.maxLeverage ?? 3,
+              maxLeverage: input.maxLeverage ?? 8,
               execTimeframe: ex.tf,
             });
             if (!bestLocal) {

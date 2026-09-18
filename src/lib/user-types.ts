@@ -31,7 +31,7 @@ export interface PortfolioProfile {
    * - smc : Smart Money Concepts (portefeuille Boriaz)
    */
   strategy: PortfolioStrategy;
-  /** Risque max par trade en % du wallet (SMC Boriaz = 2.5–5 selon confiance). */
+  /** Risque max par trade en % du wallet (SMC Boriaz = 3–10 selon confiance). */
   riskPct: number;
 }
 
@@ -148,18 +148,18 @@ export const BORIAZ_PORTFOLIO: PortfolioProfile = {
   paperTradeEnabled: true,
   liveTradeEnabled: true,
   bankrollEur: 1000,
-  maxLeverage: 3,
-  sizePct: 8,
+  maxLeverage: 8,
+  sizePct: 15,
   minRR: 2,
   targetEur: 300,
-  maxLossEur: 100,
+  maxLossEur: 200,
   tradesPerDay: 0,
   timeframe: "15m",
-  riskLevel: 2,
+  riskLevel: 4,
   requireAiGate: false,
-  maxSafetyMode: true,
+  maxSafetyMode: false,
   strategy: "smc",
-  riskPct: 3.5,
+  riskPct: 8,
 };
 
 /** 0 = illimité ; sinon 1–20. */
@@ -210,10 +210,10 @@ export function ensurePortfolios(
       riskPct:
         p.id === "boriaz"
           ? Math.min(
-              5,
+              10,
               Math.max(
-                2.5,
-                Number.isFinite(p.riskPct) ? Number(p.riskPct) : 3.5,
+                3,
+                Number.isFinite(p.riskPct) ? Number(p.riskPct) : 8,
               ),
             )
           : isScalpPortfolio(p)
@@ -246,12 +246,13 @@ export function ensurePortfolios(
       id: "boriaz",
       name: b.name?.trim() || "Boriaz",
       strategy: "smc",
+      maxLeverage: Math.min(
+        10,
+        Math.max(8, Number.isFinite(b.maxLeverage) ? Number(b.maxLeverage) : 8),
+      ),
       riskPct: Math.min(
-        5,
-        Math.max(
-          2.5,
-          Number.isFinite(b.riskPct) ? Number(b.riskPct) : 3.5,
-        ),
+        10,
+        Math.max(3, Number.isFinite(b.riskPct) ? Number(b.riskPct) : 8),
       ),
       tradesPerDay: clampTradesPerDay(
         b.tradesPerDay == null ? 0 : b.tradesPerDay,
@@ -398,11 +399,11 @@ export interface PaperTrade {
   entry: number;
   tp: number;
   sl: number;
-  /** TP1 (1R) — SMC : clôture 50 %, SL structurel conservé (pas BE). */
+  /** TP1 (1R) — SMC : clôture 20 %, SL structurel conservé (pas BE), 80% runner. */
   tp1?: number | null;
   /** TP2 (2R) — SMC : solde restant. */
   tp2?: number | null;
-  /** true après TP1 : 50 % déjà pris, SL structurel inchangé. */
+  /** true après TP1 : 20 % déjà pris, 80 % restant, SL structurel inchangé. */
   tp1Hit?: boolean;
   /** PnL déjà réalisé sur la demi-position TP1. */
   realizedPartialEur?: number;

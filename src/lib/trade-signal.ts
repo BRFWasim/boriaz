@@ -37,6 +37,7 @@ import {
   scalpLiveRiskPct,
 } from "./user-types";
 import type { BuyTimingAction, SignalBias } from "./types";
+import { SMC_TP1_CLOSE_FRAC } from "./smc";
 
 export interface DirectionSignal {
   coin: string;
@@ -409,7 +410,7 @@ async function refreshPaperTrades(
     t.pnlPct = pnlPct;
     t.pnlEur = pnlEur;
 
-    // SMC : TP1 (1R) → clôturer 50 %, SL structurel inchangé (pas de BE), TP2 sur le reste
+    // SMC : TP1 (1R) → clôturer 20 %, SL structurel inchangé (pas de BE), 80% → TP2
     const tp1 = t.tp1 != null && t.tp1 > 0 ? t.tp1 : null;
     const tp2 = t.tp2 != null && t.tp2 > 0 ? t.tp2 : null;
     const isSmc = t.strategy === "smc" || (tp1 != null && tp2 != null);
@@ -418,22 +419,24 @@ async function refreshPaperTrades(
       const hitTp1 =
         t.side === "long" ? px >= tp1 : px <= tp1;
       if (hitTp1) {
-        const halfMargin = t.marginEur * 0.5;
+        const closeFrac = SMC_TP1_CLOSE_FRAC;
+        const keepFrac = 1 - closeFrac;
+        const closeMargin = t.marginEur * closeFrac;
         const halfMove =
           t.side === "long"
             ? ((tp1 - t.entry) / t.entry) * 100
             : ((t.entry - tp1) / t.entry) * 100;
-        const halfPnl = halfMargin * ((halfMove * t.leverage) / 100);
-        const halfFees = (t.feesEur ?? 0) * 0.5;
-        t.realizedPartialEur = (t.realizedPartialEur ?? 0) + halfPnl - halfFees;
-        t.marginEur = halfMargin;
-        t.notionalEur = halfMargin * t.leverage;
-        t.remainingQtyPct = 0.5;
+        const closePnl = closeMargin * ((halfMove * t.leverage) / 100);
+        const closeFees = (t.feesEur ?? 0) * closeFrac;
+        t.realizedPartialEur = (t.realizedPartialEur ?? 0) + closePnl - closeFees;
+        t.marginEur = t.marginEur * keepFrac;
+        t.notionalEur = t.marginEur * t.leverage;
+        t.remainingQtyPct = keepFrac;
         t.tp1Hit = true;
         // SL structurel conservé — plus de BE qui coupe les runners
         t.tp = tp2 ?? t.tp;
-        t.feesEur = halfFees; // frais restants sur demi-position
-        t.note = `TP1 50% @ ${tp1} (+${(halfPnl - halfFees).toFixed(2)} €) · SL structurel · vise TP2`;
+        t.feesEur = (t.feesEur ?? 0) * keepFrac;
+        t.note = `TP1 ${Math.round(closeFrac * 100)}% @ ${tp1} (+${(closePnl - closeFees).toFixed(2)} €) · SL structurel · ${Math.round(keepFrac * 100)}% vise TP2`;
         t.pnlEur =
           t.realizedPartialEur +
           t.marginEur * (pnlPct / 100) -
@@ -561,7 +564,7 @@ export async function getTradeSignals(options?: {
 
   const { paper, closes } = await refreshPaperTrades(priceMap);
 
-  // Miroir paper SMC sur le LIVE : TP1 50% → SL structurel → vise TP2 (pas de BE)
+  // Miroir paper SMC sur le LIVE : TP1 20% → SL structurel → 80% vise TP2 (pas de BE)
   try {
     const { manageLiveSmcPositions } = await import("./hl-live");
     const managed = await manageLiveSmcPositions();
@@ -1456,7 +1459,7 @@ export async function getTradeSignals(options?: {
               ? `ÔTE ${setup.ote.low}–${setup.ote.high} (idéal ${setup.ote.ideal})`
               : "ÔTE manquant",
             `Risque ${setup.risk.riskEur.toFixed(2)} $ (2%) · notionnel ${setup.risk.notionalEur} $`,
-            `TP1 1R 50% · SL structurel (pas BE) · TP2 ≥2R · gate réfléchie`,
+            `TP1 1R 20% · runner 80% · SL structurel (pas BE) · TP2 ≥2R`,
             smcScan.liveEligible
               ? "LIVE éligible (IA + ORDRE PRÊT)"
               : "LIVE non éligible pour l’instant",
@@ -1672,7 +1675,7 @@ export async function getTradeSignals(options?: {
                   `SMC BORIAZ · ${setup.order.side.toUpperCase()} ${setup.coin}`,
                   setup.status,
                   `E ${setup.order.entry} · SL ${setup.order.sl}`,
-                  `TP1 ${setup.order.tp1} (50%) · TP2 ${setup.order.tp2} · risque ${setup.risk.riskPct}%`,
+                  `TP1 ${setup.order.tp1} (20%) · TP2 ${setup.order.tp2} · risque ${setup.risk.riskPct}%`,
                   `Risque 2% = ${setup.risk.riskEur.toFixed(2)} €`,
                   smcScan.aiNote || "",
                   "",

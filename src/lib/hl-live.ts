@@ -44,7 +44,7 @@ export type LiveTradeRequest = {
   portfolioId?: string;
   portfolioName?: string;
   strategy?: "alignment" | "smc";
-  /** TP1 SMC (1R) — 50% puis SL structurel (pas BE). */
+  /** TP1 SMC (1R) — 20% puis SL structurel, 80% runner (pas BE). */
   tp1?: number | null;
   tp2?: number | null;
 };
@@ -150,14 +150,14 @@ export function getLiveConfig(): LiveConfigStatus {
     envArmed: envFlagAny(["HL_LIVE_ENABLED", "HL_LIVE_ENABLED"], false),
     hasAgentKey: Boolean(key) && Boolean(agentAddress),
     testnet: envFlagAny(["HL_LIVE_TESTNET", "HL_LIVE_TESTNET"], false),
-    // Défaut 80$ — adapté aux petits comptes (~100 USDC). Override via env.
+    // Défaut large — viser ~100$+ / trade sûr sur compte ~1k (override env).
     maxNotionalUsd: envNumAny(
       ["HL_MAX_NOTIONAL_USD", "HL_MAX_NOTIONAL_USD"],
-      500,
+      15_000,
     ),
     maxLeverage: Math.min(
       10,
-      envNumAny(["HL_MAX_LEVERAGE", "HL_MAX_LEVERAGE"], 3),
+      envNumAny(["HL_MAX_LEVERAGE", "HL_MAX_LEVERAGE"], 8),
     ),
     maxOpenPositions: Math.min(
       10,
@@ -633,7 +633,7 @@ export async function fetchLivePortfolio(): Promise<LivePortfolioSnapshot> {
 /**
  * Sizing LIVE sur le solde HL réel.
  * - Mode miroir paper : même % de marge que le paper (marge/bankroll) sur l’equity réelle.
- * - Sinon : riskPct % de l’equity (défaut 2.5%, jusqu’à 5% si confiance haute).
+ * - Sinon : riskPct % de l’equity (défaut 3%, jusqu’à 10% si confiance haute).
  * Seuils assouplis en mirrorPaper pour coller au paper même sur petit solde.
  */
 export function sizeLiveFromRealEquity(input: {
@@ -662,9 +662,15 @@ export function sizeLiveFromRealEquity(input: {
   const minEquity = mirror ? 5 : 20;
   const minNotional = mirror ? 1 : 8;
   const minMargin = mirror ? 0.5 : 2;
-  const freeFrac = mirror ? 0.85 : 0.55;
-
-  const riskPct = input.riskPct && input.riskPct > 0 ? input.riskPct : 2.5;
+  const riskPct = input.riskPct && input.riskPct > 0 ? input.riskPct : 3;
+  // Plus le risque cible est haut, plus on autorise la marge (viser ~100$ / trade sûr)
+  const freeFrac = mirror
+    ? riskPct >= 7
+      ? 0.95
+      : 0.9
+    : riskPct >= 7
+      ? 0.85
+      : 0.6;
   const equityUsd = Math.max(0, input.equityUsd);
   if (!(equityUsd >= minEquity)) {
     return {
@@ -707,7 +713,10 @@ export function sizeLiveFromRealEquity(input: {
     paperBankroll > 0
   ) {
     // Même fraction de capital engagée en marge que le paper
-    const marginFrac = Math.min(0.5, Math.max(0.002, paperMargin / paperBankroll));
+    const marginFrac = Math.min(
+      riskPct >= 7 ? 0.9 : 0.65,
+      Math.max(0.002, paperMargin / paperBankroll),
+    );
     let marginUsd = equityUsd * marginFrac;
     leverage = Math.min(
       input.maxLeverage,
@@ -898,7 +907,7 @@ async function placeBoriazLiveTradeInner(
     sl: req.sl,
     maxLeverage: Math.min(lev, cfg.maxLeverage, asset.maxLeverage),
     maxNotionalUsd: cfg.maxNotionalUsd,
-    riskPct: req.riskPct ?? 2.5,
+    riskPct: req.riskPct ?? 3,
     paperMarginEur: req.paperMarginEur,
     paperBankrollEur: req.paperBankrollEur,
     mirrorPaper: mirror,
@@ -949,7 +958,10 @@ async function placeBoriazLiveTradeInner(
     Number(req.tp1) > 0 &&
     Math.abs(Number(req.tp1) - req.tp) > 1e-12;
 
-  const halfSz = formatSz(sizeNum / 2, asset.szDecimals);
+  const { SMC_TP1_CLOSE_FRAC } = await import("./smc");
+  const tp1Frac = SMC_TP1_CLOSE_FRAC;
+  const tp1Sz = formatSz(sizeNum * tp1Frac, asset.szDecimals);
+  const tp2Sz = formatSz(sizeNum * (1 - tp1Frac), asset.szDecimals);
   const tp1Px = useSmcSplit
     ? formatPx(Number(req.tp1), asset.szDecimals)
     : tpPx;
@@ -963,8 +975,8 @@ async function placeBoriazLiveTradeInner(
   let slOid: number | null = null;
 
   try {
-    if (useSmcSplit && halfSz && Number(halfSz) > 0) {
-      // Comme paper : entrée pleine, TP1 50%, TP2 50%, SL 100%.
+    if (useSmcSplit && tp1Sz && tp2Sz && Number(tp1Sz) > 0 && Number(tp2Sz) > 0) {
+      // Comme paper : entrée pleine, TP1 20%, TP2 80%, SL 100%.
       const entryRes = await client.order({
         orders: [
           {
@@ -1004,7 +1016,7 @@ async function placeBoriazLiveTradeInner(
             a: asset.id,
             b: !isBuy,
             p: tp1Px,
-            s: halfSz,
+            s: tp1Sz,
             r: true,
             t: {
               trigger: {
@@ -1018,7 +1030,7 @@ async function placeBoriazLiveTradeInner(
             a: asset.id,
             b: !isBuy,
             p: tp2Px,
-            s: halfSz,
+            s: tp2Sz,
             r: true,
             t: {
               trigger: {
@@ -1059,7 +1071,7 @@ async function placeBoriazLiveTradeInner(
                 a: asset.id,
                 b: !isBuy,
                 p: tp1Px,
-                s: halfSz,
+                s: tp1Sz,
                 r: true,
                 t: {
                   trigger: {
@@ -1073,7 +1085,7 @@ async function placeBoriazLiveTradeInner(
                 a: asset.id,
                 b: !isBuy,
                 p: tp2Px,
-                s: halfSz,
+                s: tp2Sz,
                 r: true,
                 t: {
                   trigger: {
@@ -1264,7 +1276,7 @@ async function placeBoriazLiveTradeInner(
       tp1Hit: false,
       size: sizeNum,
       leverage: liveLev,
-      riskPct: req.riskPct ?? 2.5,
+      riskPct: req.riskPct ?? 3,
       riskUsd: sized.riskUsd,
       portfolioId: req.portfolioId || "boriaz",
       portfolioName: req.portfolioName || botLabel,
@@ -1366,7 +1378,7 @@ async function placeBoriazLiveTradeInner(
 
 /**
  * Miroir paper SMC sur le live :
- * TP1 touché → (si besoin) réduire 50% + SL structurel inchangé + TP2 sur le reste.
+ * TP1 touché → (si besoin) réduire 20% + SL structurel inchangé + TP2 sur le reste (80%).
  * Pas de break-even : un pullback vers l’entry ne doit plus tuer le runner.
  * Appelé par le cron / getTradeSignals — ne change pas le paper.
  */
@@ -1453,10 +1465,11 @@ async function manageLiveSmcPositionsInner(): Promise<{
     const tp1 = Number(entry.tp1);
     const hitTp1 =
       entry.side === "long" ? px >= tp1 : px <= tp1;
-    // Position déjà ~50% (TP1 ordre auto rempli) ou prix a touché TP1
+    // Position déjà ~80% (TP1 20% auto rempli) ou prix a touché TP1
     const sizeNow = Math.abs(pos.size);
-    const halfish = sizeNow <= entry.size * 0.65;
-    if (!hitTp1 && !halfish) continue;
+    const { SMC_TP1_CLOSE_FRAC } = await import("./smc");
+    const alreadyPartial = sizeNow <= entry.size * (1 - SMC_TP1_CLOSE_FRAC * 0.5);
+    if (!hitTp1 && !alreadyPartial) continue;
 
     const asset = assets.get(entry.coin.toUpperCase());
     if (!asset) continue;
@@ -1482,10 +1495,10 @@ async function manageLiveSmcPositionsInner(): Promise<{
         console.info("manageLiveSmc cancel", e);
       }
 
-      // Si encore pleine taille : clôturer 50% market (comme paper TP1)
+      // Si encore pleine taille : clôturer 20% market (comme paper TP1)
       let remaining = sizeNow;
-      if (!halfish && sizeNow > 0) {
-        const closeSz = formatSz(sizeNow / 2, asset.szDecimals);
+      if (!alreadyPartial && sizeNow > 0) {
+        const closeSz = formatSz(sizeNow * SMC_TP1_CLOSE_FRAC, asset.szDecimals);
         if (closeSz && Number(closeSz) > 0) {
           const isBuy = entry.side === "short"; // close long = sell
           const closePx = aggressivePx(
@@ -1507,7 +1520,7 @@ async function manageLiveSmcPositionsInner(): Promise<{
             ],
             grouping: "na",
           });
-          remaining = sizeNow / 2;
+          remaining = sizeNow * (1 - SMC_TP1_CLOSE_FRAC);
         }
       }
 
@@ -1598,7 +1611,7 @@ async function manageLiveSmcPositionsInner(): Promise<{
         slOid: readOid(st[1]),
       });
       updated += 1;
-      notes.push(`${entry.coin}: TP1 50% + SL structurel · vise TP2`);
+      notes.push(`${entry.coin}: TP1 20% + SL structurel · 80% vise TP2`);
     } catch (e) {
       notes.push(
         `${entry.coin}: manage err ${e instanceof Error ? e.message : "x"}`,

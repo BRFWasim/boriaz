@@ -259,10 +259,10 @@ export async function GET() {
     openJournal,
     riskPreview: portfolio.ok
       ? {
-          riskPct: 3.5,
-          riskUsd: Math.round(portfolio.accountValueUsd * 0.035 * 100) / 100,
+          riskPct: 8,
+          riskUsd: Math.round(portfolio.accountValueUsd * 0.08 * 100) / 100,
           note:
-            "LIVE = Boriaz. Risque 2.5–5% selon confiance · TP1 50% sans BE · SL structurel.",
+            "LIVE = Boriaz. Risque 3–10% selon confiance · TP1 20% / runner 80% · pas BE · viser ~100$+ / trade sûr.",
         }
       : null,
     guards,
