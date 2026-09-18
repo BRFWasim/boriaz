@@ -6,13 +6,14 @@ Les règles SMC objectivées vivent dans `src/lib/smc.ts`, `smc-scan.ts`, `smc-l
 
 1. Sweep liquidité + CHoCH/BOS (clôture de corps) + FVG + ÔTE 0.618–0.786
 2. Entrée LIMIT dans ÔTE∩FVG — jamais market chase
-3. TP1 = 1R (**20%** lock, **80%** runner). Pas de BE immédiat ; lock +0.35R seulement si ≥1.5R. TP2 ≥ 2R
-4. Correction : M15/M30 only (pas M5)
-5. Range : **pas de SHORT en vrai bas**, **pas de LONG en haut D1**. W lower + D1 haut → short OK si SMC
-6. **Pré-arm GTC** : EN ATTENTE continuation + IA → limite LIVE en ÔTE (pas de chase market)
-7. Cron signaux **/5 min** (fenêtre OTE)
-8. Sizing : risque **3–10 %** selon confiance
-9. Objectif : **FAIRE GAGNER DE L'ARGENT** — refuse si espérance défavorable ; **pas de chase**
+3. TP1 = 1R (**20%** lock, **80%** runner). Lock +0.35R si ≥1.5R ; trail structurel post-TP1 (swing HL/LH)
+4. Entrée : deep ÔTE 0.618–0.786 **ou** shallow retest BOS 0.5–0.618 (demi-taille) en continuation
+5. H4-lead si D1 neutre (taille réduite) — early trend
+6. Correction : M15/M30 only (pas M5)
+7. Range : pas SHORT vrai bas, pas LONG D1 top
+8. Pré-arm GTC + zone-watch */2 min + cancel GTC morts / trop loin
+9. Cron signaux */5 · sizing 3–10%
+10. Objectif : **FAIRE GAGNER** — pas de chase ; cash = survie si pas d’edge
 
 ## Pipeline (AI_COST_CONTROL)
 

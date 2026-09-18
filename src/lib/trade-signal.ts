@@ -1606,7 +1606,38 @@ export async function getTradeSignals(options?: {
             });
             if (live.ok) {
               noteLiveOpen(setup.coin);
+              // Armer zone watch : scan forcé dès que mid entre dans ÔTE
+              try {
+                const { saveArmedZone } = await import("./zone-watch");
+                const zLo = Math.min(
+                  setup.ote?.low ?? setup.order.entry,
+                  setup.fvg?.low ?? setup.order.entry,
+                );
+                const zHi = Math.max(
+                  setup.ote?.high ?? setup.order.entry,
+                  setup.fvg?.high ?? setup.order.entry,
+                );
+                await saveArmedZone({
+                  coin: setup.coin,
+                  side: setup.order.side,
+                  zoneLow: zLo,
+                  zoneHigh: zHi,
+                  entry: setup.order.entry,
+                  tp1: setup.order.tp1,
+                  sl: setup.order.sl,
+                  at: Date.now(),
+                  paperId: opened.id,
+                });
+              } catch {
+                /* zone watch best-effort */
+              }
               const bot = live.botLabel || "Boriaz";
+              const style =
+                setup.entryStyle === "shallow"
+                  ? "shallow 0.5–0.618"
+                  : setup.h4Lead
+                    ? "H4-lead"
+                    : "deep ÔTE";
               const tpTxt =
                 live.tpPnlUsd != null
                   ? ` · si TP ${live.tpPnlUsd >= 0 ? "+" : ""}${live.tpPnlUsd.toFixed(2)}$`
@@ -1615,7 +1646,7 @@ export async function getTradeSignals(options?: {
                 live.slPnlUsd != null
                   ? ` · si SL ${live.slPnlUsd >= 0 ? "+" : ""}${live.slPnlUsd.toFixed(2)}$`
                   : "";
-              opened.note = `${opened.note} · LIVE HL [${bot}] size=${live.size} entryOid=${live.entryOid ?? "?"}${tpTxt}${slTxt}`;
+              opened.note = `${opened.note} · LIVE HL [${bot}] ${style} size=${live.size} entryOid=${live.entryOid ?? "?"}${tpTxt}${slTxt}`;
               try {
                 const all = await loadPaperTrades();
                 const row = all.find((t) => t.id === opened.id);

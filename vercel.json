@@ -7,6 +7,10 @@
     {
       "path": "/api/cron",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/zone",
+      "schedule": "*/2 * * * *"
     }
   ]
 }

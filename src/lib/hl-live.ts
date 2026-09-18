@@ -131,7 +131,7 @@ function readAgentPrivateKey(): string {
   ]);
 }
 
-function makeTransport(testnet: boolean) {
+export function makeTransport(testnet: boolean) {
   return new HttpTransport({ isTestnet: testnet });
 }
 
@@ -255,7 +255,7 @@ function hlErrMessage(e: unknown): string {
   return String(e || "Erreur Hyperliquid");
 }
 
-async function loadAssetMap(testnet: boolean): Promise<Map<string, AssetMeta>> {
+export async function loadAssetMap(testnet: boolean): Promise<Map<string, AssetMeta>> {
   if (metaCache && Date.now() - metaCache.at < 60_000) return metaCache.assets;
   const info = new InfoClient({ transport: makeTransport(testnet) });
   const meta = await info.meta();
@@ -273,7 +273,7 @@ async function loadAssetMap(testnet: boolean): Promise<Map<string, AssetMeta>> {
   return assets;
 }
 
-function getExchangeClient(testnet: boolean): ExchangeClient {
+export function getExchangeClient(testnet: boolean): ExchangeClient {
   const raw = readAgentPrivateKey();
   const pk = (raw.startsWith("0x") ? raw : `0x${raw}`) as `0x${string}`;
   return new ExchangeClient({
@@ -1637,6 +1637,23 @@ async function manageLiveSmcPositionsInner(): Promise<{
     }
   }
 
+  // Trail structurel sur runners déjà TP1
+  try {
+    const trailed = await trailStructuralRunnersAfterTp1({
+      portfolio,
+      mids,
+      assets,
+      client,
+      info,
+      cfg,
+    });
+    notes.push(...trailed.notes);
+    updated += trailed.updated;
+    checked += trailed.checked;
+  } catch (e) {
+    notes.push(`trail err ${e instanceof Error ? e.message : "x"}`);
+  }
+
   const repaired = await repairNakedLiveTpsl();
   notes.push(...repaired.notes);
   updated += repaired.updated;
@@ -1644,7 +1661,161 @@ async function manageLiveSmcPositionsInner(): Promise<{
   return { checked: checked + repaired.checked, updated, notes };
 }
 
-/** Urgence : TP/SL synthétiques si journal vide (SL 1.5%, TP ~2R). */
+/**
+ * Après TP1 : si nouveau BOS dans le sens du trade, remonter le SL
+ * sous/sur le dernier swing structurel (pas BE émotionnel).
+ */
+async function trailStructuralRunnersAfterTp1(ctx: {
+  portfolio: Awaited<ReturnType<typeof fetchLivePortfolio>>;
+  mids: Record<string, string>;
+  assets: Awaited<ReturnType<typeof loadAssetMap>>;
+  client: ReturnType<typeof getExchangeClient>;
+  info: InfoClient;
+  cfg: ReturnType<typeof getLiveConfig>;
+}): Promise<{ checked: number; updated: number; notes: string[] }> {
+  const { loadLiveJournal, updateLiveJournalEntry } = await import(
+    "./live-journal"
+  );
+  const { loadCandles } = await import("./market-analysis");
+  const { findSwings } = await import("./smc");
+  const notes: string[] = [];
+  let updated = 0;
+  const runners = (await loadLiveJournal()).filter(
+    (e) => e.status === "open" && e.strategy === "smc" && e.tp1Hit,
+  );
+  if (!runners.length || !ctx.portfolio.ok) {
+    return { checked: 0, updated: 0, notes };
+  }
+
+  for (const entry of runners) {
+    const pos = ctx.portfolio.positions.find(
+      (p) =>
+        p.coin.toUpperCase() === entry.coin.toUpperCase() &&
+        p.side === entry.side,
+    );
+    if (!pos) continue;
+    const mid = Number(
+      ctx.mids[entry.coin] ?? ctx.mids[entry.coin.toUpperCase()] ?? 0,
+    );
+    const px = mid > 0 ? mid : pos.entryPx;
+    try {
+      const m15 = await loadCandles(entry.coin, "15m");
+      const swings = findSwings(m15.slice(-48), 2);
+      const pip = Math.max(px * 0.00015, px >= 1000 ? 0.5 : 0.01);
+      let newSl = entry.sl;
+      if (entry.side === "long") {
+        const lows = swings.filter((s) => s.kind === "low").slice(-4);
+        const swing = lows.at(-1);
+        if (swing && swing.price > entry.sl && swing.price < px) {
+          // Nouveau higher-low structurel
+          const candidate = swing.price - pip;
+          if (candidate > entry.sl && candidate < px) {
+            newSl = candidate;
+          }
+        }
+        // Lock progressif : si ≥2R, floor à +0.7R
+        const risk0 = Math.abs(entry.entry - Number(entry.sl));
+        if (risk0 > 0 && (px - entry.entry) / risk0 >= 2) {
+          const lock = entry.entry + risk0 * 0.7;
+          newSl = Math.max(newSl, lock);
+        }
+      } else {
+        const highs = swings.filter((s) => s.kind === "high").slice(-4);
+        const swing = highs.at(-1);
+        if (swing && swing.price < entry.sl && swing.price > px) {
+          const candidate = swing.price + pip;
+          if (candidate < entry.sl && candidate > px) {
+            newSl = candidate;
+          }
+        }
+        const risk0 = Math.abs(entry.entry - Number(entry.sl));
+        if (risk0 > 0 && (entry.entry - px) / risk0 >= 2) {
+          const lock = entry.entry - risk0 * 0.7;
+          newSl = Math.min(newSl, lock);
+        }
+      }
+      if (Math.abs(newSl - entry.sl) / entry.sl < 0.0005) continue;
+
+      const asset = ctx.assets.get(entry.coin.toUpperCase());
+      if (!asset) continue;
+      // Cancel protective + replace TP2 + new SL
+      try {
+        const opens = await ctx.info.frontendOpenOrders({
+          user: ctx.cfg.accountAddress as `0x${string}`,
+        });
+        const cancels = (opens ?? [])
+          .filter(
+            (o) =>
+              String(o.coin || "").toUpperCase() === entry.coin.toUpperCase() &&
+              isProtectiveOpenOrder(o),
+          )
+          .map((o) => ({ a: asset.id, o: Number(o.oid) }))
+          .filter((c) => Number.isFinite(c.o));
+        if (cancels.length) await ctx.client.cancel({ cancels });
+      } catch {
+        /* continue */
+      }
+      const remSz = formatSz(Math.abs(pos.size), asset.szDecimals);
+      if (!remSz || Number(remSz) <= 0) continue;
+      const tp2Px = formatPx(Number(entry.tp2 ?? entry.tp), asset.szDecimals);
+      const slPx = formatPx(newSl, asset.szDecimals);
+      const isBuy = entry.side === "long";
+      const tpsl = await ctx.client.order({
+        orders: [
+          {
+            a: asset.id,
+            b: !isBuy,
+            p: tp2Px,
+            s: remSz,
+            r: true,
+            t: {
+              trigger: {
+                isMarket: true,
+                triggerPx: tp2Px,
+                tpsl: "tp",
+              },
+            },
+          },
+          {
+            a: asset.id,
+            b: !isBuy,
+            p: slPx,
+            s: remSz,
+            r: true,
+            t: {
+              trigger: {
+                isMarket: true,
+                triggerPx: slPx,
+                tpsl: "sl",
+              },
+            },
+          },
+        ],
+        grouping: "na",
+      });
+      const st = tpsl.response?.data?.statuses ?? [];
+      const err = st.find(
+        (s) => s && typeof s === "object" && "error" in s,
+      ) as { error?: string } | undefined;
+      if (err?.error) {
+        notes.push(`${entry.coin}: trail refuse ${err.error}`);
+        continue;
+      }
+      await updateLiveJournalEntry(entry.id, {
+        sl: newSl,
+        tpOid: readOid(st[0]),
+        slOid: readOid(st[1]),
+      });
+      updated += 1;
+      notes.push(`${entry.coin}: trail SL ${entry.sl} → ${newSl}`);
+    } catch (e) {
+      notes.push(
+        `${entry.coin}: trail err ${e instanceof Error ? e.message : "x"}`,
+      );
+    }
+  }
+  return { checked: runners.length, updated, notes };
+}
 function synthesizeEmergencyTpsl(
   side: "long" | "short",
   entry: number,

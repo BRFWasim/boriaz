@@ -52,6 +52,8 @@ export interface SmcOrderParams {
   tp1: number;
   tp2: number;
   entryMode: "limit_wait" | "market_now";
+  /** deep = ÔTE 0.618–0.786 ; shallow = retest BOS 0.5–0.618 */
+  entryStyle?: "deep" | "shallow";
 }
 
 export interface SmcChecklist {
@@ -102,6 +104,10 @@ export interface SmcSetup {
   counterTrend?: boolean;
   /** continuation | correction */
   tradeKind?: "continuation" | "correction" | null;
+  /** deep ÔTE vs shallow retest BOS (demi-taille). */
+  entryStyle?: "deep" | "shallow" | null;
+  /** true = D1 neutre, H4 mène (taille réduite). */
+  h4Lead?: boolean;
 }
 
 const EQUAL_TOL = 0.002; // 0.20 % equal highs/lows
@@ -403,6 +409,29 @@ export function computeOte(
 }
 
 /**
+ * Retest BOS shallow 0.5–0.618 — pour continuations qui ne taguent jamais le deep ÔTE.
+ * Demi-taille côté sizing (riskPct × 0.5).
+ */
+export function computeOteShallow(
+  side: SmcSide,
+  impulseHigh: number,
+  impulseLow: number,
+): OteZone | null {
+  if (!(impulseHigh > impulseLow) || impulseLow <= 0) return null;
+  const range = impulseHigh - impulseLow;
+  if (side === "long") {
+    const low = impulseHigh - range * 0.618;
+    const high = impulseHigh - range * 0.5;
+    const ideal = impulseHigh - range * 0.56;
+    return { high, low, ideal, impulseHigh, impulseLow };
+  }
+  const low = impulseLow + range * 0.5;
+  const high = impulseLow + range * 0.618;
+  const ideal = impulseLow + range * 0.56;
+  return { high, low, ideal, impulseHigh, impulseLow };
+}
+
+/**
  * Fraction clôturée au TP1 (1R). Le reste court vers TP2 (≥2R).
  * 20% lock + 80% runner → viser ~100$ sur compte ~950$ quand risque ~8–10%.
  */
@@ -478,6 +507,7 @@ export function buildSmcOrder(input: {
   sweepLevel?: number | null;
   /** Bougies exec pour TP2 structurel (liquidité opposée / FVG). */
   candlesExec?: Candle[];
+  entryStyle?: "deep" | "shallow";
 }): SmcOrderParams {
   const { side, ote, fvg, impulseHigh, impulseLow } = input;
   void input.price;
@@ -537,7 +567,15 @@ export function buildSmcOrder(input: {
   }
 
   // Ultra-strict : LIMIT exclusively dans ÔTE/FVG — jamais market
-  return { side, entry, sl, tp1, tp2, entryMode: "limit_wait" };
+  return {
+    side,
+    entry,
+    sl,
+    tp1,
+    tp2,
+    entryMode: "limit_wait",
+    entryStyle: input.entryStyle ?? "deep",
+  };
 }
 
 function fmt(px: number): string {
@@ -655,6 +693,7 @@ function evaluateSideOnExec(input: {
   walletEur: number;
   maxLeverage: number;
   riskPct?: number;
+  entryStyle?: "deep" | "shallow";
 }): {
   liquiditySweep: boolean;
   liquidityLevel: number | null;
@@ -666,7 +705,9 @@ function evaluateSideOnExec(input: {
   impulseHigh: number;
   impulseLow: number;
   missing: string[];
+  entryStyle: "deep" | "shallow";
 } {
+  const entryStyle = input.entryStyle ?? "deep";
   const liq = detectLiquiditySweep(input.candlesExec, input.side);
   const bos = detectChochBos(input.candlesExec, input.side);
   const impulseHigh = bos.impulseHigh;
@@ -676,14 +717,17 @@ function evaluateSideOnExec(input: {
 
   let ote: OteZone | null = null;
   if (bos.ok && impulseHigh > impulseLow) {
-    ote = computeOte(input.side, impulseHigh, impulseLow);
+    ote =
+      entryStyle === "shallow"
+        ? computeOteShallow(input.side, impulseHigh, impulseLow)
+        : computeOte(input.side, impulseHigh, impulseLow);
   }
 
   const missing: string[] = [];
   if (!liq.ok) missing.push("Liquidity Sweep");
   if (!bos.ok) missing.push("CHoCH/BOS (clôture corps)");
   if (!fvg) missing.push("FVG");
-  if (!ote) missing.push("Zone ÔTE");
+  if (!ote) missing.push(entryStyle === "shallow" ? "Zone shallow 0.5–0.618" : "Zone ÔTE");
 
   let order: SmcOrderParams | null = null;
   let risk: SmcRiskPlan | null = null;
@@ -697,13 +741,18 @@ function evaluateSideOnExec(input: {
       impulseLow,
       sweepLevel: liq.level,
       candlesExec: input.candlesExec,
+      entryStyle,
     });
+    const baseRisk = input.riskPct ?? 3;
+    // Shallow = demi-taille (capture trend sans oversize)
+    const riskPct =
+      entryStyle === "shallow" ? Math.max(1.5, baseRisk * 0.5) : baseRisk;
     risk = computeSmcRiskPlan({
       walletEur: input.walletEur,
       entry: order.entry,
       sl: order.sl,
       maxLeverage: input.maxLeverage,
-      riskPct: input.riskPct ?? 3,
+      riskPct,
     });
   }
 
@@ -718,6 +767,7 @@ function evaluateSideOnExec(input: {
     impulseHigh,
     impulseLow,
     missing,
+    entryStyle,
   };
 }
 
@@ -741,6 +791,11 @@ export function analyzeSmcSetup(input: {
 
   const longContinuation = d1 === "haussier" && h4 === "haussier";
   const shortContinuation = d1 === "baissier" && h4 === "baissier";
+  // H4-lead : D1 neutre mais H4+H1 alignés — early trend, demi-taille
+  const longH4Lead =
+    d1 === "neutre" && h4 === "haussier" && h1 !== "baissier" && !longContinuation;
+  const shortH4Lead =
+    d1 === "neutre" && h4 === "baissier" && h1 !== "haussier" && !shortContinuation;
   const correctionTfOk = execTf === "15m" || execTf === "30m";
   const shortCorrection = d1 === "haussier" && correctionTfOk;
   const longCorrection = d1 === "baissier" && correctionTfOk;
@@ -750,47 +805,117 @@ export function analyzeSmcSetup(input: {
     signalType: NonNullable<SmcSetup["signalType"]>;
     counterTrend: boolean;
     tradeKind: "continuation" | "correction";
+    h4Lead: boolean;
+    entryStyle: "deep" | "shallow";
     local: ReturnType<typeof evaluateSideOnExec>;
   };
 
   const candidates: Candidate[] = [];
 
-  if (longContinuation) {
+  const pushCont = (
+    side: SmcSide,
+    signalType: NonNullable<SmcSetup["signalType"]>,
+    h4Lead: boolean,
+  ) => {
+    const riskPct = h4Lead ? 2.5 : undefined;
+    const deep = evaluateSideOnExec({
+      side,
+      candlesExec: input.candlesExec,
+      price: input.price,
+      walletEur: input.walletEur,
+      maxLeverage: maxLev,
+      riskPct,
+      entryStyle: "deep",
+    });
+    const shallow = evaluateSideOnExec({
+      side,
+      candlesExec: input.candlesExec,
+      price: input.price,
+      walletEur: input.walletEur,
+      maxLeverage: maxLev,
+      riskPct: riskPct != null ? riskPct * 0.5 : 2,
+      entryStyle: "shallow",
+    });
+    // Choisir le style le plus fillable : ORDRE PRÊT > zone la plus proche du prix
+    const score = (loc: typeof deep, style: "deep" | "shallow") => {
+      if (!loc.order || !loc.ote || !loc.risk) return -1;
+      const zLo = Math.min(loc.ote.low, loc.fvg?.low ?? loc.ote.low);
+      const zHi = Math.max(loc.ote.high, loc.fvg?.high ?? loc.ote.high);
+      const inZone =
+        input.price >= zLo * 0.994 && input.price <= zHi * 1.006;
+      const dist = Math.min(
+        Math.abs(input.price - loc.order.entry),
+        Math.abs(input.price - loc.ote.ideal),
+      );
+      // Shallow bonus en continuation tendance (capture sans attendre deep)
+      const styleBonus = style === "shallow" ? 0.15 : 0;
+      return (inZone ? 1000 : 0) + styleBonus * 100 - dist / input.price;
+    };
+    const deepOk =
+      deep.liquiditySweep &&
+      deep.chochBos &&
+      deep.fvg &&
+      deep.ote &&
+      deep.order &&
+      deep.risk;
+    const shallowOk =
+      shallow.liquiditySweep &&
+      shallow.chochBos &&
+      shallow.fvg &&
+      shallow.ote &&
+      shallow.order &&
+      shallow.risk;
+    let pick: typeof deep | null = null;
+    let style: "deep" | "shallow" = "deep";
+    if (deepOk && shallowOk) {
+      if (score(shallow, "shallow") > score(deep, "deep")) {
+        pick = shallow;
+        style = "shallow";
+      } else {
+        pick = deep;
+        style = "deep";
+      }
+    } else if (shallowOk) {
+      pick = shallow;
+      style = "shallow";
+    } else if (deepOk) {
+      pick = deep;
+      style = "deep";
+    } else {
+      pick = deep; // partial for report
+      style = "deep";
+    }
     candidates.push({
-      side: "long",
-      signalType: "long_aligned",
+      side,
+      signalType,
       counterTrend: false,
       tradeKind: "continuation",
-      local: evaluateSideOnExec({
-        side: "long",
-        candlesExec: input.candlesExec,
-        price: input.price,
-        walletEur: input.walletEur,
-        maxLeverage: maxLev,
-      }),
+      h4Lead,
+      entryStyle: style,
+      local: pick,
     });
+  };
+
+  if (longContinuation) {
+    pushCont("long", "long_aligned", false);
   }
   if (shortContinuation) {
-    candidates.push({
-      side: "short",
-      signalType: "short_aligned",
-      counterTrend: false,
-      tradeKind: "continuation",
-      local: evaluateSideOnExec({
-        side: "short",
-        candlesExec: input.candlesExec,
-        price: input.price,
-        walletEur: input.walletEur,
-        maxLeverage: maxLev,
-      }),
-    });
+    pushCont("short", "short_aligned", false);
   }
-  if (shortCorrection && !shortContinuation) {
+  if (longH4Lead) {
+    pushCont("long", "long_aligned", true);
+  }
+  if (shortH4Lead) {
+    pushCont("short", "short_aligned", true);
+  }
+  if (shortCorrection && !shortContinuation && !shortH4Lead) {
     candidates.push({
       side: "short",
       signalType: "short_counter_trend",
       counterTrend: true,
       tradeKind: "correction",
+      h4Lead: false,
+      entryStyle: "deep",
       local: evaluateSideOnExec({
         side: "short",
         candlesExec: input.candlesExec,
@@ -800,12 +925,14 @@ export function analyzeSmcSetup(input: {
       }),
     });
   }
-  if (longCorrection && !longContinuation) {
+  if (longCorrection && !longContinuation && !longH4Lead) {
     candidates.push({
       side: "long",
       signalType: "long_counter_trend",
       counterTrend: true,
       tradeKind: "correction",
+      h4Lead: false,
+      entryStyle: "deep",
       local: evaluateSideOnExec({
         side: "long",
         candlesExec: input.candlesExec,
@@ -829,6 +956,8 @@ export function analyzeSmcSetup(input: {
     .sort((a, b) => {
       const score = (c: Candidate) =>
         (c.tradeKind === "continuation" ? 4 : 0) +
+        (c.h4Lead ? 1 : 0) +
+        (c.entryStyle === "shallow" && c.tradeKind === "continuation" ? 1 : 0) +
         (c.signalType === "long_aligned" ? 3 : 0) +
         (c.signalType === "short_aligned" ? 2 : 0) +
         (c.signalType === "long_counter_trend" ||
@@ -850,6 +979,8 @@ export function analyzeSmcSetup(input: {
   const h1Aligned =
     best?.tradeKind === "correction"
       ? true
+      : best?.h4Lead
+        ? h1 !== (side === "long" ? "baissier" : "haussier")
       : side === "long"
         ? h1 !== "baissier"
         : side === "short"
@@ -899,6 +1030,8 @@ export function analyzeSmcSetup(input: {
   if (checklist.allPass) confidence += 10;
   if (best?.tradeKind === "continuation" && checklist.allPass) confidence += 6;
   if (best?.tradeKind === "correction" && checklist.allPass) confidence += 2;
+  if (best?.h4Lead) confidence = Math.min(confidence, 82); // early trend: pas max
+  if (best?.entryStyle === "shallow") confidence = Math.min(95, confidence + 2);
   confidence = Math.min(95, confidence);
 
   // Checklist partielle pour le rapport si aucun setup complet
@@ -929,10 +1062,12 @@ export function analyzeSmcSetup(input: {
     checklist.allPass = false;
   }
 
-  // Sizing final : plus la confiance est haute, plus on risque (pas rester à 2%).
+  // Sizing final : confiance × style (shallow/h4Lead = réduit)
   let sizedRisk = best ? local?.risk ?? null : null;
   if (best && local?.order) {
-    const scaledPct = riskPctFromConfidence(confidence, 3);
+    let scaledPct = riskPctFromConfidence(confidence, 3);
+    if (best.entryStyle === "shallow") scaledPct = Math.max(1.5, scaledPct * 0.5);
+    if (best.h4Lead) scaledPct = Math.max(1.5, scaledPct * 0.65);
     sizedRisk = computeSmcRiskPlan({
       walletEur: input.walletEur,
       entry: local.order.entry,
@@ -963,6 +1098,8 @@ export function analyzeSmcSetup(input: {
     signalType: reportSignal,
     counterTrend: reportCounter,
     tradeKind: reportKind,
+    entryStyle: best?.entryStyle ?? local?.entryStyle ?? null,
+    h4Lead: best?.h4Lead ?? false,
   };
   setup.report = formatSmcReport(setup);
   return setup;

@@ -73,10 +73,25 @@ export async function POST(request: Request) {
     }
 
     const result = await repairNakedLiveTpsl();
+    let cleanup: Awaited<
+      ReturnType<typeof import("@/lib/live-cleanup").cleanupStaleLiveLimits>
+    > | null = null;
+    try {
+      const { cleanupStaleLiveLimits } = await import("@/lib/live-cleanup");
+      cleanup = await cleanupStaleLiveLimits();
+    } catch (e) {
+      cleanup = {
+        checked: 0,
+        cancelled: 0,
+        closedJournal: 0,
+        notes: [e instanceof Error ? e.message : "cleanup err"],
+      };
+    }
     return Response.json({
       ok: true,
-      mode: "naked",
+      mode: "naked+cleanup",
       ...result,
+      cleanup,
       fetchedAt: Date.now(),
     });
   } catch (e) {

@@ -48,6 +48,18 @@ export async function runCronWork(phase: CronPhase = "all"): Promise<{
         manage.liveSmcError = e instanceof Error ? e.message : "liveSmc";
       }
       try {
+        const { cleanupStaleLiveLimits } = await import("@/lib/live-cleanup");
+        manage.liveCleanup = await cleanupStaleLiveLimits();
+      } catch (e) {
+        manage.liveCleanupError = e instanceof Error ? e.message : "cleanup";
+      }
+      try {
+        const { checkArmedZonesAndScan } = await import("@/lib/zone-watch");
+        manage.zoneWatch = await checkArmedZonesAndScan();
+      } catch (e) {
+        manage.zoneWatchError = e instanceof Error ? e.message : "zone";
+      }
+      try {
         const { manageLivePositionReviews } = await import(
           "@/lib/manage-live-positions"
         );
