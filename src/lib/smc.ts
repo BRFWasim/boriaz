@@ -402,6 +402,22 @@ export function computeOte(
   return { high, low, ideal, impulseHigh, impulseLow };
 }
 
+/**
+ * Risque % selon confiance — setups SMC prêts sont souvent ≥85.
+ * Objectif : quand on est sûr, miser plus gros (compte ~950$ → pas rester à 2%).
+ */
+export function riskPctFromConfidence(
+  confidence: number,
+  baseRiskPct = 2.5,
+): number {
+  const base = Math.min(5, Math.max(1, baseRiskPct));
+  if (confidence >= 88) return Math.min(5, Math.max(base, 5));
+  if (confidence >= 80) return Math.min(5, Math.max(base, 4));
+  if (confidence >= 72) return Math.min(5, Math.max(base, 3.5));
+  if (confidence >= 65) return Math.min(5, Math.max(base, 3));
+  return Math.min(5, Math.max(base, 2.5));
+}
+
 export function computeSmcRiskPlan(input: {
   walletEur: number;
   entry: number;
@@ -409,7 +425,7 @@ export function computeSmcRiskPlan(input: {
   maxLeverage: number;
   riskPct?: number;
 }): SmcRiskPlan {
-  const riskPct = input.riskPct ?? 2;
+  const riskPct = input.riskPct ?? 2.5;
   const walletEur = Math.max(100, input.walletEur);
   const riskEur = walletEur * (riskPct / 100);
   const slDistancePct =
@@ -606,7 +622,7 @@ export function formatSmcReport(setup: SmcSetup): string {
     `Type d'ordre : LIMIT ${setup.order.side.toUpperCase()}`,
     `Prix d'entrée (Entry) : ${fmt(setup.order.entry)}`,
     `Stop Loss Initial (SL) : ${fmt(setup.order.sl)} (1–2 pips au-delà mèche sweep)`,
-    `TP1 (R:R 1:1 - Clôture 50% + BE) : ${fmt(setup.order.tp1)}`,
+    `TP1 (R:R 1:1 - Clôture 50%, SL structurel inchangé) : ${fmt(setup.order.tp1)}`,
     `TP2 Structurel (liq. opposée / FVG, ≥2R) : ${fmt(setup.order.tp2)}`,
     "",
     "",
@@ -625,6 +641,7 @@ function evaluateSideOnExec(input: {
   price: number;
   walletEur: number;
   maxLeverage: number;
+  riskPct?: number;
 }): {
   liquiditySweep: boolean;
   liquidityLevel: number | null;
@@ -673,7 +690,7 @@ function evaluateSideOnExec(input: {
       entry: order.entry,
       sl: order.sl,
       maxLeverage: input.maxLeverage,
-      riskPct: 2,
+      riskPct: input.riskPct ?? 2.5,
     });
   }
 
@@ -899,6 +916,19 @@ export function analyzeSmcSetup(input: {
     checklist.allPass = false;
   }
 
+  // Sizing final : plus la confiance est haute, plus on risque (pas rester à 2%).
+  let sizedRisk = best ? local?.risk ?? null : null;
+  if (best && local?.order) {
+    const scaledPct = riskPctFromConfidence(confidence, 2.5);
+    sizedRisk = computeSmcRiskPlan({
+      walletEur: input.walletEur,
+      entry: local.order.entry,
+      sl: local.order.sl,
+      maxLeverage: maxLev,
+      riskPct: scaledPct,
+    });
+  }
+
   const setup: SmcSetup = {
     coin: input.coin,
     side: best ? side : null,
@@ -908,7 +938,7 @@ export function analyzeSmcSetup(input: {
     fvg: reportLocal?.fvg ?? null,
     ote: reportLocal?.ote ?? null,
     order: best ? local?.order ?? null : null,
-    risk: best ? local?.risk ?? null : null,
+    risk: sizedRisk,
     status: best ? status : "ANNULÉ",
     cancelReason: best
       ? cancelReason
@@ -959,9 +989,9 @@ Ne JAMAIS short « parce que le M15 est baissier » si le BTC est en bas de son 
 Un seul ✗ → « SETUP INVALIDÉ (CRITÈRE MANQUANT) - AUCUN ORDRE ».
 
 ### 4. RISQUE & ORDRE
-- Risque exact 2 % du wallet. Entrée LIMIT exclusive dans FVG/ÔTE.
+- Risque de base ~2.5 % du wallet, **monté jusqu’à 5 %** si confiance haute (setup checklist 100 % / continuation claire). Entrée LIMIT exclusive dans FVG/ÔTE.
 - SL = 1–2 pips au-delà de la mèche du Sweep (sous swing low long / au-dessus swing high short).
-- TP1 = R:R exact 1:1 → clôturer EXACTEMENT 50 % + BE immédiat.
+- TP1 = R:R exact 1:1 → clôturer EXACTEMENT 50 %. **PAS de break-even** : le SL structurel reste en place sur le reste (laisse courir vers TP2).
 - TP2 = liquidité opposée / FVG non comblé, minimum 2R.
 
 ### 5. GATE

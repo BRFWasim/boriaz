@@ -196,7 +196,7 @@ export async function GET() {
 
       const entry = paper!.entry;
       const tpPaper = paper!.tp1Hit && paper!.tp2 ? paper!.tp2 : paper!.tp;
-      const slPaper = paper!.tp1Hit ? paper!.entry : paper!.sl;
+      const slPaper = paper!.sl;
       const tp =
         exchangeTp != null && exchangeTp > 0 ? exchangeTp : tpPaper;
       const sl =
@@ -259,10 +259,10 @@ export async function GET() {
     openJournal,
     riskPreview: portfolio.ok
       ? {
-          riskPct: 2,
-          riskUsd: Math.round(portfolio.accountValueUsd * 0.02 * 100) / 100,
+          riskPct: 3.5,
+          riskUsd: Math.round(portfolio.accountValueUsd * 0.035 * 100) / 100,
           note:
-            "LIVE = Boriaz uniquement. TP/SL lus sur HL + journal Boriaz.",
+            "LIVE = Boriaz. Risque 2.5–5% selon confiance · TP1 50% sans BE · SL structurel.",
         }
       : null,
     guards,

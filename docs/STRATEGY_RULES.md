@@ -6,10 +6,11 @@ Les règles SMC objectivées vivent dans `src/lib/smc.ts`, `smc-scan.ts`, `smc-l
 
 1. Sweep liquidité + CHoCH/BOS (clôture de corps) + FVG + ÔTE 0.618–0.786
 2. Entrée LIMIT dans ÔTE∩FVG — jamais market chase
-3. TP1 = 1R (50% + BE), TP2 ≥ 2R structurel
+3. TP1 = 1R (50%, SL structurel inchangé — **pas de BE**), TP2 ≥ 2R structurel
 4. Correction : M15/M30 only (pas M5)
 5. Range : **pas de SHORT en bas** (~0–35 % W/D1), **pas de LONG en haut** (~65–100 %)
-6. Objectif : **FAIRE GAGNER DE L'ARGENT** — refuse si espérance défavorable
+6. Sizing : risque **2.5–5 %** selon confiance (setup sûr → plus gros)
+7. Objectif : **FAIRE GAGNER DE L'ARGENT** — refuse si espérance défavorable
 
 ## Pipeline (AI_COST_CONTROL)
 

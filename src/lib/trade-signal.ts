@@ -409,7 +409,7 @@ async function refreshPaperTrades(
     t.pnlPct = pnlPct;
     t.pnlEur = pnlEur;
 
-    // SMC : TP1 (1R) → clôturer 50 % + Break-Even, puis TP2 sur le reste
+    // SMC : TP1 (1R) → clôturer 50 %, SL structurel inchangé (pas de BE), TP2 sur le reste
     const tp1 = t.tp1 != null && t.tp1 > 0 ? t.tp1 : null;
     const tp2 = t.tp2 != null && t.tp2 > 0 ? t.tp2 : null;
     const isSmc = t.strategy === "smc" || (tp1 != null && tp2 != null);
@@ -430,10 +430,10 @@ async function refreshPaperTrades(
         t.notionalEur = halfMargin * t.leverage;
         t.remainingQtyPct = 0.5;
         t.tp1Hit = true;
-        t.sl = t.entry; // Break-even absolu
+        // SL structurel conservé — plus de BE qui coupe les runners
         t.tp = tp2 ?? t.tp;
         t.feesEur = halfFees; // frais restants sur demi-position
-        t.note = `TP1 50% @ ${tp1} (+${(halfPnl - halfFees).toFixed(2)} €) · SL → BE · vise TP2`;
+        t.note = `TP1 50% @ ${tp1} (+${(halfPnl - halfFees).toFixed(2)} €) · SL structurel · vise TP2`;
         t.pnlEur =
           t.realizedPartialEur +
           t.marginEur * (pnlPct / 100) -
@@ -442,7 +442,7 @@ async function refreshPaperTrades(
       }
     }
 
-    // SL / TP final (TP2 après BE, ou TP simple)
+    // SL / TP final (TP2 après TP1, ou TP simple)
     const activeTp = t.tp1Hit && tp2 != null ? tp2 : t.tp;
     let hit: PaperTrade["status"] | null = null;
     if (t.side === "long") {
@@ -459,12 +459,11 @@ async function refreshPaperTrades(
       const finalUnreal = t.marginEur * (pnlPct / 100) - (t.feesEur ?? 0);
       const totalEur = (t.realizedPartialEur ?? 0) + finalUnreal;
       t.pnlEur = totalEur;
-      const beNote = t.tp1Hit && hit === "sl" ? " (BE après TP1)" : "";
       t.note =
         hit === "tp"
           ? `${t.tp1Hit ? "TP2" : "TP"} touché — +${totalEur.toFixed(2)} €`
           : hit === "sl"
-            ? `SL touché${beNote} — ${totalEur.toFixed(2)} €`
+            ? `SL touché — ${totalEur.toFixed(2)} €`
             : `Invalidation — fermeture ${totalEur.toFixed(2)} €`;
       closes.push({ ...t });
     } else if (pnlPct <= -4 && !t.tp1Hit) {
@@ -562,7 +561,7 @@ export async function getTradeSignals(options?: {
 
   const { paper, closes } = await refreshPaperTrades(priceMap);
 
-  // Miroir paper SMC sur le LIVE : TP1 50% → SL→BE → vise TP2
+  // Miroir paper SMC sur le LIVE : TP1 50% → SL structurel → vise TP2 (pas de BE)
   try {
     const { manageLiveSmcPositions } = await import("./hl-live");
     const managed = await manageLiveSmcPositions();
@@ -1457,7 +1456,7 @@ export async function getTradeSignals(options?: {
               ? `ÔTE ${setup.ote.low}–${setup.ote.high} (idéal ${setup.ote.ideal})`
               : "ÔTE manquant",
             `Risque ${setup.risk.riskEur.toFixed(2)} $ (2%) · notionnel ${setup.risk.notionalEur} $`,
-            `TP1 1R 50%+BE · TP2 ≥2R · gate réfléchie`,
+            `TP1 1R 50% · SL structurel (pas BE) · TP2 ≥2R · gate réfléchie`,
             smcScan.liveEligible
               ? "LIVE éligible (IA + ORDRE PRÊT)"
               : "LIVE non éligible pour l’instant",
@@ -1496,7 +1495,7 @@ export async function getTradeSignals(options?: {
           portfolioName: pf.name,
           justification,
           strategy: "smc",
-          riskPct: 2,
+          riskPct: setup.risk.riskPct,
         });
 
         // LIVE Hyperliquid — uniquement ORDRE PRÊT + double gate (pas EN ATTENTE)
@@ -1553,7 +1552,7 @@ export async function getTradeSignals(options?: {
               tp1: setup.order.tp1,
               tp2: setup.order.tp2,
               leverage: setup.risk.leverage,
-              riskPct: pf.riskPct ?? 2,
+              riskPct: setup.risk.riskPct,
               entryMode: "limit_wait",
               paperId: opened.id,
               portfolioId: pf.id,
@@ -1673,7 +1672,7 @@ export async function getTradeSignals(options?: {
                   `SMC BORIAZ · ${setup.order.side.toUpperCase()} ${setup.coin}`,
                   setup.status,
                   `E ${setup.order.entry} · SL ${setup.order.sl}`,
-                  `TP1 ${setup.order.tp1} (50%+BE) · TP2 ${setup.order.tp2}`,
+                  `TP1 ${setup.order.tp1} (50%) · TP2 ${setup.order.tp2} · risque ${setup.risk.riskPct}%`,
                   `Risque 2% = ${setup.risk.riskEur.toFixed(2)} €`,
                   smcScan.aiNote || "",
                   "",

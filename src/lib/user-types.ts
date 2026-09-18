@@ -31,7 +31,7 @@ export interface PortfolioProfile {
    * - smc : Smart Money Concepts (portefeuille Boriaz)
    */
   strategy: PortfolioStrategy;
-  /** Risque max par trade en % du wallet (SMC = 2). */
+  /** Risque max par trade en % du wallet (SMC Boriaz = 2.5–5 selon confiance). */
   riskPct: number;
 }
 
@@ -159,7 +159,7 @@ export const BORIAZ_PORTFOLIO: PortfolioProfile = {
   requireAiGate: false,
   maxSafetyMode: true,
   strategy: "smc",
-  riskPct: 2,
+  riskPct: 3.5,
 };
 
 /** 0 = illimité ; sinon 1–20. */
@@ -209,7 +209,13 @@ export function ensurePortfolios(
             : "alignment",
       riskPct:
         p.id === "boriaz"
-          ? 2
+          ? Math.min(
+              5,
+              Math.max(
+                2.5,
+                Number.isFinite(p.riskPct) ? Number(p.riskPct) : 3.5,
+              ),
+            )
           : isScalpPortfolio(p)
             ? scalpLiveRiskPct(p.riskPct)
             : Number.isFinite(p.riskPct)
@@ -240,7 +246,13 @@ export function ensurePortfolios(
       id: "boriaz",
       name: b.name?.trim() || "Boriaz",
       strategy: "smc",
-      riskPct: 2,
+      riskPct: Math.min(
+        5,
+        Math.max(
+          2.5,
+          Number.isFinite(b.riskPct) ? Number(b.riskPct) : 3.5,
+        ),
+      ),
       tradesPerDay: clampTradesPerDay(
         b.tradesPerDay == null ? 0 : b.tradesPerDay,
         0,
@@ -386,11 +398,11 @@ export interface PaperTrade {
   entry: number;
   tp: number;
   sl: number;
-  /** TP1 (1R) — SMC : clôture 50 % + BE. */
+  /** TP1 (1R) — SMC : clôture 50 %, SL structurel conservé (pas BE). */
   tp1?: number | null;
   /** TP2 (2R) — SMC : solde restant. */
   tp2?: number | null;
-  /** true après TP1 : 50 % déjà pris, SL au break-even. */
+  /** true après TP1 : 50 % déjà pris, SL structurel inchangé. */
   tp1Hit?: boolean;
   /** PnL déjà réalisé sur la demi-position TP1. */
   realizedPartialEur?: number;

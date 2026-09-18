@@ -5,6 +5,7 @@ import {
   computeSmcRiskPlan,
   detectFvg,
   formatSmcReport,
+  riskPctFromConfidence,
 } from "../src/lib/smc";
 import type { Candle } from "../src/lib/types";
 
@@ -22,15 +23,32 @@ const ote = computeOte("long", 110, 100);
 assert.ok(ote);
 assert.ok(Math.abs(ote!.ideal - (110 - 10 * 0.705)) < 1e-9);
 
+assert.equal(riskPctFromConfidence(60), 2.5);
+assert.equal(riskPctFromConfidence(70), 3);
+assert.equal(riskPctFromConfidence(75), 3.5);
+assert.equal(riskPctFromConfidence(82), 4);
+assert.equal(riskPctFromConfidence(90), 5);
+
 const risk = computeSmcRiskPlan({
+  walletEur: 950,
+  entry: 100,
+  sl: 98.5,
+  maxLeverage: 3,
+  riskPct: riskPctFromConfidence(90),
+});
+assert.equal(risk.riskPct, 5);
+assert.equal(risk.riskEur, 47.5);
+assert.ok(risk.notionalEur > 2500, `notional trop petit: ${risk.notionalEur}`);
+
+const riskLow = computeSmcRiskPlan({
   walletEur: 1000,
   entry: 100,
   sl: 98.5,
   maxLeverage: 3,
   riskPct: 2,
 });
-assert.equal(risk.riskEur, 20);
-assert.ok(risk.notionalEur > 1200 && risk.notionalEur < 1400);
+assert.equal(riskLow.riskEur, 20);
+assert.ok(riskLow.notionalEur > 1200 && riskLow.notionalEur < 1400);
 
 const fvg = detectFvg(
   [
@@ -67,13 +85,20 @@ const setup = analyzeSmcSetup({
   maxLeverage: 3,
 });
 const report = formatSmcReport(setup);
-assert.ok(report.includes("[ANALYSE MULTI-TIMEFRAME (TOP-DOWN)]"));
+assert.ok(report.includes("[ANALYSE TIMEFRAME]"));
 assert.ok(report.includes("Statut :"));
 assert.ok(setup.bias.d1 === "haussier" || setup.bias.d1 === "neutre" || setup.bias.d1 === "baissier");
+if (setup.checklist.allPass && setup.risk) {
+  assert.ok(
+    setup.risk.riskPct >= 3.5,
+    `setup sûr doit risquer ≥3.5%, got ${setup.risk.riskPct}`,
+  );
+}
 
 console.log("SMC smoke OK", {
   bias: setup.bias,
   checklist: setup.checklist,
   status: setup.status,
   confidence: setup.confidence,
+  riskPct: setup.risk?.riskPct,
 });

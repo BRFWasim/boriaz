@@ -125,7 +125,7 @@ export async function reconcileLiveVsJournal(): Promise<{
         tp2: tp,
         size: Math.abs(p.size),
         leverage: p.leverage || 1,
-        riskPct: 2,
+        riskPct: 2.5,
         riskUsd: Math.abs(p.size) * risk,
         portfolioId: "boriaz",
         portfolioName: "Boriaz (adopté)",

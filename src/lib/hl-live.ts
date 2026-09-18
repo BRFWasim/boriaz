@@ -44,7 +44,7 @@ export type LiveTradeRequest = {
   portfolioId?: string;
   portfolioName?: string;
   strategy?: "alignment" | "smc";
-  /** TP1 SMC (1R) — 50% + BE comme paper. */
+  /** TP1 SMC (1R) — 50% puis SL structurel (pas BE). */
   tp1?: number | null;
   tp2?: number | null;
 };
@@ -633,7 +633,7 @@ export async function fetchLivePortfolio(): Promise<LivePortfolioSnapshot> {
 /**
  * Sizing LIVE sur le solde HL réel.
  * - Mode miroir paper : même % de marge que le paper (marge/bankroll) sur l’equity réelle.
- * - Sinon : riskPct % de l’equity (défaut 2%).
+ * - Sinon : riskPct % de l’equity (défaut 2.5%, jusqu’à 5% si confiance haute).
  * Seuils assouplis en mirrorPaper pour coller au paper même sur petit solde.
  */
 export function sizeLiveFromRealEquity(input: {
@@ -662,9 +662,9 @@ export function sizeLiveFromRealEquity(input: {
   const minEquity = mirror ? 5 : 20;
   const minNotional = mirror ? 1 : 8;
   const minMargin = mirror ? 0.5 : 2;
-  const freeFrac = mirror ? 0.85 : 0.45;
+  const freeFrac = mirror ? 0.85 : 0.55;
 
-  const riskPct = input.riskPct && input.riskPct > 0 ? input.riskPct : 2;
+  const riskPct = input.riskPct && input.riskPct > 0 ? input.riskPct : 2.5;
   const equityUsd = Math.max(0, input.equityUsd);
   if (!(equityUsd >= minEquity)) {
     return {
@@ -898,7 +898,7 @@ async function placeBoriazLiveTradeInner(
     sl: req.sl,
     maxLeverage: Math.min(lev, cfg.maxLeverage, asset.maxLeverage),
     maxNotionalUsd: cfg.maxNotionalUsd,
-    riskPct: req.riskPct ?? 2,
+    riskPct: req.riskPct ?? 2.5,
     paperMarginEur: req.paperMarginEur,
     paperBankrollEur: req.paperBankrollEur,
     mirrorPaper: mirror,
@@ -1264,7 +1264,7 @@ async function placeBoriazLiveTradeInner(
       tp1Hit: false,
       size: sizeNum,
       leverage: liveLev,
-      riskPct: req.riskPct ?? 2,
+      riskPct: req.riskPct ?? 2.5,
       riskUsd: sized.riskUsd,
       portfolioId: req.portfolioId || "boriaz",
       portfolioName: req.portfolioName || botLabel,
@@ -1366,7 +1366,8 @@ async function placeBoriazLiveTradeInner(
 
 /**
  * Miroir paper SMC sur le live :
- * TP1 touché → (si besoin) réduire 50% + SL → BE + TP2 sur le reste.
+ * TP1 touché → (si besoin) réduire 50% + SL structurel inchangé + TP2 sur le reste.
+ * Pas de break-even : un pullback vers l’entry ne doit plus tuer le runner.
  * Appelé par le cron / getTradeSignals — ne change pas le paper.
  */
 export async function manageLiveSmcPositions(): Promise<{
@@ -1385,7 +1386,7 @@ export async function manageLiveSmcPositions(): Promise<{
     return {
       checked: 0,
       updated: 0,
-      notes: ["manage-smc-lock déjà pris — skip (anti race TP1/BE)"],
+      notes: ["manage-smc-lock déjà pris — skip (anti race TP1)"],
     };
   }
 
@@ -1514,17 +1515,18 @@ async function manageLiveSmcPositionsInner(): Promise<{
       if (!remSz || Number(remSz) <= 0) {
         await updateLiveJournalEntry(entry.id, {
           tp1Hit: true,
-          sl: entry.entry,
         });
         updated += 1;
-        notes.push(`${entry.coin}: TP1/BE (size flat)`);
+        notes.push(`${entry.coin}: TP1 (size flat)`);
         continue;
       }
 
-      const bePx = formatPx(entry.entry, asset.szDecimals);
+      // SL structurel d’origine — JAMAIS break-even (coupe les winners)
+      const structuralSl = Number(entry.sl) > 0 ? Number(entry.sl) : entry.entry;
+      const slPxKeep = formatPx(structuralSl, asset.szDecimals);
       const tp2Px = formatPx(Number(entry.tp2 ?? entry.tp), asset.szDecimals);
       const isBuy = entry.side === "long";
-      const placeBeTp2 = async () =>
+      const placeTp2Sl = async () =>
         client.order({
           orders: [
             {
@@ -1544,13 +1546,13 @@ async function manageLiveSmcPositionsInner(): Promise<{
             {
               a: asset.id,
               b: !isBuy,
-              p: bePx,
+              p: slPxKeep,
               s: remSz,
               r: true,
               t: {
                 trigger: {
                   isMarket: true,
-                  triggerPx: bePx,
+                  triggerPx: slPxKeep,
                   tpsl: "sl",
                 },
               },
@@ -1558,14 +1560,14 @@ async function manageLiveSmcPositionsInner(): Promise<{
           ],
           grouping: "na",
         });
-      let tpsl = await placeBeTp2();
+      let tpsl = await placeTp2Sl();
       let st = tpsl.response?.data?.statuses ?? [];
       let tpslErr = st.find(
         (s) => s && typeof s === "object" && "error" in s,
       ) as { error?: string } | undefined;
       if (tpslErr?.error) {
         await new Promise((r) => setTimeout(r, 700));
-        tpsl = await placeBeTp2();
+        tpsl = await placeTp2Sl();
         st = tpsl.response?.data?.statuses ?? [];
         tpslErr = st.find(
           (s) => s && typeof s === "object" && "error" in s,
@@ -1573,7 +1575,7 @@ async function manageLiveSmcPositionsInner(): Promise<{
       }
       if (tpslErr?.error) {
         notes.push(
-          `${entry.coin}: TP2/BE refusés après cancel (${tpslErr.error}) — position peut être nue`,
+          `${entry.coin}: TP2/SL refusés après cancel (${tpslErr.error}) — position peut être nue`,
         );
         continue;
       }
@@ -1583,12 +1585,11 @@ async function manageLiveSmcPositionsInner(): Promise<{
         side: entry.side,
         entry: entry.entry,
         tp: tp2,
-        sl: entry.entry,
+        sl: structuralSl,
         size: remaining,
       });
       await updateLiveJournalEntry(entry.id, {
         tp1Hit: true,
-        sl: entry.entry,
         size: remaining,
         tp: tp2,
         tpPnlUsd: outcomes.tpPnlUsd,
@@ -1597,7 +1598,7 @@ async function manageLiveSmcPositionsInner(): Promise<{
         slOid: readOid(st[1]),
       });
       updated += 1;
-      notes.push(`${entry.coin}: TP1 50% + SL→BE · vise TP2`);
+      notes.push(`${entry.coin}: TP1 50% + SL structurel · vise TP2`);
     } catch (e) {
       notes.push(
         `${entry.coin}: manage err ${e instanceof Error ? e.message : "x"}`,
