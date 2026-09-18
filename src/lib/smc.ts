@@ -477,20 +477,20 @@ export function enforceMinSlBreathingRoom(input: {
 export const SMC_TP1_CLOSE_FRAC = 0.2;
 
 /**
- * Risque % selon confiance — setups SMC prêts (checklist 100 %) sont souvent ≥85.
- * Objectif : trade sûr → viser ~100$ de gain (compte ~950$).
- * 10% × 1.8R effectif (20%@1R + 80%@2R) ≈ 171$ ; 8% ≈ 137$.
+ * Risque % selon confiance — **prudent** : survivre > maximiser une nuit.
+ * Cap **4%** du wallet (plus 10%). Trade sûr ≠ all-in.
+ * 4% × ~1.8R effectif ≈ 65–70$ sur 900$ — assez pour être positif sans se vider.
  */
 export function riskPctFromConfidence(
   confidence: number,
-  baseRiskPct = 3,
+  baseRiskPct = 2.5,
 ): number {
-  const base = Math.min(10, Math.max(2, baseRiskPct));
-  if (confidence >= 88) return Math.min(10, Math.max(base, 10));
-  if (confidence >= 80) return Math.min(10, Math.max(base, 8));
-  if (confidence >= 72) return Math.min(10, Math.max(base, 6));
-  if (confidence >= 65) return Math.min(10, Math.max(base, 4));
-  return Math.min(10, Math.max(base, 3));
+  const base = Math.min(4, Math.max(1.5, baseRiskPct));
+  if (confidence >= 90) return Math.min(4, Math.max(base, 4));
+  if (confidence >= 84) return Math.min(4, Math.max(base, 3.5));
+  if (confidence >= 78) return Math.min(4, Math.max(base, 3));
+  if (confidence >= 72) return Math.min(4, Math.max(base, 2.5));
+  return Math.min(4, Math.max(base, 2));
 }
 
 export function computeSmcRiskPlan(input: {

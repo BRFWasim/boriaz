@@ -23,22 +23,22 @@ const ote = computeOte("long", 110, 100);
 assert.ok(ote);
 assert.ok(Math.abs(ote!.ideal - (110 - 10 * 0.705)) < 1e-9);
 
-assert.equal(riskPctFromConfidence(60), 3);
-assert.equal(riskPctFromConfidence(70), 4);
-assert.equal(riskPctFromConfidence(75), 6);
-assert.equal(riskPctFromConfidence(82), 8);
-assert.equal(riskPctFromConfidence(90), 10);
+assert.ok(riskPctFromConfidence(60) <= 2.5);
+assert.ok(riskPctFromConfidence(70) <= 2.5);
+assert.equal(riskPctFromConfidence(81), 3);
+assert.equal(riskPctFromConfidence(90), 4);
 
 const risk = computeSmcRiskPlan({
   walletEur: 950,
   entry: 100,
   sl: 98.5,
-  maxLeverage: 8,
+  maxLeverage: 5,
   riskPct: riskPctFromConfidence(90),
 });
-assert.equal(risk.riskPct, 10);
-assert.ok(risk.riskEur >= 60, `riskEur ${risk.riskEur}`);
-assert.ok(risk.notionalEur > 4000, `notional trop petit: ${risk.notionalEur}`);
+assert.equal(risk.riskPct, 4);
+assert.ok(risk.riskEur >= 30, `riskEur ${risk.riskEur}`);
+assert.ok(risk.riskEur <= 45, `riskEur trop haut ${risk.riskEur}`);
+assert.ok(risk.notionalEur > 1500, `notional trop petit: ${risk.notionalEur}`);
 
 const riskLow = computeSmcRiskPlan({
   walletEur: 1000,
@@ -90,8 +90,8 @@ assert.ok(report.includes("Statut :"));
 assert.ok(setup.bias.d1 === "haussier" || setup.bias.d1 === "neutre" || setup.bias.d1 === "baissier");
 if (setup.checklist.allPass && setup.risk) {
   assert.ok(
-    setup.risk.riskPct >= 6,
-    `setup sûr doit risquer ≥6%, got ${setup.risk.riskPct}`,
+    setup.risk.riskPct >= 1.5 && setup.risk.riskPct <= 4,
+    `setup sûr risque hors bande 1.5–4%, got ${setup.risk.riskPct}`,
   );
 }
 

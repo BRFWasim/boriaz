@@ -21,15 +21,17 @@ const shallowS = computeOteShallow("short", 110, 100)!;
 assert.ok(shallowS.ideal < deepS.ideal);
 
 let risk = riskPctFromConfidence(90);
-assert.equal(risk, 10);
+assert.equal(risk, 4); // cap prudent
 const shallowRisk = Math.max(1.5, risk * 0.5);
-assert.equal(shallowRisk, 5);
+assert.equal(shallowRisk, 2);
 const h4LeadRisk = Math.max(1.5, risk * 0.65);
 assert.ok(h4LeadRisk < risk);
+assert.ok(riskPctFromConfidence(70) <= 2.5);
 
 console.log("OK p1-incredible-smoke", {
   deepIdeal: deep.ideal,
   shallowIdeal: shallow.ideal,
   shallowRisk,
   h4LeadRisk,
+  riskCap: risk,
 });

@@ -150,19 +150,19 @@ export function getLiveConfig(): LiveConfigStatus {
     envArmed: envFlagAny(["HL_LIVE_ENABLED", "HL_LIVE_ENABLED"], false),
     hasAgentKey: Boolean(key) && Boolean(agentAddress),
     testnet: envFlagAny(["HL_LIVE_TESTNET", "HL_LIVE_TESTNET"], false),
-    // Défaut large — viser ~100$+ / trade sûr sur compte ~1k (override env).
+    // Défaut prudent — survivre la nuit ; override env si besoin.
     maxNotionalUsd: envNumAny(
       ["HL_MAX_NOTIONAL_USD", "HL_MAX_NOTIONAL_USD"],
-      15_000,
+      6_000,
     ),
     maxLeverage: Math.min(
-      10,
-      envNumAny(["HL_MAX_LEVERAGE", "HL_MAX_LEVERAGE"], 8),
+      6,
+      envNumAny(["HL_MAX_LEVERAGE", "HL_MAX_LEVERAGE"], 5),
     ),
     maxOpenPositions: Math.min(
-      10,
+      3,
       Math.floor(
-        envNumAny(["HL_MAX_OPEN_POSITIONS", "HL_MAX_OPEN_POSITIONS"], 2),
+        envNumAny(["HL_MAX_OPEN_POSITIONS", "HL_MAX_OPEN_POSITIONS"], 1),
       ),
     ),
     agentAddress,

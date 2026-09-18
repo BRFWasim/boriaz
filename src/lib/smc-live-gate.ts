@@ -18,11 +18,11 @@ export type LiveSmcGateResult = {
   checks: string[];
 };
 
-const GLOBAL_COOLDOWN_MS = 90_000;
-const COIN_COOLDOWN_MS = 5 * 60_000;
-/** Après un stop-out : pas de revenge trade pendant 2h sur le coin. */
-const STOPOUT_COIN_COOLDOWN_MS = 2 * 60 * 60_000;
-const STOPOUT_GLOBAL_COOLDOWN_MS = 10 * 60_000;
+const GLOBAL_COOLDOWN_MS = 3 * 60_000; // 3 min entre trades globaux
+const COIN_COOLDOWN_MS = 45 * 60_000; // 45 min même coin après open
+/** Après un stop-out OU un close (TP) : pas de revenge / spam 3h sur le coin. */
+const STOPOUT_COIN_COOLDOWN_MS = 3 * 60 * 60_000;
+const STOPOUT_GLOBAL_COOLDOWN_MS = 20 * 60_000;
 const COOLDOWN_GLOBAL_KEY = "boriaz:live-cd:global";
 const coinCooldownKey = (coin: string) =>
   `boriaz:live-cd:${coin.toUpperCase()}`;
@@ -33,14 +33,16 @@ const GLOBAL_STOP_KEY = "boriaz:live-stopout:global";
 export function noteLiveOpen(coin: string): void {
   const now = Date.now();
   void import("./arch-guards").then(({ setDurableCooldown }) => {
-    void setDurableCooldown(COOLDOWN_GLOBAL_KEY, now, 120);
-    void setDurableCooldown(coinCooldownKey(coin), now, 360);
+    void setDurableCooldown(COOLDOWN_GLOBAL_KEY, now, 180);
+    void setDurableCooldown(coinCooldownKey(coin), now, 3600);
   });
 }
 
 function minLiveConfidence(setup: SmcSetup): number {
-  if (setup.tradeKind === "correction" || setup.counterTrend) return 82;
-  return 74;
+  // Plus exigeant : sûr et certain avant d’engager du vrai $ 
+  if (setup.tradeKind === "correction" || setup.counterTrend) return 88;
+  if (setup.entryStyle === "shallow" || setup.h4Lead) return 86;
+  return 82;
 }
 
 function geometryOk(setup: SmcSetup): { ok: boolean; why: string } {

@@ -14,8 +14,8 @@ import {
 import { InfoClient } from "@nktkas/hyperliquid";
 import { minSlDistancePct } from "./smc";
 
-const STOPOUT_COIN_COOLDOWN_MS = 2 * 60 * 60_000; // 2h après stop
-const STOPOUT_GLOBAL_COOLDOWN_MS = 10 * 60_000;
+const STOPOUT_COIN_COOLDOWN_MS = 3 * 60 * 60_000; // 3h après close (TP ou SL)
+const STOPOUT_GLOBAL_COOLDOWN_MS = 20 * 60_000;
 
 function coinStopKey(coin: string) {
   return `boriaz:live-stopout:${coin.toUpperCase()}`;
@@ -241,8 +241,9 @@ export async function detectStopOutsAndArmCooldown(): Promise<{
       closedAt: Number(recent.time) || now,
     });
     const pnl = Number(recent.closedPnl ?? 0);
+    const kind = pnl >= 0 ? "TP/close+" : "STOP/close-";
     notes.push(
-      `${entry.coin}: STOP-OUT détecté pnl=${pnl.toFixed(2)}$ → cooldown 2h`,
+      `${entry.coin}: ${kind} détecté pnl=${pnl.toFixed(2)}$ → cooldown 3h (anti spam re-entry)`,
     );
   }
   return { found, notes };
