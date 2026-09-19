@@ -20,3 +20,6 @@ Les règles SMC objectivées vivent dans `src/lib/smc.ts`, `smc-scan.ts`, `smc-l
 
 Jamais tick → LLM → trade.  
 Toujours : SMC → score → range → ChatGPT si budget → risk/live gates → lock → place.
+
+## Ops
+- Kill-switch : `HL_LIVE_ENABLED` (false = pause nouvelles entrées ; positions ouvertes restent gérées).
