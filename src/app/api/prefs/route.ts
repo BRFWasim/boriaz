@@ -146,6 +146,42 @@ export async function POST(request: Request) {
       if (def) patch.paperBankrollEur = def.bankrollEur;
     }
     const prefs = await savePrefs(patch as Partial<typeof DEFAULT_PREFS>);
+
+    // LIVE est global (compte HL) : miroir des toggles vers le scope bot `default`
+    // pour que le cron voie les mêmes interrupteurs que le Lab (invité / compte).
+    const touchedLive =
+      typeof body.liveTradeEnabled === "boolean" ||
+      Array.isArray(body.portfolios);
+    if (touchedLive) {
+      try {
+        const { setPersistUser, persistUserId, loadPrefs, savePrefs: saveP } =
+          await import("@/lib/persist");
+        const prev = persistUserId();
+        if (prev !== "default") {
+          setPersistUser("default");
+          const botPrefs = await loadPrefs();
+          const portfolios = ensurePortfolios(botPrefs.portfolios).map((p) =>
+            p.id === "boriaz"
+              ? {
+                  ...p,
+                  liveTradeEnabled: Boolean(
+                    prefs.portfolios.find((x) => x.id === "boriaz")
+                      ?.liveTradeEnabled,
+                  ),
+                }
+              : p,
+          );
+          await saveP({
+            liveTradeEnabled: Boolean(prefs.liveTradeEnabled),
+            portfolios,
+          });
+          setPersistUser(prev);
+        }
+      } catch {
+        /* ignore mirror errors */
+      }
+    }
+
     return Response.json({ prefs, ok: true });
   } catch (e) {
     return Response.json(

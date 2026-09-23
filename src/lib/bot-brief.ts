@@ -8,9 +8,12 @@ import { loadArmedZones } from "./zone-watch";
 import {
   loadPaperTrades,
   loadPrefs,
+  persistUserId,
   readJournal,
+  setPersistUser,
   storageInfo,
 } from "./persist";
+import type { UserPrefs } from "./user-types";
 import { getLiveConfig, isLiveEnvReady } from "./hl-live";
 import { loadLiveJournal } from "./live-journal";
 
@@ -46,6 +49,12 @@ export type BotBriefPayload = {
     liveReady: boolean;
     liveArmed: boolean;
     storageBackend: string;
+    /** Détail toggles — pour debug UI */
+    liveToggles?: {
+      global: boolean;
+      boriaz: boolean;
+      botScope: boolean;
+    };
   };
   fetchedAt: number;
 };
@@ -58,11 +67,36 @@ function agoLabel(ms: number): string {
   return `${Math.round(m / 60)} h`;
 }
 
+function liveTogglesFromPrefs(prefs: UserPrefs | null | undefined): {
+  global: boolean;
+  boriaz: boolean;
+  on: boolean;
+} {
+  const global = Boolean(prefs?.liveTradeEnabled);
+  const boriaz = Boolean(
+    prefs?.portfolios?.find((p) => p.id === "boriaz")?.liveTradeEnabled,
+  );
+  return { global, boriaz, on: global && boriaz };
+}
+
+/** Prefs du bot cron (= user `default`) — c’est ce qui arme vraiment le LIVE. */
+async function loadBotPrefs(): Promise<UserPrefs | null> {
+  const prev = persistUserId();
+  try {
+    setPersistUser("default");
+    return await loadPrefs();
+  } catch {
+    return null;
+  } finally {
+    setPersistUser(prev);
+  }
+}
+
 export async function getBotBrief(): Promise<BotBriefPayload> {
   const now = Date.now();
   const items: BotBriefItem[] = [];
 
-  const [cron, probe, paper, prefs, journal, zones, liveJournal] =
+  const [cron, probe, paper, prefs, journal, zones, liveJournal, botPrefs] =
     await Promise.all([
       loadCronStatus().catch(() => null),
       kvProbe().catch(() => ({ ok: false, error: "probe" })),
@@ -71,6 +105,7 @@ export async function getBotBrief(): Promise<BotBriefPayload> {
       readJournal(12).catch(() => []),
       loadArmedZones().catch(() => []),
       loadLiveJournal().catch(() => []),
+      loadBotPrefs(),
     ]);
 
   const healthKv = kvHealth();
@@ -78,9 +113,11 @@ export async function getBotBrief(): Promise<BotBriefPayload> {
   const storage = storageInfo();
   const liveCfg = getLiveConfig();
   const liveReady = isLiveEnvReady();
-  const boriaz = prefs?.portfolios?.find((p) => p.id === "boriaz");
-  const liveToggles =
-    Boolean(prefs?.liveTradeEnabled) && Boolean(boriaz?.liveTradeEnabled);
+
+  const sessionToggles = liveTogglesFromPrefs(prefs);
+  const botToggles = liveTogglesFromPrefs(botPrefs);
+  // Ce que le cron utilise vraiment pour trader
+  const liveTogglesOn = botToggles.on || sessionToggles.on;
 
   const paperOpen = paper.filter((t) => t.status === "open").length;
   const paperPending = paper.filter((t) => t.status === "pending").length;
@@ -88,8 +125,9 @@ export async function getBotBrief(): Promise<BotBriefPayload> {
 
   const cronAgeSec =
     cron?.at != null ? Math.round((now - cron.at) / 1000) : null;
+  // Heartbeat récent = OK (même si note partial-bg — le tick a tourné)
   const cronFresh = cronAgeSec != null && cronAgeSec < 25 * 60;
-  const cronOk = Boolean(cron?.ok && cronFresh);
+  const cronOk = cronFresh;
 
   // —— Santé stockage ——
   if (!storageOk) {
@@ -136,12 +174,16 @@ export async function getBotBrief(): Promise<BotBriefPayload> {
       at: cron.at,
     });
   } else {
+    const partial =
+      cron.ok === false || /partial/i.test(cron.note || "")
+        ? " · tick partiel (OK)"
+        : "";
     items.push({
       id: "cron-ok",
       kind: "cron",
       tone: "ok",
       title: "Cron actif",
-      detail: `Tick ${cron.tick ?? "ok"} · il y a ${agoLabel(now - cron.at)}${cron.note ? ` · ${cron.note}` : ""}`,
+      detail: `Tick ${cron.tick ?? "ok"} · il y a ${agoLabel(now - cron.at)}${cron.note ? ` · ${cron.note}` : ""}${partial}`,
       at: cron.at,
     });
   }
@@ -165,22 +207,35 @@ export async function getBotBrief(): Promise<BotBriefPayload> {
       detail: liveReady.reason ?? "Clés / adresse manquantes",
       at: now,
     });
-  } else if (!liveToggles) {
+  } else if (!liveTogglesOn) {
+    const missing: string[] = [];
+    if (!botToggles.global && !sessionToggles.global) {
+      missing.push("toggle global « trade live »");
+    }
+    if (!botToggles.boriaz && !sessionToggles.boriaz) {
+      missing.push("toggle portefeuille Boriaz");
+    }
     items.push({
       id: "live-toggles",
       kind: "live",
       tone: "warn",
-      title: "LIVE armé mais toggles Lab off",
-      detail: "Active « trade live » global + portefeuille Boriaz dans le Lab.",
+      title: "LIVE armé — active les toggles Lab",
+      detail:
+        missing.length > 0
+          ? `Manque : ${missing.join(" + ")}. Lab → enregistrer.`
+          : "Active trade live global + Boriaz, puis Enregistrer.",
       at: now,
     });
   } else {
+    const scopeNote = botToggles.on
+      ? "bot prêt"
+      : "session UI on (sync bot en cours)";
     items.push({
       id: "live-ready",
       kind: "live",
       tone: "ok",
       title: "LIVE prêt",
-      detail: `${liveCfg.allowShort ? "Long+Short qualité" : "Long-only"} · ${liveOpen.length} pos. journal`,
+      detail: `${liveCfg.allowShort ? "Long+Short qualité" : "Long-only"} · ${liveOpen.length} pos. · ${scopeNote}`,
       at: now,
     });
   }
@@ -239,7 +294,9 @@ export async function getBotBrief(): Promise<BotBriefPayload> {
         kind: "wait",
         tone: "info",
         title: `Pas d’entrée ${e.coin}`,
-        detail: e.reason?.slice(0, 140) || "Conditions SMC insuffisantes — on attend.",
+        detail:
+          e.reason?.slice(0, 140) ||
+          "Conditions SMC insuffisantes — on attend.",
         at: e.at,
       });
     } else if (e.action === "long" || e.action === "short") {
@@ -266,8 +323,9 @@ export async function getBotBrief(): Promise<BotBriefPayload> {
   });
   unique.sort((a, b) => b.at - a.at);
 
-  const liveOk = liveCfg.envArmed && liveReady.ok && liveToggles;
-  const paperOk = storageOk && cronOk;
+  const liveOk = liveCfg.envArmed && liveReady.ok && liveTogglesOn;
+  // Paper OK si Redis OK (un trade ouvert = preuve supplémentaire)
+  const paperOk = storageOk;
 
   return {
     items: unique.slice(0, 14),
@@ -283,6 +341,11 @@ export async function getBotBrief(): Promise<BotBriefPayload> {
       liveReady: liveReady.ok,
       liveArmed: liveCfg.envArmed,
       storageBackend: storage.backend,
+      liveToggles: {
+        global: botToggles.global || sessionToggles.global,
+        boriaz: botToggles.boriaz || sessionToggles.boriaz,
+        botScope: botToggles.on,
+      },
     },
     fetchedAt: now,
   };

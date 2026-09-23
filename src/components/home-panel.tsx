@@ -404,15 +404,15 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
             ok={brief.health.cronOk}
             label={
               brief.health.cronOk
-                ? `Cron ${brief.health.cronAgeSec != null ? `${Math.round(brief.health.cronAgeSec / 60)}m` : "OK"}`
+                ? `Cron ${brief.health.cronAgeSec != null ? `${Math.max(1, Math.round(brief.health.cronAgeSec / 60))}m` : "OK"}`
                 : "Cron ?"
             }
-            tip="Heartbeat /api/cron — paper + LIVE gérés en fond"
+            tip="Heartbeat /api/cron — vert dès qu’un tick a tourné (<25 min), même partiel"
           />
           <HealthPill
             ok={brief.health.paperOk}
             label={`Paper ${brief.health.paperOpen}o/${brief.health.paperPending}p`}
-            tip="Ouverts / pending limite — vert = stockage + cron OK"
+            tip="Vert = Redis OK (paper persiste). Compteur = ouverts / pending"
           />
           <HealthPill
             ok={brief.health.liveOk}
@@ -420,10 +420,17 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
               brief.health.liveOk
                 ? `LIVE ${brief.health.livePositions}`
                 : brief.health.liveArmed
-                  ? "LIVE partiel"
+                  ? brief.health.liveToggles?.global === false ||
+                    brief.health.liveToggles?.boriaz === false
+                    ? "LIVE toggles"
+                    : "LIVE partiel"
                   : "LIVE off"
             }
-            tip="Env + toggles Lab + journal positions"
+            tip={
+              brief.health.liveOk
+                ? "Env + toggles Lab (global + Boriaz) OK"
+                : "Il faut HL_LIVE_ENABLED + trade live global + portefeuille Boriaz, puis Enregistrer"
+            }
           />
           {liveAt ? (
             <span className="text-[10px] text-muted-foreground">
