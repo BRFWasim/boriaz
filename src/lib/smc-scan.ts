@@ -9,8 +9,27 @@ import {
   type SmcSetup,
 } from "./smc";
 import { WATCHLIST } from "./price-watch";
-import { isLiveSideAllowed } from "./live-side-policy";
-import { minGateConfidenceForSide, isQualityShortSetup } from "./live-side-policy";
+import {
+  isLiveSideAllowed,
+  isQualityShortSetup,
+  minGateConfidenceForSide,
+} from "./live-side-policy";
+
+/** Rotation watchlist — scan rapide (évite timeout 120s cron). */
+export function pickScanCoins(all: string[], take = 8): string[] {
+  if (!all.length) return [];
+  const must = ["BTC", "ETH", "SOL", "BNB", "SUI", "ONDO", "PENDLE", "ASTER"];
+  const priority = must.filter((c) => all.includes(c));
+  const rest = all.filter((c) => !priority.includes(c));
+  const slot = Math.max(0, take - priority.length);
+  if (slot <= 0) return priority.slice(0, take);
+  const offset = Math.floor(Date.now() / (5 * 60_000)) % Math.max(1, rest.length);
+  const rotated: string[] = [];
+  for (let i = 0; i < slot && rest.length; i++) {
+    rotated.push(rest[(offset + i) % rest.length]!);
+  }
+  return [...priority, ...rotated].slice(0, take);
+}
 
 const CLAUDE_MODEL = "claude-haiku-4-5-20251001";
 const GPT_MODEL_DEFAULT = "gpt-4o-mini";
@@ -334,8 +353,11 @@ export async function scanSmcWatchlist(input: {
 }): Promise<SmcScanResult> {
   const coins =
     input.coins?.length
-      ? input.coins
-      : WATCHLIST.map((w) => w.coin).slice(0, 16);
+      ? pickScanCoins(input.coins, 8)
+      : pickScanCoins(
+          WATCHLIST.map((w) => w.coin),
+          8,
+        );
 
   const cacheKey = `${coins.join(",")}:${Math.round(input.walletEur)}`;
   if (

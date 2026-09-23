@@ -51,6 +51,14 @@ export async function GET(request: Request) {
 
   after(async () => {
     try {
+      // Heartbeat avant le travail long — visible même si timeout 120s
+      const { saveCronStatus } = await import("@/lib/cron-status");
+      await saveCronStatus({
+        at: startedAt,
+        ok: true,
+        tick: `${phase}:ack`,
+        note: "accepted",
+      });
       const out = await runCronWork(phase);
       console.info("cron after done", {
         phase: out.phase,
@@ -60,6 +68,17 @@ export async function GET(request: Request) {
       });
     } catch (e) {
       console.error("cron after failed", e);
+      try {
+        const { saveCronStatus } = await import("@/lib/cron-status");
+        await saveCronStatus({
+          at: Date.now(),
+          ok: false,
+          tick: phase,
+          note: e instanceof Error ? e.message : "after-failed",
+        });
+      } catch {
+        /* ignore */
+      }
     }
   });
 

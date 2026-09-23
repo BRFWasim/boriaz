@@ -14,14 +14,7 @@ export type SortKey =
 
 export type UiMode = "simple" | "advanced";
 
-export type AppTab =
-  | "home"
-  | "whales"
-  | "spot"
-  | "btc"
-  | "macro"
-  | "lab"
-  | "boriaz";
+export type AppTab = "home" | "whales" | "lab" | "boriaz";
 
 export type SignalBias = "haussier" | "baissier" | "neutre";
 

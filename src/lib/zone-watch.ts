@@ -78,7 +78,7 @@ export async function checkArmedZonesAndScan(): Promise<{
   const { getLiveConfig } = await import("./hl-live");
   const { fetchFreshMids, midFromSnapshot } = await import("./hl-mids");
   const cfg = getLiveConfig();
-  const snap = await fetchFreshMids({ testnet: cfg.testnet, preferWs: true });
+  const snap = await fetchFreshMids({ testnet: cfg.testnet, preferWs: false });
   notes.push(`mids ${snap.source} ${snap.ms}ms`);
 
   for (const z of zones) {

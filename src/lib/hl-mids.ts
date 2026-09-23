@@ -40,13 +40,15 @@ async function fetchMidsHttp(testnet: boolean): Promise<Record<string, string>> 
 
 /**
  * Burst WS allMids : 1er tick reçu gagne, sinon timeout → HTTP.
+ * Prefer HTTP by default under rate-limit pressure (cron zone every 2m).
  */
 export async function fetchFreshMids(opts?: {
   testnet?: boolean;
   preferWs?: boolean;
 }): Promise<MidsSnapshot> {
   const testnet = Boolean(opts?.testnet);
-  const preferWs = opts?.preferWs !== false;
+  // WS burst ~2.5s — utile seulement si explicitement demandé
+  const preferWs = opts?.preferWs === true;
   const t0 = Date.now();
 
   if (preferWs) {

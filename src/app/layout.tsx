@@ -1,17 +1,18 @@
 import type { Metadata, Viewport } from "next";
-import { Syne, Manrope, JetBrains_Mono } from "next/font/google";
+import { Outfit, Figtree, JetBrains_Mono } from "next/font/google";
 import { PwaRegister } from "@/components/pwa-register";
 import "./globals.css";
 
-const heading = Syne({
+const heading = Outfit({
   variable: "--font-heading",
   subsets: ["latin"],
-  weight: ["600", "700", "800"],
+  weight: ["500", "600", "700", "800"],
 });
 
-const sans = Manrope({
+const sans = Figtree({
   variable: "--font-sans",
   subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
 });
 
 const mono = JetBrains_Mono({
@@ -20,9 +21,9 @@ const mono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "BoriazBot — Alignement & baleines Hyperliquid",
+  title: "BoriazBot",
   description:
-    "BoriazBot : score Alignement (TF × crowd × Nansen × IA), signaux LONG/SHORT, baleines Hyperliquid, paper trade et Telegram.",
+    "Trading Hyperliquid — paper + LIVE Boriaz SMC, baleines, signaux.",
   applicationName: "BoriazBot",
   manifest: "/manifest.webmanifest",
   appleWebApp: {
@@ -37,7 +38,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#0c1820",
+  themeColor: "#0a0f12",
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",

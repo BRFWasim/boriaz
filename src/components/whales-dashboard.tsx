@@ -36,20 +36,6 @@ const MarketOverviewPanel = dynamic(
     import("@/components/market-overview").then((m) => m.MarketOverviewPanel),
   { ssr: false, loading: () => <PanelSkeleton label="Marché" /> },
 );
-const BtcAnalysisPanel = dynamic(
-  () =>
-    import("@/components/btc-analysis-panel").then((m) => m.BtcAnalysisPanel),
-  { ssr: false, loading: () => <PanelSkeleton label="Analyse" /> },
-);
-const SpotAlertsPanel = dynamic(
-  () =>
-    import("@/components/spot-alerts-panel").then((m) => m.SpotAlertsPanel),
-  { ssr: false, loading: () => <PanelSkeleton label="Spot" /> },
-);
-const MacroPanel = dynamic(
-  () => import("@/components/macro-panel").then((m) => m.MacroPanel),
-  { ssr: false, loading: () => <PanelSkeleton label="Macro" /> },
-);
 const LabPanel = dynamic(
   () => import("@/components/lab-panel").then((m) => m.LabPanel),
   { ssr: false, loading: () => <PanelSkeleton label="Lab" /> },
@@ -63,19 +49,27 @@ const BoriazPanel = dynamic(
 
 const POLL_MS = 10_000;
 
-const PUBLIC_TAB_IDS: AppTab[] = ["home", "whales", "spot", "btc", "macro"];
+const PUBLIC_TAB_IDS: AppTab[] = ["home", "whales"];
 const PRIVATE_TAB_IDS: AppTab[] = ["boriaz", "lab"];
 const TAB_IDS: AppTab[] = [...PUBLIC_TAB_IDS, ...PRIVATE_TAB_IDS];
 
 function parseTabHash(hash: string): AppTab | null {
   const raw = hash.replace(/^#/, "").trim().toLowerCase();
   if (!raw) return null;
-  // Alias FR / anciens liens
   if (raw === "baleines" || raw === "baleines-perps" || raw === "perps") {
     return "whales";
   }
   if (raw === "accueil") return "home";
-  if (raw === "analyse" || raw === "analyse-marche") return "btc";
+  // Anciens liens Macro / Spot / Analyse → Accueil
+  if (
+    raw === "analyse" ||
+    raw === "analyse-marche" ||
+    raw === "btc" ||
+    raw === "macro" ||
+    raw === "spot"
+  ) {
+    return "home";
+  }
   return TAB_IDS.includes(raw as AppTab) ? (raw as AppTab) : null;
 }
 
@@ -192,16 +186,16 @@ export function WhalesDashboard() {
   }, [siteAuth, unlocked, tab, goTab]);
 
   useEffect(() => {
-    // Accueil / Analyse / Macro / Lab : pas d’appel baleines au mount
-    if (tab !== "whales" && tab !== "spot") {
+    // Accueil / Lab / Boriaz : pas d’appel baleines au mount
+    if (tab !== "whales") {
       setLoading(false);
     }
   }, [tab]);
 
 
-  // Poll HL whales seulement sur les onglets qui en ont besoin
+  // Poll HL whales seulement sur l’onglet Baleines
   useEffect(() => {
-    if (tab !== "whales" && tab !== "spot") return;
+    if (tab !== "whales") return;
     void load(true);
     const poll = window.setInterval(() => {
       void load(true);
@@ -253,12 +247,16 @@ export function WhalesDashboard() {
 
   return (
     <div className="min-h-svh pb-[max(5.5rem,env(safe-area-inset-bottom))] sm:pb-[max(1.5rem,env(safe-area-inset-bottom))]">
-      <header className="sticky top-0 z-30 border-b border-white/8 bg-background/85 pt-[env(safe-area-inset-top)] backdrop-blur-xl">
-        <div className="mx-auto flex w-full max-w-7xl flex-col gap-1.5 px-3 py-2 sm:gap-3 sm:px-6 sm:py-3 lg:px-8">
+      <header className="sticky top-0 z-30 border-b border-border/50 bg-background/80 pt-[env(safe-area-inset-top)] backdrop-blur-2xl">
+        <div className="mx-auto flex w-full max-w-6xl flex-col gap-2 px-4 py-3 sm:gap-3 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between gap-2">
-            <div className="flex min-w-0 items-center gap-2">
-              <FishIcon className="size-4 shrink-0 text-primary" />
-              <h1 className="font-heading truncate text-lg font-bold tracking-tight sm:text-2xl">BoriazBot</h1>
+            <div className="flex min-w-0 items-center gap-2.5">
+              <span className="flex size-8 items-center justify-center rounded-xl bg-primary/15 text-primary">
+                <FishIcon className="size-4" />
+              </span>
+              <h1 className="font-heading truncate text-xl font-bold tracking-tight sm:text-2xl">
+                Boriaz<span className="text-primary">Bot</span>
+              </h1>
             </div>
             <div className="flex items-center gap-1.5 sm:gap-2">
               <span className="bb-live-dot inline-flex items-center gap-1.5 rounded-md border border-long/30 bg-long/10 px-1.5 py-0.5 text-[10px] text-long sm:px-2 sm:text-xs">
@@ -318,9 +316,6 @@ export function WhalesDashboard() {
           <div className="scrollbar-none -mx-1 hidden gap-1 overflow-x-auto px-1 sm:flex">
             <TabButton active={tab === "home"} onClick={() => goTab("home")}>Accueil</TabButton>
             <TabButton active={tab === "whales"} onClick={() => goTab("whales")}>Baleines</TabButton>
-            <TabButton active={tab === "spot"} onClick={() => goTab("spot")}>Spot</TabButton>
-            <TabButton active={tab === "btc"} onClick={() => goTab("btc")}>Analyse</TabButton>
-            <TabButton active={tab === "macro"} onClick={() => goTab("macro")}>Macro</TabButton>
             {unlocked ? (
               <TabButton active={tab === "boriaz"} onClick={() => goTab("boriaz")}>Boriaz</TabButton>
             ) : null}
@@ -399,7 +394,7 @@ export function WhalesDashboard() {
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-7xl space-y-4 px-4 py-5 sm:px-6 lg:px-8">
+      <main className="mx-auto w-full max-w-6xl space-y-5 px-4 py-6 sm:px-6 lg:px-8">
         {loading && !data && tab === "whales" ? <LoadingState /> : null}
 
         {error && !data && tab === "whales" ? (
@@ -422,17 +417,11 @@ export function WhalesDashboard() {
           <HomePanel onOpenTab={(t) => goTab(t as AppTab)} />
         ) : null}
 
-        {tab === "macro" ? <MacroPanel /> : null}
-
         {tab === "boriaz" && unlocked ? (
           <BoriazPanel onOpenLab={() => goTab("lab")} />
         ) : null}
 
         {tab === "lab" && unlocked ? <LabPanel /> : null}
-
-        {tab === "btc" ? <BtcAnalysisPanel /> : null}
-
-        {tab === "spot" && data ? <SpotAlertsPanel data={data} /> : null}
 
         {tab === "whales" ? (
           <>
@@ -485,15 +474,12 @@ export function WhalesDashboard() {
         ) : null}
       </main>
 
-      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-background/95 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl sm:hidden">
-        <div className={`mx-auto grid max-w-7xl gap-0.5 px-1 py-1 ${unlocked ? "grid-cols-7" : "grid-cols-5"}`}>
+      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-border/60 bg-background/90 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl sm:hidden">
+        <div className={`mx-auto grid max-w-7xl gap-0.5 px-2 py-1.5 ${unlocked ? "grid-cols-4" : "grid-cols-2"}`}>
           {(
             ([
               ["home", "Accueil"],
               ["whales", "Baleines"],
-              ["spot", "Spot"],
-              ["btc", "Analyse"],
-              ["macro", "Macro"],
               ...(unlocked
                 ? ([["boriaz", "Boriaz"], ["lab", "Lab"]] as const)
                 : []),
@@ -503,7 +489,7 @@ export function WhalesDashboard() {
               key={id}
               type="button"
               onClick={() => goTab(id)}
-              className={`rounded-lg px-0.5 py-2 text-[10px] font-medium ${
+              className={`rounded-xl px-1 py-2.5 text-[11px] font-semibold tracking-wide ${
                 tab === id
                   ? "bg-primary/15 text-primary"
                   : "text-muted-foreground"
@@ -537,10 +523,10 @@ function TabButton({
         onClick();
       }}
       aria-pressed={active}
-      className={`relative z-30 inline-flex cursor-pointer items-center rounded-lg border px-3 py-1.5 text-sm transition ${
+      className={`relative z-30 inline-flex cursor-pointer items-center rounded-full px-4 py-1.5 text-sm font-medium transition ${
         active
-          ? "border-primary/50 bg-primary/15 text-primary"
-          : "border-border bg-muted/30 text-muted-foreground hover:bg-muted/50"
+          ? "bg-primary text-primary-foreground shadow-sm shadow-primary/25"
+          : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
       }`}
     >
       {children}

@@ -126,14 +126,12 @@ export async function getHomeSnapshot(): Promise<HomePayload> {
     }
   }
 
-  // Soft-timeout : sur Vercel un cold start + analyse complète peut dépasser
-  // la limite → 504 texte "An error occurred…" (pas du JSON). On préfère un
-  // accueil partiel (prix + paper) plutôt qu’une page cassée.
+  // Soft-timeout élargi : scan lean (8 coins) doit finir sous ~15s
   try {
     const timed = await Promise.race([
       getTradeSignals({ notify: false }).then((s) => ({ ok: true as const, s })),
       new Promise<{ ok: false }>((resolve) =>
-        setTimeout(() => resolve({ ok: false }), 8_000),
+        setTimeout(() => resolve({ ok: false }), 15_000),
       ),
     ]);
     if (timed.ok) {

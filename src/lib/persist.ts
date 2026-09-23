@@ -159,6 +159,20 @@ export async function loadPrefs(): Promise<UserPrefs> {
       ]);
     }
     merged.portfolios = portfolios;
+    // Heal : paper doit rester actif (sinon rien ne bouge)
+    if (merged.paperTradeEnabled === false) {
+      merged.paperTradeEnabled = true;
+    }
+    merged.portfolios = merged.portfolios.map((p) => {
+      if (p.id === "boriaz" || p.id === "default") {
+        return {
+          ...p,
+          enabled: true,
+          paperTradeEnabled: true,
+        };
+      }
+      return p;
+    });
     merged.paperBankrollEur =
       portfolios.find((p) => p.isDefault)?.bankrollEur ||
       merged.paperBankrollEur ||

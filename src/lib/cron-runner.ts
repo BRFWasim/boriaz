@@ -3,9 +3,30 @@ import { bindCronRequest } from "@/lib/bind-request";
 
 export type CronPhase = "all" | "manage" | "signals";
 
+function withBudget<T>(
+  label: string,
+  ms: number,
+  fn: () => Promise<T>,
+): Promise<{ ok: true; value: T } | { ok: false; error: string }> {
+  return Promise.race([
+    fn()
+      .then((value) => ({ ok: true as const, value }))
+      .catch((e) => ({
+        ok: false as const,
+        error: e instanceof Error ? e.message : String(e),
+      })),
+    new Promise<{ ok: false; error: string }>((resolve) =>
+      setTimeout(
+        () => resolve({ ok: false, error: `${label} timeout ${ms}ms` }),
+        ms,
+      ),
+    ),
+  ]);
+}
+
 /**
- * Travail réel du bot. Appelé en arrière-plan après l’ACK HTTP
- * (cron-job.org timeout 30s → on répond en <2s, on continue jusqu’à maxDuration).
+ * Travail réel du bot. Budgets stricts pour ne plus timeout Vercel 120s
+ * (sinon after() meurt avant saveCronStatus → lastCron null → paper mort).
  */
 export async function runCronWork(phase: CronPhase = "all"): Promise<{
   at: number;
@@ -14,100 +35,108 @@ export async function runCronWork(phase: CronPhase = "all"): Promise<{
   ok: boolean;
 }> {
   bindCronRequest();
+  const started = Date.now();
   const results: Record<string, unknown> = {
-    at: Date.now(),
+    at: started,
     phase,
-    tick: "bg",
+    tick: "bg-lean",
   };
+
+  // Heartbeat immédiat — prouve que le cron tourne même si le reste timeout
+  try {
+    await saveCronStatus({
+      at: started,
+      ok: true,
+      tick: `${phase}:start`,
+      note: "heartbeat",
+    });
+  } catch {
+    /* ignore */
+  }
 
   const wantManage = phase === "all" || phase === "manage";
   const wantSignals = phase === "all" || phase === "signals";
 
-  // 1) PRIORITÉ : trades déjà ouverts (paper + live SMC) — avant le reste
   if (wantManage) {
-    try {
-      // Réconciliation HL ↔ journal (RISK_MANAGEMENT) — bloque nouvelles entrées si divergences
+    const manageBudget = phase === "manage" ? 90_000 : 45_000;
+    const m = await withBudget("manage", manageBudget, async () => {
+      const out: Record<string, unknown> = {};
       try {
         const { reconcileLiveVsJournal } = await import("@/lib/arch-guards");
-        results.reconcile = await reconcileLiveVsJournal();
+        out.reconcile = await reconcileLiveVsJournal();
       } catch (e) {
-        results.reconcileError = e instanceof Error ? e.message : "reconcile";
+        out.reconcileError = e instanceof Error ? e.message : "reconcile";
       }
 
       const { manageOpenTrades } = await import("@/lib/manage-trades");
       const { manageLiveSmcPositions } = await import("@/lib/hl-live");
-      const { listUserIds } = await import("@/lib/accounts");
       const { setPersistUser } = await import("@/lib/persist");
 
-      const manage: Record<string, unknown> = {};
       setPersistUser("default");
-      manage.default = await manageOpenTrades({ notify: true });
+      out.default = await manageOpenTrades({ notify: true });
       try {
-        manage.liveSmc = await manageLiveSmcPositions();
+        out.liveSmc = await manageLiveSmcPositions();
       } catch (e) {
-        manage.liveSmcError = e instanceof Error ? e.message : "liveSmc";
+        out.liveSmcError = e instanceof Error ? e.message : "liveSmc";
       }
       try {
         const { cleanupStaleLiveLimits } = await import("@/lib/live-cleanup");
-        manage.liveCleanup = await cleanupStaleLiveLimits();
+        out.liveCleanup = await cleanupStaleLiveLimits();
       } catch (e) {
-        manage.liveCleanupError = e instanceof Error ? e.message : "cleanup";
+        out.liveCleanupError = e instanceof Error ? e.message : "cleanup";
       }
       try {
         const {
           detectStopOutsAndArmCooldown,
           widenTightLiveStops,
         } = await import("@/lib/live-protect");
-        manage.stopOuts = await detectStopOutsAndArmCooldown();
-        manage.widenStops = await widenTightLiveStops();
+        out.stopOuts = await detectStopOutsAndArmCooldown();
+        out.widenStops = await widenTightLiveStops();
       } catch (e) {
-        manage.liveProtectError = e instanceof Error ? e.message : "protect";
+        out.liveProtectError = e instanceof Error ? e.message : "protect";
       }
       try {
         const { checkArmedZonesAndScan } = await import("@/lib/zone-watch");
-        manage.zoneWatch = await checkArmedZonesAndScan();
+        out.zoneWatch = await checkArmedZonesAndScan();
       } catch (e) {
-        manage.zoneWatchError = e instanceof Error ? e.message : "zone";
+        out.zoneWatchError = e instanceof Error ? e.message : "zone";
       }
-      try {
-        const { manageLivePositionReviews } = await import(
-          "@/lib/manage-live-positions"
-        );
-        manage.liveReview = await manageLivePositionReviews({ notify: true });
-      } catch (e) {
-        manage.liveReviewError = e instanceof Error ? e.message : "liveReview";
+      // liveReview / multi-users : skip en phase all (trop lent) — manage only
+      if (phase === "manage") {
+        try {
+          const { manageLivePositionReviews } = await import(
+            "@/lib/manage-live-positions"
+          );
+          out.liveReview = await manageLivePositionReviews({ notify: true });
+        } catch (e) {
+          out.liveReviewError = e instanceof Error ? e.message : "liveReview";
+        }
       }
-      const ids = await listUserIds(40);
-      for (const id of ids) {
-        setPersistUser(id);
-        const r = await manageOpenTrades({ notify: true });
-        if (r.reviewed > 0) manage[id] = r;
-      }
-      setPersistUser("default");
-      results.manage = manage;
-    } catch (e) {
-      results.manageError = e instanceof Error ? e.message : "manage";
-    }
+      return out;
+    });
+    if (m.ok) results.manage = m.value;
+    else results.manageError = m.error;
   }
 
-  // 2) Nouveaux signaux / paper / live entries
   if (wantSignals) {
-    try {
-      results.priceWatch = await (
-        await import("@/lib/price-watch")
-      ).runPriceWatch();
-    } catch (e) {
-      results.priceWatchError = e instanceof Error ? e.message : "price";
-    }
+    const sigBudget = phase === "signals" ? 95_000 : 55_000;
+    const s = await withBudget("signals", sigBudget, async () => {
+      const out: Record<string, unknown> = {};
+      try {
+        out.priceWatch = await (
+          await import("@/lib/price-watch")
+        ).runPriceWatch();
+      } catch (e) {
+        out.priceWatchError = e instanceof Error ? e.message : "price";
+      }
 
-    try {
       const signals = await (
         await import("@/lib/trade-signal")
       ).getTradeSignals({ notify: true, force: true });
       const { isLiveEnvReady, getLiveConfig } = await import("@/lib/hl-live");
       const liveReady = isLiveEnvReady();
       const liveCfg = getLiveConfig();
-      results.signals = {
+      out.signals = {
         best: signals.best
           ? {
               coin: signals.best.coin,
@@ -117,55 +146,29 @@ export async function runCronWork(phase: CronPhase = "all"): Promise<{
             }
           : null,
         paperOpen: signals.paper.filter((p) => p.status === "open").length,
+        paperPending: signals.paper.filter((p) => p.status === "pending")
+          .length,
         telegramSent: signals.telegramSent,
         live: {
           envReady: liveReady.ok,
           envArmed: liveCfg.envArmed,
+          allowShort: liveCfg.allowShort,
           reason: liveReady.reason ?? null,
         },
       };
-      // Après signaux : repair TP/SL nues (nouvelles entrées du tick)
       try {
         const { repairNakedLiveTpsl } = await import("@/lib/hl-live");
-        results.liveRepairAfterSignals = await repairNakedLiveTpsl();
+        out.liveRepairAfterSignals = await repairNakedLiveTpsl();
       } catch (e) {
-        results.liveRepairAfterSignalsError =
+        out.liveRepairAfterSignalsError =
           e instanceof Error ? e.message : "repair";
       }
-    } catch (e) {
-      results.signalsError = e instanceof Error ? e.message : "signals";
-    }
-
-    // Analyse BTC : utile mais secondaire (souvent long) — après signaux
-    try {
-      const analysis = await (
-        await import("@/lib/btc-analysis")
-      ).getBtcAnalysis({
-        includeAi: true,
-        notify: false,
-        force: true,
-      });
-      results.analysis = { btcBias: analysis.bias };
-    } catch (e) {
-      results.analysisError = e instanceof Error ? e.message : "analysis";
-    }
-
-    try {
-      results.macroT30 = await (
-        await import("@/lib/macro-alerts")
-      ).runMacroT30Alerts();
-    } catch (e) {
-      results.macroError = e instanceof Error ? e.message : "macro";
-    }
-
-    try {
-      const { trackFollowedWallets } = await import("@/lib/wallet-track");
-      results.walletTrack = await trackFollowedWallets({
-        notify: true,
-        autoFollow: true,
-      });
-    } catch (e) {
-      results.walletTrackError = e instanceof Error ? e.message : "wallets";
+      return out;
+    });
+    if (s.ok) {
+      Object.assign(results, s.value);
+    } else {
+      results.signalsError = s.error;
     }
   }
 
@@ -179,7 +182,9 @@ export async function runCronWork(phase: CronPhase = "all"): Promise<{
       at: Date.now(),
       ok: Boolean(ok),
       tick: phase,
-      note: ok ? "ok-bg" : "partial-bg",
+      note: ok
+        ? `ok-bg ${Date.now() - started}ms`
+        : `partial-bg ${Date.now() - started}ms`,
     });
   } catch {
     /* ignore */

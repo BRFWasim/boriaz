@@ -1156,13 +1156,10 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
 
       <div className="flex flex-wrap gap-2">
         <Button variant="outline" size="sm" onClick={() => onOpenTab?.("lab")}>
-          Lab · paper & backtest
+          Lab · paper & live
         </Button>
-        <Button variant="outline" size="sm" onClick={() => onOpenTab?.("macro")}>
-          Macro
-        </Button>
-        <Button variant="outline" size="sm" onClick={() => onOpenTab?.("btc")}>
-          Analyse
+        <Button variant="outline" size="sm" onClick={() => onOpenTab?.("boriaz")}>
+          Boriaz LIVE
         </Button>
         <Button variant="outline" size="sm" onClick={() => onOpenTab?.("whales")}>
           Baleines
