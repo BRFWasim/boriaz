@@ -46,6 +46,8 @@ export function LabPanel() {
     keys: Record<string, boolean>;
     missing: string[];
     storage: string;
+    storageOk?: boolean;
+    storageError?: string | null;
     vercelEnvUrl: string;
     upstashUrl: string;
     howto: { where: string; upstash: string; live?: string; siteGate?: string };
@@ -126,6 +128,7 @@ export function LabPanel() {
     setups?: { coin: string; status: string; confidence: number }[];
   } | null>(null);
   const [saving, setSaving] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const dirtyRef = useRef(false);
 
   function patchPrefs(next: UserPrefs) {
@@ -716,16 +719,16 @@ export function LabPanel() {
   }
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       <section>
-        <h2 className="text-xl font-semibold">Lab · BoriazBot</h2>
+        <h2 className="font-heading text-xl font-semibold">Lab</h2>
         <div className="mt-3 flex flex-wrap gap-1.5 text-[11px]">
           {(
             [
-              ["prefs", "Préférences"],
+              ["prefs", "Réglages"],
+              ["live", "LIVE"],
               ["portfolios", "Portefeuilles"],
               ["smc", "SMC"],
-              ["backtest", "Backtest"],
               ["paper", "Paper"],
               ["journal", "Journal"],
             ] as const
@@ -733,131 +736,101 @@ export function LabPanel() {
             <a
               key={id}
               href={`#lab-${id}`}
-              className="rounded-md border border-white/10 bg-white/5 px-2 py-1 text-muted-foreground hover:border-primary/30 hover:text-primary"
+              className="rounded-md border border-primary/20 bg-primary/8 px-2.5 py-1 text-muted-foreground hover:border-primary/40 hover:text-primary"
             >
               {label}
             </a>
           ))}
         </div>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Zone d’atelier : mesurer la qualité des signaux sans risque réel,
-          comprendre le macro, et régler le bot.
+        <p className="mt-2 text-sm text-muted-foreground">
+          Réglages, paper, LIVE Boriaz — l’essentiel pour piloter le bot.
         </p>
         {msg ? <p className="mt-2 text-sm text-primary">{msg}</p> : null}
       </section>
 
       {status ? (
-        <section className="rounded-2xl border border-primary/25 bg-primary/5 p-4">
-          <h3 className="font-medium">Clés — où les mettre</h3>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Tout va dans <strong className="text-foreground">Vercel → Environment Variables</strong>{" "}
-            (secrets, Environment = Production). Pas dans le chat. Pas dans
-            « Configuration » générique.
-          </p>
-          <p className="mt-2 text-sm">
+        <section className="rounded-2xl border border-primary/20 bg-primary/5 p-4">
+          <h3 className="font-medium">Système</h3>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Stockage :{" "}
+            {status.storage === "upstash" ? "Upstash ✓" : "/tmp (éphémère)"} ·{" "}
             <a
-              className="text-primary underline underline-offset-2"
+              className="text-primary underline-offset-2 hover:underline"
               href={status.vercelEnvUrl}
               target="_blank"
               rel="noreferrer"
             >
-              Ouvrir les variables de boriazbot-v4
+              Variables Vercel
             </a>
-          </p>
-          <p className="mt-3 text-sm text-muted-foreground">{status.howto.upstash}</p>
-          <p className="mt-1 text-sm">
+            {" · "}
             <a
-              className="text-primary underline underline-offset-2"
+              className="text-primary underline-offset-2 hover:underline"
               href={status.upstashUrl}
               target="_blank"
               rel="noreferrer"
             >
-              Créer le tiroir Upstash (gratuit)
+              Upstash
             </a>
           </p>
-          <ul className="mt-3 grid gap-1 text-xs sm:grid-cols-2">
-            {Object.entries(status.keys).map(([name, ok]) => (
-              <li key={name} className={ok ? "text-long" : "text-short"}>
-                {ok ? "OK" : "MANQUE"} · {name}
-              </li>
-            ))}
-          </ul>
-          <p className="mt-2 text-xs text-muted-foreground">
-            Stockage actuel : {status.storage === "upstash" ? "Upstash (persistant)" : "/tmp (éphémère)"}
-          </p>
-          <p className="mt-2 text-xs text-muted-foreground">
-            {status.howto.siteGate ??
-              "SITE_PASSWORD protège l’UI ; le cron/bot continue en fond."}
-          </p>
-          <button
-            type="button"
-            className="mt-2 text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
-            onClick={() => {
-              void fetch("/api/site-auth", { method: "DELETE" }).then(() => {
-                window.location.href = "/#home";
-              });
-            }}
-          >
-            Verrouiller l’accès (logout portail)
-          </button>
+          {(status.storageOk === false) ? (
+            <p className="mt-2 text-xs text-short">
+              Redis KO — {status.storageError || status.howto.upstash}
+            </p>
+          ) : null}
+          <details className="mt-2">
+            <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
+              Clés & manquants
+            </summary>
+            <ul className="mt-2 grid gap-1 text-[11px] sm:grid-cols-2">
+              {Object.entries(status.keys).map(([name, ok]) => (
+                <li key={name} className={ok ? "text-long" : "text-short"}>
+                  {ok ? "OK" : "MANQUE"} · {name}
+                </li>
+              ))}
+            </ul>
+          </details>
+          <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border/50 pt-3">
+            <Badge
+              variant="outline"
+              className={tg?.linked ? "text-long" : "text-short"}
+            >
+              TG {tg?.linked ? `lié · ${tg.chatIdPreview ?? ""}` : "non lié"}
+            </Badge>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={tgBusy !== null}
+              onClick={() => void callTelegram("link")}
+            >
+              {tgBusy === "link" ? "…" : "Lier"}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={tgBusy !== null}
+              onClick={() => void callTelegram("test")}
+            >
+              {tgBusy === "test" ? "…" : "Test"}
+            </Button>
+            <button
+              type="button"
+              className="ml-auto text-[11px] text-muted-foreground underline-offset-2 hover:underline"
+              onClick={() => {
+                void fetch("/api/site-auth", { method: "DELETE" }).then(() => {
+                  window.location.href = "/#home";
+                });
+              }}
+            >
+              Logout
+            </button>
+          </div>
         </section>
       ) : null}
 
-      <section className="rounded-2xl border border-primary/25 bg-primary/5 p-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="font-medium">Telegram — mise en place & envoi forcé</h3>
-          <Badge variant="outline" className={tg?.linked ? "text-long" : "text-short"}>
-            {tg?.linked ? `lié · ${tg.chatIdPreview ?? ""}` : "non lié"}
-          </Badge>
-        </div>
-        <p className="mt-2 text-sm text-muted-foreground">
-          1) Ouvre Telegram → cherche{" "}
-          <strong className="text-foreground">{tg?.bot ?? "@BoriazBot"}</strong>{" "}
-          → envoie <strong className="text-foreground">/start</strong>. 2) Clique{" "}
-          <strong className="text-foreground">Lier Telegram</strong> ci-dessous.
-          Le token du bot (<code>TELEGRAM_BOT_TOKEN</code>) doit être dans les
-          variables Vercel.
-        </p>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <Button
-            size="sm"
-            disabled={tgBusy !== null}
-            onClick={() => void callTelegram("link")}
-          >
-            {tgBusy === "link" ? "Liaison…" : "Lier Telegram"}
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={tgBusy !== null}
-            onClick={() => void callTelegram("test")}
-          >
-            {tgBusy === "test" ? "Envoi…" : "Envoyer un test (forcé)"}
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={tgBusy !== null}
-            onClick={() => void callTelegram("digest")}
-          >
-            {tgBusy === "digest" ? "Envoi…" : "Forcer le bilan (digest)"}
-          </Button>
-        </div>
-        <p className="mt-2 text-xs text-muted-foreground">
-          « Envoyer un test » force un message immédiat pour vérifier la liaison.
-          « Forcer le bilan » recalcule et pousse le digest prix tout de suite,
-          sans attendre le cron.
-        </p>
-      </section>
-
-      <section className="rounded-2xl border border-border/80 bg-card/60 p-4">
-        <h3 className="font-medium">Paper trade — c’est quoi ?</h3>
-        <p className="mt-2 text-sm text-muted-foreground">
-          Un <span className="text-foreground">compte virtuel de 1000 €</span> qui
-          suit automatiquement chaque signal Telegram/accueil comme si tu
-          l’avais pris. Ça sert à voir si les setups sont bons{" "}
-          <em>avant</em> de risquer de l’argent réel. Ce n’est pas un vrai
-          ordre sur Hyperliquid.
+      <section className="rounded-2xl border border-border/70 bg-card/50 p-4">
+        <h3 className="font-medium">Paper — simulation</h3>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Compte virtuel qui suit les signaux. Pas d’ordre réel sur HL.
         </p>
         {account ? (
           <div className="mt-3 grid gap-2 sm:grid-cols-4">
@@ -876,12 +849,10 @@ export function LabPanel() {
             />
           </div>
         ) : null}
-        <p className="mt-2 text-xs text-muted-foreground">
-          Equity = cash libre + marges ouvertes + PnL latent. Marge par trade ≈
-          % du capital × levier pour le notionnel. Ouverts {account?.openCount ?? 0}{" "}
-          · en attente limite {account?.pendingCount ?? 0} · clos{" "}
-          {account?.closedCount ?? 0} (W{account?.winCount ?? 0}/L
-          {account?.lossCount ?? 0}).
+        <p className="mt-2 text-[11px] text-muted-foreground">
+          Ouverts {account?.openCount ?? 0} · pending {account?.pendingCount ?? 0}{" "}
+          · clos {account?.closedCount ?? 0} (W{account?.winCount ?? 0}/L
+          {account?.lossCount ?? 0})
         </p>
       </section>
 
@@ -1049,7 +1020,7 @@ export function LabPanel() {
       ) : null}
 
       <section className="rounded-2xl border border-emerald-500/30 bg-emerald-500/5 p-4">
-        <h3 id="lab-live-portfolio" className="font-medium">
+        <h3 id="lab-live" className="font-medium">
           Portefeuille réel Hyperliquid
         </h3>
         <p className="mt-1 text-sm text-muted-foreground">
@@ -1539,16 +1510,12 @@ export function LabPanel() {
         </section>
       ) : null}
 
-      <section className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-4">
+      <section id="lab-smc" className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h3 className="font-medium">Boriaz · Smart Money Concepts</h3>
+            <h3 className="font-medium">Boriaz · SMC</h3>
             <p className="mt-1 text-sm text-muted-foreground">
-              Continuation D1+H4 (M5/M15/M30). Correction : SHORT si D1
-              haussier / LONG si D1 baissier — M15/M30 only. Checklist 100%
-              (Sweep + BOS corps + FVG + ÔTE) sinon AUCUN ORDRE. Risque 2 %.
-              SL 1–2 pips mèche · TP1 1R 50 %+BE · TP2 liq. ≥2R. Gate :{" "}
-              <code className="text-xs">ChatGPT</code>.
+              Sweep + BOS + FVG + ÔTE · risque 2 % · gate ChatGPT.
             </p>
           </div>
           <Button
@@ -1614,15 +1581,28 @@ export function LabPanel() {
         )}
       </section>
 
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs text-muted-foreground">
+          Macro / backtest (optionnel)
+        </p>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 text-xs"
+          onClick={() => setShowAdvanced((v) => !v)}
+        >
+          {showAdvanced ? "Masquer" : "Afficher"}
+        </Button>
+      </div>
+
+      {showAdvanced ? (
+        <>
       <section className="rounded-2xl border border-border/80 bg-card/60 p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <h3 className="font-medium">Corrélation DXY / yields vs BTC</h3>
             <p className="mt-1 text-sm text-muted-foreground">
-              Mesure si BTC bouge avec le dollar (DXY) et le taux US 10 ans.
-              Corrélation négative BTC↔DXY = classique risk-off (dollar fort →
-              crypto sous pression). Sert à contextualiser les shorts/longs,
-              pas à timer un trade seul.
+              Contexte macro — pas un signal d’entrée seul.
             </p>
           </div>
           <Button size="sm" variant="outline" onClick={() => void refresh()}>
@@ -1660,11 +1640,9 @@ export function LabPanel() {
       <section className="rounded-2xl border border-border/80 bg-card/60 p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <h3 className="font-medium">Backtest moteur corrélé (90 j)</h3>
+            <h3 className="font-medium">Backtest (90 j)</h3>
             <p className="mt-1 text-sm text-muted-foreground">
-              Proxy multi-TF (1h+4h+1d) avec filtre sureté max : entrée seulement
-              si 1h et 4h alignés. Pas le RSI seul — même logique que le live,
-              sans crowd/Nansen historique.
+              Proxy multi-TF corrélé — même logique que le live, sans crowd.
             </p>
           </div>
           <div className="flex gap-2">
@@ -1725,14 +1703,16 @@ export function LabPanel() {
           </div>
         ) : (
           <p className="mt-2 text-sm text-muted-foreground">
-            Lance le backtest corrélé (recommandé : 90 j).
+            Lance le backtest (recommandé : 90 j).
           </p>
         )}
       </section>
+        </>
+      ) : null}
 
-      <section className="rounded-2xl border border-border/80 bg-card/60 p-4">
+      <section id="lab-paper" className="rounded-2xl border border-border/80 bg-card/60 p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="font-medium">Positions paper (live)</h3>
+          <h3 className="font-medium">Positions paper</h3>
           <Button
             size="sm"
             variant="outline"

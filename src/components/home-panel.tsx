@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { formatPct, formatPx, formatParisDateTime, signedClass } from "@/lib/format";
 import type { HomePayload, PortfolioHomeView } from "@/lib/home";
+import type { BotBriefItem, BotBriefPayload } from "@/lib/bot-brief";
 import type {
   PaperAccount,
   PaperTrade,
@@ -47,6 +48,7 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
   });
   const [selectedCoin, setSelectedCoin] = useState<string | null>(null);
   const [cryptoFilter, setCryptoFilter] = useState<"all" | "long" | "short" | "wait">("all");
+  const [brief, setBrief] = useState<BotBriefPayload | null>(null);
   function mergePaper(next: PaperTrade[] | undefined) {
     if (!next?.length) return;
     setPaperLive((prev) => {
@@ -116,10 +118,7 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
 
   useEffect(() => {
     let alive = true;
-    async function loadFull() {
-      // Portefeuilles enregistrés côté navigateur (Lab) : garantit que scalp /
-      // risqué restent visibles même si une réponse serveur ne les renvoie pas
-      // (ex. scope utilisateur transitoire).
+    async function loadPrefsLocal() {
       try {
         const raw = localStorage.getItem(PREFS_LS_KEY);
         if (raw && alive) {
@@ -129,22 +128,53 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
       } catch {
         /* ignore */
       }
+    }
+    async function applyHome(json: HomePayload) {
+      if (!alive) return;
+      setData(json);
+      setAccount(json.account);
+      mergePaper(json.paperAll ?? json.paperOpen);
+      setError(null);
+      setLiveAt(json.fetchedAt);
+    }
+    /** Premier paint : mids + paper (~1s) — pas de scan signaux. */
+    async function loadFast() {
+      await loadPrefsLocal();
       try {
-        const res = await fetch("/api/home", { cache: "no-store" });
-        const json = await readResponseJson<HomePayload & { error?: string }>(res);
+        const res = await fetch("/api/home?fast=1", { cache: "no-store" });
+        const json = await readResponseJson<HomePayload & { error?: string }>(
+          res,
+        );
         if (!res.ok) throw new Error(json.error || "Accueil impossible");
-        if (alive) {
-          setData(json);
-          setAccount(json.account);
-          mergePaper(json.paperAll ?? json.paperOpen);
-          setError(null);
-          setLiveAt(json.fetchedAt);
-        }
-
+        await applyHome(json);
       } catch (e) {
         if (alive) setError(e instanceof Error ? e.message : "Erreur");
       } finally {
         if (alive) setLoading(false);
+      }
+    }
+    /** Enrichissement signaux en fond (peut prendre quelques secondes). */
+    async function loadFull() {
+      try {
+        const res = await fetch("/api/home", { cache: "no-store" });
+        const json = await readResponseJson<HomePayload & { error?: string }>(
+          res,
+        );
+        if (!res.ok) return;
+        await applyHome(json);
+      } catch {
+        /* keep fast snapshot */
+      }
+    }
+    async function loadBrief() {
+      try {
+        const res = await fetch("/api/bot-brief", { cache: "no-store" });
+        const json = await readResponseJson<
+          BotBriefPayload & { error?: string }
+        >(res);
+        if (res.ok && alive) setBrief(json);
+      } catch {
+        /* ignore */
       }
     }
     async function loadLive() {
@@ -207,9 +237,13 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
     void syncPaperFromBrowser().then((trades) => {
       if (trades && alive) mergePaper(trades);
     });
-    void loadFull();
-    const fullId = window.setInterval(() => void loadFull(), 60_000);
-    const liveId = window.setInterval(() => void loadLive(), 15_000);
+    void loadFast().then(() => {
+      void loadBrief();
+      void loadFull();
+    });
+    const fullId = window.setInterval(() => void loadFull(), 90_000);
+    const briefId = window.setInterval(() => void loadBrief(), 45_000);
+    const liveId = window.setInterval(() => void loadLive(), 12_000);
 
     // Relecture rapide des trades ouverts (PnL + structure, sans IA lourde)
     async function reviewOpenFast() {
@@ -238,6 +272,7 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
     return () => {
       alive = false;
       window.clearInterval(fullId);
+      window.clearInterval(briefId);
       window.clearInterval(liveId);
       window.clearTimeout(reviewSoon);
       window.clearInterval(reviewId);
@@ -246,9 +281,13 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
 
   if (loading && !data) {
     return (
-      <p className="animate-pulse text-sm text-muted-foreground">
-        Calcul Alignement BoriazBot…
-      </p>
+      <div className="space-y-3">
+        <p className="animate-pulse text-sm text-muted-foreground">
+          Chargement prix & paper…
+        </p>
+        <div className="h-16 animate-pulse rounded-2xl bg-card/40" />
+        <div className="h-24 animate-pulse rounded-2xl bg-card/30" />
+      </div>
     );
   }
   if (error && !data) {
@@ -350,19 +389,84 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
         </div>
       ) : null}
 
+      {brief?.health ? (
+        <section className="bb-reveal flex flex-wrap items-center gap-2">
+          <HealthPill
+            ok={brief.health.storageOk}
+            label={brief.health.storageOk ? "Redis OK" : "Redis KO"}
+            tip={
+              brief.health.storageOk
+                ? `Backend ${brief.health.storageBackend}`
+                : "Paper ne persiste pas — nouvelle DB Upstash"
+            }
+          />
+          <HealthPill
+            ok={brief.health.cronOk}
+            label={
+              brief.health.cronOk
+                ? `Cron ${brief.health.cronAgeSec != null ? `${Math.round(brief.health.cronAgeSec / 60)}m` : "OK"}`
+                : "Cron ?"
+            }
+            tip="Heartbeat /api/cron — paper + LIVE gérés en fond"
+          />
+          <HealthPill
+            ok={brief.health.paperOk}
+            label={`Paper ${brief.health.paperOpen}o/${brief.health.paperPending}p`}
+            tip="Ouverts / pending limite — vert = stockage + cron OK"
+          />
+          <HealthPill
+            ok={brief.health.liveOk}
+            label={
+              brief.health.liveOk
+                ? `LIVE ${brief.health.livePositions}`
+                : brief.health.liveArmed
+                  ? "LIVE partiel"
+                  : "LIVE off"
+            }
+            tip="Env + toggles Lab + journal positions"
+          />
+          {liveAt ? (
+            <span className="text-[10px] text-muted-foreground">
+              maj {formatParisDateTime(liveAt)}
+            </span>
+          ) : null}
+        </section>
+      ) : null}
+
+      {brief?.items?.length ? (
+        <section className="bb-reveal space-y-2" style={{ animationDelay: "40ms" }}>
+          <div className="flex items-baseline justify-between gap-2">
+            <h2 className="font-heading text-sm font-semibold tracking-wide text-primary/90 uppercase">
+              Analyse bot
+            </h2>
+            <p className="text-[11px] text-muted-foreground">
+              prévu · attendre · ouvert
+            </p>
+          </div>
+          <ul className="grid gap-1.5 sm:grid-cols-2">
+            {brief.items
+              .filter((i) => i.kind !== "health" || i.tone === "bad")
+              .slice(0, 8)
+              .map((item) => (
+                <BotNotif key={item.id} item={item} />
+              ))}
+          </ul>
+        </section>
+      ) : null}
+
       {data.warning || data.degraded || data.signalsPending ? (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-sm text-amber-100">
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-400/25 bg-amber-400/8 px-3 py-2 text-sm text-amber-50/90">
           <div>
             <p className="font-medium">
               {data.signalsPending
-                ? "Analyse en cours — prix / paper affichés"
+                ? "Signaux en cours — prix / paper déjà là"
                 : data.degraded
                   ? "Mode dégradé"
                   : "Alerte"}
             </p>
-            <p className="text-xs text-amber-100/80">
+            <p className="text-xs text-amber-100/70">
               {data.warning ||
-                "Les signaux complets arrivent dès que Hyperliquid / IA répondent."}
+                "Enrichissement alignement en arrière-plan."}
             </p>
           </div>
           <Button
@@ -1548,5 +1652,67 @@ function Stat({
         {value}
       </p>
     </div>
+  );
+}
+
+function HealthPill({
+  ok,
+  label,
+  tip,
+}: {
+  ok: boolean;
+  label: string;
+  tip: string;
+}) {
+  return (
+    <span
+      title={tip}
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium ${
+        ok
+          ? "border-long/35 bg-long/10 text-long"
+          : "border-short/35 bg-short/10 text-short"
+      }`}
+    >
+      <span
+        className={`size-1.5 rounded-full ${ok ? "bg-long bb-live-dot" : "bg-short"}`}
+      />
+      {label}
+    </span>
+  );
+}
+
+function BotNotif({ item }: { item: BotBriefItem }) {
+  const tone =
+    item.tone === "ok"
+      ? "border-long/25 bg-long/8 text-foreground"
+      : item.tone === "bad"
+        ? "border-short/30 bg-short/10 text-foreground"
+        : item.tone === "warn"
+          ? "border-amber-400/25 bg-amber-400/8 text-foreground"
+          : "border-primary/20 bg-primary/6 text-foreground";
+  const kindLabel =
+    item.kind === "wait"
+      ? "Attend"
+      : item.kind === "plan"
+        ? "Prévu"
+        : item.kind === "open"
+          ? "Ouvert"
+          : item.kind === "live"
+            ? "LIVE"
+            : item.kind === "cron"
+              ? "Cron"
+              : "Système";
+  return (
+    <li className={`rounded-xl border px-3 py-2 ${tone}`}>
+      <div className="flex items-center gap-2">
+        <span className="rounded-md bg-background/40 px-1.5 py-0.5 text-[9px] tracking-wide text-muted-foreground uppercase">
+          {kindLabel}
+        </span>
+        <p className="truncate text-xs font-medium">{item.title}</p>
+      </div>
+      <p className="mt-1 line-clamp-2 text-[11px] leading-snug text-muted-foreground">
+        {item.detail}
+      </p>
+    </li>
   );
 }

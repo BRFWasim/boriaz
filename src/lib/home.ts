@@ -77,73 +77,91 @@ export interface HomePayload {
   signalsPending: boolean;
 }
 
-export async function getHomeSnapshot(): Promise<HomePayload> {
+export type HomeSnapshotOptions = {
+  /** Premier paint : mids + paper seulement, pas de getTradeSignals. */
+  fast?: boolean;
+};
+
+async function loadQuotesFast(): Promise<{
+  quotes: Awaited<ReturnType<typeof getWatchlistSnapshot>> | null;
+  warning: string | null;
+}> {
   let warning: string | null = null;
-  let signals: Awaited<ReturnType<typeof getTradeSignals>> | null = null;
   let quotes: Awaited<ReturnType<typeof getWatchlistSnapshot>> | null = null;
 
+  // Fast path : mids HL directs (~200ms) — pas de bougies
   try {
-    const qTimed = await Promise.race([
-      getWatchlistSnapshot().then((q) => ({ ok: true as const, q })),
-      new Promise<{ ok: false }>((resolve) =>
-        setTimeout(() => resolve({ ok: false }), 5_000),
-      ),
-    ]);
-    if (qTimed.ok) {
-      quotes = qTimed.q;
-    } else {
-      warning = "Prix bougies lents — repli sur mids live";
-    }
+    const { postInfo } = await import("./hyperliquid");
+    const { parseNum } = await import("./format");
+    const { WATCHLIST } = await import("./price-watch");
+    const mids = (await postInfo({ type: "allMids" })) as Record<string, string>;
+    quotes = {
+      quotes: WATCHLIST.map((w) => ({
+        coin: w.coin,
+        label: w.label,
+        price: parseNum(mids[w.coin] ?? "0"),
+        change15mPct: null,
+        change1hPct: null,
+        change2hPct: null,
+        change24hPct: null,
+      })).filter((q) => q.price > 0),
+      nextDigestAt: Date.now() + 2 * 3600_000,
+      lastDigestAt: 0,
+    };
   } catch (e) {
     warning = e instanceof Error ? e.message : "Prix indisponibles";
   }
 
   if (!quotes?.quotes?.length) {
     try {
-      const { postInfo } = await import("./hyperliquid");
-      const { parseNum } = await import("./format");
-      const { WATCHLIST } = await import("./price-watch");
-      const mids = (await postInfo({ type: "allMids" })) as Record<string, string>;
-      quotes = {
-        quotes: WATCHLIST.map((w) => ({
-          coin: w.coin,
-          label: w.label,
-          price: parseNum(mids[w.coin] ?? "0"),
-          change15mPct: null,
-          change1hPct: null,
-          change2hPct: null,
-          change24hPct: null,
-        })).filter((q) => q.price > 0),
-        nextDigestAt: Date.now() + 2 * 3600_000,
-        lastDigestAt: 0,
-      };
-      if (warning?.includes("429")) {
-        warning =
-          "HL rate-limit bougies — prix mids live OK, % 15m/2h en attente.";
-      }
-    } catch (e) {
-      warning = e instanceof Error ? e.message : warning;
+      const qTimed = await Promise.race([
+        getWatchlistSnapshot().then((q) => ({ ok: true as const, q })),
+        new Promise<{ ok: false }>((resolve) =>
+          setTimeout(() => resolve({ ok: false }), 3_000),
+        ),
+      ]);
+      if (qTimed.ok) quotes = qTimed.q;
+    } catch {
+      /* keep warning */
     }
   }
 
-  // Soft-timeout élargi : scan lean (8 coins) doit finir sous ~15s
-  try {
-    const timed = await Promise.race([
-      getTradeSignals({ notify: false }).then((s) => ({ ok: true as const, s })),
-      new Promise<{ ok: false }>((resolve) =>
-        setTimeout(() => resolve({ ok: false }), 15_000),
-      ),
-    ]);
-    if (timed.ok) {
-      signals = timed.s;
-    } else {
-      warning = warning
-        ? `${warning} · Signaux lents — vue prix/paper`
-        : "Signaux lents — vue prix/paper (réessaie dans 1 min)";
+  return { quotes, warning };
+}
+
+export async function getHomeSnapshot(
+  options: HomeSnapshotOptions = {},
+): Promise<HomePayload> {
+  const fast = Boolean(options.fast);
+  let warning: string | null = null;
+  let signals: Awaited<ReturnType<typeof getTradeSignals>> | null = null;
+
+  const { quotes, warning: qWarn } = await loadQuotesFast();
+  warning = qWarn;
+
+  if (!fast) {
+    // Soft-timeout court : l’UI enrichit en fond via ?fast=0 après le premier paint
+    try {
+      const timed = await Promise.race([
+        getTradeSignals({ notify: false }).then((s) => ({
+          ok: true as const,
+          s,
+        })),
+        new Promise<{ ok: false }>((resolve) =>
+          setTimeout(() => resolve({ ok: false }), 8_000),
+        ),
+      ]);
+      if (timed.ok) {
+        signals = timed.s;
+      } else {
+        warning = warning
+          ? `${warning} · Signaux lents — vue prix/paper`
+          : "Signaux lents — vue prix/paper (réessaie dans 1 min)";
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Signaux indisponibles";
+      warning = warning ? `${warning} · ${msg}` : msg;
     }
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "Signaux indisponibles";
-    warning = warning ? `${warning} · ${msg}` : msg;
   }
 
   const prefs = await loadPrefs().catch(() => null);
@@ -210,7 +228,9 @@ export async function getHomeSnapshot(): Promise<HomePayload> {
       alignment: sig?.alignment ?? null,
       blurb: frozen
         ? `Trade figé ${frozen.side.toUpperCase()} · ${frozen.portfolioName || "Défaut"} · ${frozen.justification?.summary || frozen.note}`
-        : sig?.aiText || sig?.reason || "Analyse en cours…",
+        : sig?.aiText ||
+          sig?.reason ||
+          (fast ? "Analyse en arrière-plan…" : "Analyse en cours…"),
     };
   });
 
@@ -245,7 +265,7 @@ export async function getHomeSnapshot(): Promise<HomePayload> {
       live: "Prix ~4 s. Signaux ~1–3 min. Tracking wallets + gate IA avant chaque simu.",
     },
     warning,
-    degraded: Boolean(warning) || !signals,
+    degraded: Boolean(warning) || (!signals && !fast),
     signalsPending: !signals,
   };
 }

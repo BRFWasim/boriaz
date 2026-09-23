@@ -3,13 +3,17 @@ import { bindUserRequest } from "@/lib/bind-request";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-/** Soft-timeout dans getHomeSnapshot (~12s) + marge. */
-export const maxDuration = 60;
+/** Fast ~2s ; full soft-timeout 8s + marge. */
+export const maxDuration = 30;
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
     await bindUserRequest();
-    const payload = await getHomeSnapshot();
+    const url = new URL(req.url);
+    const fast =
+      url.searchParams.get("fast") === "1" ||
+      url.searchParams.get("fast") === "true";
+    const payload = await getHomeSnapshot({ fast });
     return Response.json(payload);
   } catch (error) {
     const message =
