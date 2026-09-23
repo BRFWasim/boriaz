@@ -10,6 +10,7 @@ import { fetchLivePortfolio } from "./hl-live";
 import { loadLiveJournal, matchJournalToPosition } from "./live-journal";
 import { postInfo } from "./hyperliquid";
 import { parseNum } from "./format";
+import { isLiveSideAllowed, liveSidesLabel } from "./live-side-policy";
 
 export type LiveSmcGateResult = {
   ok: boolean;
@@ -140,6 +141,16 @@ export async function validateLiveSmcBeforePlace(opts: {
       checks,
     };
   }
+
+  if (!isLiveSideAllowed(setup.order.side)) {
+    return {
+      ok: false,
+      reason: `Mode ${liveSidesLabel()} — SHORT refusé (HL_ALLOW_SHORT=false)`,
+      mid: null,
+      checks,
+    };
+  }
+  checks.push(`côté ${setup.order.side} OK (${liveSidesLabel()})`);
 
   if (setup.tradeKind === "correction" && setup.execTimeframe === "5m") {
     return {

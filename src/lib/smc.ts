@@ -3,6 +3,7 @@
  * Utilisé par le portefeuille « Boriaz ».
  */
 import type { Candle, SignalBias } from "./types";
+import { isShortAllowed } from "./live-side-policy";
 
 export type SmcSide = "long" | "short";
 export type SmcTrend = "haussier" | "baissier" | "neutre";
@@ -944,16 +945,19 @@ export function analyzeSmcSetup(input: {
   if (longContinuation) {
     pushCont("long", "long_aligned", false);
   }
-  if (shortContinuation) {
+  const shortsOk = isShortAllowed();
+  if (shortsOk && shortContinuation) {
     pushCont("short", "short_aligned", false);
   }
   if (longH4Lead) {
     pushCont("long", "long_aligned", true);
   }
-  if (shortH4Lead) {
+  if (shortsOk && shortH4Lead) {
     pushCont("short", "short_aligned", true);
   }
-  if (shortCorrection && !shortContinuation && !shortH4Lead) {
+  // Long-only temporaire : pas de shorts ni de corrections contre-tendance
+  // (couteau baissier). Remettre HL_ALLOW_SHORT=true pour réactiver.
+  if (shortsOk && shortCorrection && !shortContinuation && !shortH4Lead) {
     candidates.push({
       side: "short",
       signalType: "short_counter_trend",
@@ -970,6 +974,7 @@ export function analyzeSmcSetup(input: {
       }),
     });
   }
+  // Corrections LONG gardées même en Long-only (gate conf 88 + range)
   if (longCorrection && !longContinuation && !longH4Lead) {
     candidates.push({
       side: "long",

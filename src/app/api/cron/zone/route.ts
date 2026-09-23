@@ -21,7 +21,7 @@ function authorized(request: Request): { ok: boolean; error?: string } {
 
 /**
  * Poll rapide zones armées (mid ∈ ÔTE) → force scan.
- * Remplace un worker WS sur Vercel.
+ * Burst WebSocket allMids (hl-mids) + fallback HTTP — pas de worker WS permanent.
  */
 export async function GET(request: Request) {
   const auth = authorized(request);

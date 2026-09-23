@@ -1,6 +1,7 @@
 import { getLiveConfig, isLiveEnvReady } from "@/lib/hl-live";
 import { bindUserRequest } from "@/lib/bind-request";
 import { loadPrefs } from "@/lib/persist";
+import { liveSidesLabel } from "@/lib/live-side-policy";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -23,6 +24,8 @@ export async function GET() {
       ready: ready.ok,
       reason: ready.reason ?? null,
       testnet: cfg.testnet,
+      allowShort: cfg.allowShort,
+      sides: liveSidesLabel(),
       maxNotionalUsd: cfg.maxNotionalUsd,
       maxLeverage: cfg.maxLeverage,
       maxOpenPositions: cfg.maxOpenPositions,
@@ -41,7 +44,9 @@ export async function GET() {
         "Sur app.hyperliquid.xyz → API → créer un Agent Wallet, coller UNIQUEMENT sa private key (pas la seed master).",
       arm:
         "Mettre HL_LIVE_ENABLED=true + caps HL_MAX_* puis activer les 2 toggles Lab (global + Boriaz).",
-      cron: "cron-job.org → /api/cron (ACK <2s, travail en fond). Manage trades d’abord, puis signaux/live.",
+      sides:
+        "HL_ALLOW_SHORT=false → Long-only temporaire. true → longs + shorts.",
+      cron: "cron-job.org → /api/cron (ACK <2s, travail en fond). Manage trades d’abord, puis signaux/live. /api/cron/zone = burst WS mids.",
     },
   });
 }

@@ -1,8 +1,9 @@
 /**
  * Zones armées (EN ATTENTE / pré-arm) → scan instantané quand mid entre dans la zone.
- * Remplace un vrai WS worker sur Vercel : poll léger à chaque manage + cron dédié.
+ * Burst WS allMids (hl-mids) + poll cron/zone — pas de worker WS permanent sur Vercel.
  */
 import { kvGetJson, kvSetJsonEx } from "./kv";
+import { isLiveSideAllowed } from "./live-side-policy";
 
 export type ArmedZone = {
   coin: string;
@@ -23,10 +24,16 @@ export async function loadArmedZones(): Promise<ArmedZone[]> {
   const raw = await kvGetJson<ArmedZone[]>(KEY);
   if (!Array.isArray(raw)) return [];
   const now = Date.now();
-  return raw.filter((z) => z && now - z.at < TTL * 1000);
+  return raw.filter(
+    (z) =>
+      z &&
+      now - z.at < TTL * 1000 &&
+      isLiveSideAllowed(z.side),
+  );
 }
 
 export async function saveArmedZone(zone: ArmedZone): Promise<void> {
+  if (!isLiveSideAllowed(zone.side)) return;
   const all = await loadArmedZones();
   const next = all.filter(
     (z) =>
@@ -68,14 +75,14 @@ export async function checkArmedZonesAndScan(): Promise<{
     return { hit: false, coin: null, notes: ["aucune zone armée"], scanned: false };
   }
 
-  const { InfoClient } = await import("@nktkas/hyperliquid");
-  const { makeTransport, getLiveConfig } = await import("./hl-live");
+  const { getLiveConfig } = await import("./hl-live");
+  const { fetchFreshMids, midFromSnapshot } = await import("./hl-mids");
   const cfg = getLiveConfig();
-  const info = new InfoClient({ transport: makeTransport(cfg.testnet) });
-  const mids = await info.allMids();
+  const snap = await fetchFreshMids({ testnet: cfg.testnet, preferWs: true });
+  notes.push(`mids ${snap.source} ${snap.ms}ms`);
 
   for (const z of zones) {
-    const mid = Number(mids[z.coin] ?? mids[z.coin.toUpperCase()] ?? 0);
+    const mid = midFromSnapshot(snap, z.coin);
     if (!(mid > 0)) continue;
     const inZone = mid >= z.zoneLow * 0.994 && mid <= z.zoneHigh * 1.006;
     const pastTp1 = z.side === "long" ? mid >= z.tp1 : mid <= z.tp1;
@@ -85,7 +92,9 @@ export async function checkArmedZonesAndScan(): Promise<{
       continue;
     }
     if (!inZone) continue;
-    notes.push(`${z.coin}: MID EN ZONE ${mid} ∈ [${z.zoneLow},${z.zoneHigh}] → scan force`);
+    notes.push(
+      `${z.coin}: MID EN ZONE ${mid} ∈ [${z.zoneLow},${z.zoneHigh}] via ${snap.source} → scan force`,
+    );
     try {
       const { getTradeSignals } = await import("./trade-signal");
       await getTradeSignals({ notify: true, force: true });

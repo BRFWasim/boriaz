@@ -27,8 +27,12 @@ export async function GET() {
     ),
   };
   const liveKeys = {
-    HL_LIVE_ENABLED:
-      process.env.HL_LIVE_ENABLED?.trim().toLowerCase() === "true",
+    HL_LIVE_ENABLED: ["true", "1", "yes", "on"].includes(
+      process.env.HL_LIVE_ENABLED?.trim().toLowerCase() || "",
+    ),
+    HL_ALLOW_SHORT: ["true", "1", "yes", "on"].includes(
+      process.env.HL_ALLOW_SHORT?.trim().toLowerCase() || "",
+    ),
     HL_AGENT_PRIVATE_KEY: Boolean(process.env.HL_AGENT_PRIVATE_KEY?.trim()),
     HL_ACCOUNT_ADDRESS: Boolean(process.env.HL_ACCOUNT_ADDRESS?.trim()),
     SITE_PASSWORD: Boolean(process.env.SITE_PASSWORD?.trim()),
@@ -53,7 +57,7 @@ export async function GET() {
       upstash:
         "Upstash = un petit tiroir en ligne pour le paper 1000 €. Sans ça, Vercel jette le tiroir à chaque redémarrage (/tmp). Gratuit : Redis → REST URL + TOKEN.",
       live:
-        "LIVE Boriaz : HL_LIVE_ENABLED + HL_AGENT_PRIVATE_KEY (agent) + HL_ACCOUNT_ADDRESS (MASTER avec USDC) + toggles Lab. Caps HL_MAX_*.",
+        "LIVE Boriaz : HL_LIVE_ENABLED + HL_AGENT_PRIVATE_KEY (agent) + HL_ACCOUNT_ADDRESS (MASTER avec USDC) + toggles Lab. Caps HL_MAX_*. HL_ALLOW_SHORT=false = Long-only.",
       siteGate:
         "SITE_PASSWORD = mot de passe UI. /api/cron (CRON_SECRET) répond en <2s puis travaille en fond — OK timeout cron-job.org 30s.",
     },

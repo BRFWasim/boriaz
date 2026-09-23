@@ -15,6 +15,7 @@ import {
 } from "@nktkas/hyperliquid";
 import { formatPrice, formatSize } from "@nktkas/hyperliquid/utils";
 import { privateKeyToAccount } from "viem/accounts";
+import { isLiveSideAllowed, isShortAllowed } from "./live-side-policy";
 
 export type LiveSide = "long" | "short";
 export type LiveEntryMode = "market_now" | "limit_wait";
@@ -70,6 +71,7 @@ export type LiveConfigStatus = {
   envArmed: boolean;
   hasAgentKey: boolean;
   testnet: boolean;
+  allowShort: boolean;
   maxNotionalUsd: number;
   maxLeverage: number;
   maxOpenPositions: number;
@@ -150,6 +152,7 @@ export function getLiveConfig(): LiveConfigStatus {
     envArmed: envFlagAny(["HL_LIVE_ENABLED", "HL_LIVE_ENABLED"], false),
     hasAgentKey: Boolean(key) && Boolean(agentAddress),
     testnet: envFlagAny(["HL_LIVE_TESTNET", "HL_LIVE_TESTNET"], false),
+    allowShort: isShortAllowed(),
     // Défaut prudent — survivre la nuit ; override env si besoin.
     maxNotionalUsd: envNumAny(
       ["HL_MAX_NOTIONAL_USD", "HL_MAX_NOTIONAL_USD"],
@@ -792,6 +795,15 @@ export async function placeBoriazLiveTrade(
   const ready = isLiveEnvReady();
   if (!ready.ok) {
     return { ok: false, skipped: true, reason: ready.reason };
+  }
+
+  if (!isLiveSideAllowed(req.side)) {
+    return {
+      ok: false,
+      skipped: true,
+      reason:
+        "HL_ALLOW_SHORT=false — Long-only temporaire (shorts refusés). Remettre true pour shorts.",
+    };
   }
 
   // Architecture RISK : bloquer si réconciliation HL↔journal requise

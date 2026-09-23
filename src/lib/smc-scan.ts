@@ -9,6 +9,7 @@ import {
   type SmcSetup,
 } from "./smc";
 import { WATCHLIST } from "./price-watch";
+import { isLiveSideAllowed } from "./live-side-policy";
 
 const CLAUDE_MODEL = "claude-haiku-4-5-20251001";
 const GPT_MODEL_DEFAULT = "gpt-4o-mini";
@@ -295,7 +296,12 @@ async function runSmcAiGates(
 /** Ordre des candidats : CONTINUATION d’abord (FAIRE GAGNER), puis corrections. */
 function pickGateCandidates(actionable: SmcSetup[]): SmcSetup[] {
   if (!actionable.length) return [];
-  const ranked = [...actionable].sort((a, b) => {
+  // Respecte Long-only (HL_ALLOW_SHORT=false)
+  const pool = actionable.filter(
+    (s) => s.order && isLiveSideAllowed(s.order.side),
+  );
+  if (!pool.length) return [];
+  const ranked = [...pool].sort((a, b) => {
     const cont = (s: SmcSetup) =>
       s.tradeKind === "continuation" && !s.counterTrend ? 2 : 0;
     const longBias = (s: SmcSetup) =>

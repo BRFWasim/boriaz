@@ -23,3 +23,5 @@ Toujours : SMC → score → range → ChatGPT si budget → risk/live gates →
 
 ## Ops
 - Kill-switch : `HL_LIVE_ENABLED` (false = pause nouvelles entrées ; positions ouvertes restent gérées).
+- **Long-only temporaire** : `HL_ALLOW_SHORT=false` (défaut) — SMC + gate + place refusent les shorts. Remettre `true` pour shorts.
+- Réactivité zones : `/api/cron/zone` utilise un **burst WebSocket** `allMids` (fallback HTTP) pour détecter mid ∈ ÔTE plus vite.
