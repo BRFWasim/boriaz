@@ -1,5 +1,5 @@
 import { getIntegrationStatus } from "@/lib/integrations";
-import { kvBackend } from "@/lib/kv";
+import { kvBackend, kvHealth, kvProbe } from "@/lib/kv";
 import { loadCronStatus } from "@/lib/cron-status";
 
 export const dynamic = "force-dynamic";
@@ -42,6 +42,8 @@ export async function GET() {
     .map(([name]) => name);
 
   const lastCron = await loadCronStatus();
+  const probe = await kvProbe();
+  const health = kvHealth();
 
   return Response.json({
     lastCron,
@@ -49,13 +51,15 @@ export async function GET() {
     liveKeys,
     missing,
     storage: upstash ? "upstash" : "tmp",
+    storageOk: probe.ok && health.ok,
+    storageError: probe.error || health.error,
     vercelEnvUrl: VERCEL_ENV_URL,
     upstashUrl: "https://console.upstash.com",
     howto: {
       where:
         "Vercel → projet boriazbot-v4 → Settings → Environment Variables. Tout en Secret / Production. Pas en chat.",
       upstash:
-        "Upstash = un petit tiroir en ligne pour le paper 1000 €. Sans ça, Vercel jette le tiroir à chaque redémarrage (/tmp). Gratuit : Redis → REST URL + TOKEN.",
+        "Upstash Redis gratuit : si « max requests limit » → créer une NOUVELLE DB Redis, coller REST URL + TOKEN (remplace les anciennes). Sans ça paper/cron ne persistent pas.",
       live:
         "LIVE Boriaz : HL_LIVE_ENABLED + HL_AGENT_PRIVATE_KEY (agent) + HL_ACCOUNT_ADDRESS (MASTER avec USDC) + toggles Lab. Caps HL_MAX_*. HL_ALLOW_SHORT=true = shorts qualité only.",
       siteGate:

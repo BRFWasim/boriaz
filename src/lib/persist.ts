@@ -14,7 +14,7 @@ import {
   type UserPrefs,
 } from "./user-types";
 import { dataPath, ensureDataDir } from "./data-dir";
-import { kvBackend, kvGet, kvSet } from "./kv";
+import { kvBackend, kvGet, kvHealth, kvSet } from "./kv";
 
 export type {
   EntryMode,
@@ -114,6 +114,13 @@ async function writeText(key: string, raw: string): Promise<void> {
 
 export function storageInfo(): { backend: "upstash" | "tmp"; note: string } {
   const backend = kvBackend();
+  const h = kvHealth();
+  if (backend === "upstash" && !h.ok) {
+    return {
+      backend,
+      note: `Upstash KO — ${h.error || "quota / erreur"}. Crée une nouvelle DB Redis (console.upstash.com) et mets URL+TOKEN sur Vercel, sinon paper/cron ne persistent pas.`,
+    };
+  }
   return {
     backend,
     note:

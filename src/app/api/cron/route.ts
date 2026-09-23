@@ -1,5 +1,6 @@
 import { after } from "next/server";
 import { runCronWork, type CronPhase } from "@/lib/cron-runner";
+import { saveCronStatus } from "@/lib/cron-status";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -30,12 +31,14 @@ function parsePhase(request: Request): CronPhase {
 
 /**
  * ACK immédiat (<2s) pour cron-job.org (timeout 30s).
- * Le bot continue en arrière-plan jusqu’à maxDuration (120s).
+ * Heartbeat KV synchrone (before after) — prouve que le cron a été reçu
+ * même si `after()` est kill/timeout.
  *
  * URLs :
  * - /api/cron?secret=XXX              → tout (manage d’abord, puis signaux)
  * - /api/cron?secret=XXX&phase=manage → seulement trades ouverts
  * - /api/cron?secret=XXX&phase=signals → seulement nouveaux signaux
+ * - /api/cron?secret=XXX&sync=1       → attend le travail (≤95s) puis répond
  */
 export async function GET(request: Request) {
   const auth = authorized(request);
@@ -48,17 +51,58 @@ export async function GET(request: Request) {
 
   const phase = parsePhase(request);
   const startedAt = Date.now();
+  const sync =
+    new URL(request.url).searchParams.get("sync") === "1" ||
+    new URL(request.url).searchParams.get("sync") === "true";
+
+  // Heartbeat SYNCHRONE — avant after() (after n’est pas fiable sous charge)
+  try {
+    await saveCronStatus({
+      at: startedAt,
+      ok: true,
+      tick: `${phase}:ack`,
+      note: sync ? "sync-start" : "accepted",
+    });
+  } catch (e) {
+    console.error("cron heartbeat failed", e);
+  }
+
+  if (sync) {
+    try {
+      const out = await runCronWork(phase);
+      return Response.json({
+        ok: out.ok,
+        accepted: true,
+        phase,
+        mode: "sync",
+        at: startedAt,
+        ms: Date.now() - startedAt,
+        results: {
+          manageError: out.results.manageError ?? null,
+          signalsError: out.results.signalsError ?? null,
+          signals: out.results.signals ?? null,
+        },
+      });
+    } catch (e) {
+      await saveCronStatus({
+        at: Date.now(),
+        ok: false,
+        tick: phase,
+        note: e instanceof Error ? e.message : "sync-failed",
+      }).catch(() => undefined);
+      return Response.json(
+        {
+          ok: false,
+          phase,
+          error: e instanceof Error ? e.message : "sync-failed",
+        },
+        { status: 500 },
+      );
+    }
+  }
 
   after(async () => {
     try {
-      // Heartbeat avant le travail long — visible même si timeout 120s
-      const { saveCronStatus } = await import("@/lib/cron-status");
-      await saveCronStatus({
-        at: startedAt,
-        ok: true,
-        tick: `${phase}:ack`,
-        note: "accepted",
-      });
       const out = await runCronWork(phase);
       console.info("cron after done", {
         phase: out.phase,
@@ -69,7 +113,6 @@ export async function GET(request: Request) {
     } catch (e) {
       console.error("cron after failed", e);
       try {
-        const { saveCronStatus } = await import("@/lib/cron-status");
         await saveCronStatus({
           at: Date.now(),
           ok: false,
