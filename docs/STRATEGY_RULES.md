@@ -23,5 +23,6 @@ Toujours : SMC → score → range → ChatGPT si budget → risk/live gates →
 
 ## Ops
 - Kill-switch : `HL_LIVE_ENABLED` (false = pause nouvelles entrées ; positions ouvertes restent gérées).
-- **Long-only temporaire** : `HL_ALLOW_SHORT=false` (défaut) — SMC + gate + place refusent les shorts. Remettre `true` pour shorts.
+- **Shorts qualité** : `HL_ALLOW_SHORT=true` (défaut) — shorts **uniquement** continuation D1+H4 deep, conf LIVE ≥**90** (gate IA ≥88). Pas de short correction / H4-lead / shallow. `false` = Long-only.
+- Watchlist prioritaire : BTC ETH SOL **BNB SUI ONDO PENDLE ASTER** (+ reste). DRV/BGB absents du perp principal HL → non tradables ici.
 - Réactivité zones : `/api/cron/zone` utilise un **burst WebSocket** `allMids` (fallback HTTP) pour détecter mid ∈ ÔTE plus vite.

@@ -45,7 +45,7 @@ export async function GET() {
       arm:
         "Mettre HL_LIVE_ENABLED=true + caps HL_MAX_* puis activer les 2 toggles Lab (global + Boriaz).",
       sides:
-        "HL_ALLOW_SHORT=false → Long-only temporaire. true → longs + shorts.",
+        "HL_ALLOW_SHORT=true → shorts qualité (continuation D1+H4 deep, conf≥90). false → Long-only.",
       cron: "cron-job.org → /api/cron (ACK <2s, travail en fond). Manage trades d’abord, puis signaux/live. /api/cron/zone = burst WS mids.",
     },
   });

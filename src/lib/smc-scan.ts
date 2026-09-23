@@ -10,6 +10,7 @@ import {
 } from "./smc";
 import { WATCHLIST } from "./price-watch";
 import { isLiveSideAllowed } from "./live-side-policy";
+import { minGateConfidenceForSide, isQualityShortSetup } from "./live-side-policy";
 
 const CLAUDE_MODEL = "claude-haiku-4-5-20251001";
 const GPT_MODEL_DEFAULT = "gpt-4o-mini";
@@ -47,10 +48,7 @@ type GateResult = {
 };
 
 function minGateConfidence(setup: SmcSetup): number {
-  // Qualité > quantité — FAIRE GAGNER DE L'ARGENT (AI_MIN aligné ~75+)
-  if (setup.tradeKind === "correction" || setup.counterTrend) return 82;
-  if (setup.order?.side === "short") return 76;
-  return 75;
+  return minGateConfidenceForSide(setup);
 }
 
 function parseGateJson(
@@ -298,7 +296,10 @@ function pickGateCandidates(actionable: SmcSetup[]): SmcSetup[] {
   if (!actionable.length) return [];
   // Respecte Long-only (HL_ALLOW_SHORT=false)
   const pool = actionable.filter(
-    (s) => s.order && isLiveSideAllowed(s.order.side),
+    (s) =>
+      s.order &&
+      isLiveSideAllowed(s.order.side) &&
+      isQualityShortSetup(s),
   );
   if (!pool.length) return [];
   const ranked = [...pool].sort((a, b) => {
@@ -334,7 +335,7 @@ export async function scanSmcWatchlist(input: {
   const coins =
     input.coins?.length
       ? input.coins
-      : WATCHLIST.map((w) => w.coin).slice(0, 10);
+      : WATCHLIST.map((w) => w.coin).slice(0, 16);
 
   const cacheKey = `${coins.join(",")}:${Math.round(input.walletEur)}`;
   if (

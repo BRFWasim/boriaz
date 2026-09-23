@@ -124,6 +124,16 @@ export const CRYPTO_META: Record<
     logo: "https://assets.coingecko.com/coins/images/53097/small/pump.jpg",
     color: "#00D4AA",
   },
+  BNB: {
+    label: "BNB",
+    logo: "https://assets.coingecko.com/coins/images/825/small/bnb-icon2_2x.png",
+    color: "#F3BA2F",
+  },
+  ASTER: {
+    label: "Aster",
+    logo: "https://assets.coingecko.com/coins/images/55035/small/ASTER.png",
+    color: "#6C5CE7",
+  },
   XRP: {
     label: "XRP",
     logo: "https://assets.coingecko.com/coins/images/44/small/xrp-symbol-white-128.png",

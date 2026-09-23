@@ -10,7 +10,7 @@ import { fetchLivePortfolio } from "./hl-live";
 import { loadLiveJournal, matchJournalToPosition } from "./live-journal";
 import { postInfo } from "./hyperliquid";
 import { parseNum } from "./format";
-import { isLiveSideAllowed, liveSidesLabel } from "./live-side-policy";
+import { isLiveSideAllowed, liveSidesLabel, isQualityShortSetup, minLiveConfidenceForSide } from "./live-side-policy";
 
 export type LiveSmcGateResult = {
   ok: boolean;
@@ -40,10 +40,7 @@ export function noteLiveOpen(coin: string): void {
 }
 
 function minLiveConfidence(setup: SmcSetup): number {
-  // Plus exigeant : sûr et certain avant d’engager du vrai $ 
-  if (setup.tradeKind === "correction" || setup.counterTrend) return 88;
-  if (setup.entryStyle === "shallow" || setup.h4Lead) return 86;
-  return 82;
+  return minLiveConfidenceForSide(setup);
 }
 
 function geometryOk(setup: SmcSetup): { ok: boolean; why: string } {
@@ -146,6 +143,15 @@ export async function validateLiveSmcBeforePlace(opts: {
     return {
       ok: false,
       reason: `Mode ${liveSidesLabel()} — SHORT refusé (HL_ALLOW_SHORT=false)`,
+      mid: null,
+      checks,
+    };
+  }
+  if (!isQualityShortSetup(setup)) {
+    return {
+      ok: false,
+      reason:
+        "SHORT refusé — exige continuation D1+H4 deep (pas correction / H4-lead / shallow)",
       mid: null,
       checks,
     };

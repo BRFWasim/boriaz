@@ -4,16 +4,24 @@ import { parseNum } from "./format";
 import { postInfo } from "./hyperliquid";
 import { sendTelegramMessage } from "./telegram";
 
-/** Tickers Hyperliquid — watchlist multi-TF élargie. */
+/** Tickers Hyperliquid — watchlist multi-TF élargie.
+ * Priorité user : BNB, SUI, ONDO, PENDLE, ASTER (+ majors).
+ * Note : DRV / BGB pas de perp principal HL (DRV = spot/para builder ; BGB absent) —
+ * non listés pour éviter des scans morts.
+ */
 export const WATCHLIST = [
   { coin: "BTC", label: "BTC" },
   { coin: "ETH", label: "ETH" },
   { coin: "SOL", label: "SOL" },
+  { coin: "BNB", label: "BNB" },
+  { coin: "SUI", label: "SUI" },
+  { coin: "ONDO", label: "ONDO" },
+  { coin: "PENDLE", label: "PENDLE" },
+  { coin: "ASTER", label: "ASTER" },
   { coin: "UNI", label: "UNISWAP" },
   { coin: "AVAX", label: "AVAX" },
   { coin: "LINK", label: "LINK" },
   { coin: "DOGE", label: "DOGE" },
-  { coin: "SUI", label: "SUI" },
   { coin: "NEAR", label: "NEAR" },
   { coin: "APT", label: "APT" },
   { coin: "SEI", label: "SEI" },
@@ -21,12 +29,10 @@ export const WATCHLIST = [
   { coin: "RENDER", label: "RENDER" },
   { coin: "FET", label: "FET" },
   { coin: "AAVE", label: "AAVE" },
-  { coin: "PENDLE", label: "PENDLE" },
   { coin: "TIA", label: "TIA" },
   { coin: "INJ", label: "INJ" },
   { coin: "kPEPE", label: "PEPE" },
   { coin: "PUMP", label: "PUMP" },
-  { coin: "ONDO", label: "ONDO" },
   { coin: "HYPE", label: "HYPE" },
 ] as const;
 

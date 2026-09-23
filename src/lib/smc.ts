@@ -840,10 +840,8 @@ export function analyzeSmcSetup(input: {
   // H4-lead : D1 neutre mais H4+H1 alignés — early trend, demi-taille
   const longH4Lead =
     d1 === "neutre" && h4 === "haussier" && h1 !== "baissier" && !longContinuation;
-  const shortH4Lead =
-    d1 === "neutre" && h4 === "baissier" && h1 !== "haussier" && !shortContinuation;
+  // shortH4Lead / shortCorrection : volontairement non utilisés (shorts = continuation deep only)
   const correctionTfOk = execTf === "15m" || execTf === "30m";
-  const shortCorrection = d1 === "haussier" && correctionTfOk;
   const longCorrection = d1 === "baissier" && correctionTfOk;
 
   type Candidate = {
@@ -946,35 +944,31 @@ export function analyzeSmcSetup(input: {
     pushCont("long", "long_aligned", false);
   }
   const shortsOk = isShortAllowed();
+  // Shorts : uniquement continuation D1+H4 baissier + deep ÔTE (sûr et certain)
   if (shortsOk && shortContinuation) {
-    pushCont("short", "short_aligned", false);
+    const deepShort = evaluateSideOnExec({
+      side: "short",
+      candlesExec: input.candlesExec,
+      price: input.price,
+      walletEur: input.walletEur,
+      maxLeverage: maxLev,
+      entryStyle: "deep",
+    });
+    candidates.push({
+      side: "short",
+      signalType: "short_aligned",
+      counterTrend: false,
+      tradeKind: "continuation",
+      h4Lead: false,
+      entryStyle: "deep",
+      local: deepShort,
+    });
   }
   if (longH4Lead) {
     pushCont("long", "long_aligned", true);
   }
-  if (shortsOk && shortH4Lead) {
-    pushCont("short", "short_aligned", true);
-  }
-  // Long-only temporaire : pas de shorts ni de corrections contre-tendance
-  // (couteau baissier). Remettre HL_ALLOW_SHORT=true pour réactiver.
-  if (shortsOk && shortCorrection && !shortContinuation && !shortH4Lead) {
-    candidates.push({
-      side: "short",
-      signalType: "short_counter_trend",
-      counterTrend: true,
-      tradeKind: "correction",
-      h4Lead: false,
-      entryStyle: "deep",
-      local: evaluateSideOnExec({
-        side: "short",
-        candlesExec: input.candlesExec,
-        price: input.price,
-        walletEur: input.walletEur,
-        maxLeverage: maxLev,
-      }),
-    });
-  }
-  // Corrections LONG gardées même en Long-only (gate conf 88 + range)
+  // shortH4Lead / shortCorrection / short shallow exclus — trop fragiles
+  // Corrections LONG gardées (gate conf 88 + range)
   if (longCorrection && !longContinuation && !longH4Lead) {
     candidates.push({
       side: "long",

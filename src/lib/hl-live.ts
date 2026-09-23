@@ -802,7 +802,7 @@ export async function placeBoriazLiveTrade(
       ok: false,
       skipped: true,
       reason:
-        "HL_ALLOW_SHORT=false — Long-only temporaire (shorts refusés). Remettre true pour shorts.",
+        "HL_ALLOW_SHORT=false — Long-only (shorts refusés). Remettre true pour shorts qualité.",
     };
   }
 
