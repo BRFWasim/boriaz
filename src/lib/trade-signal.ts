@@ -33,7 +33,6 @@ import type { BookTrade } from "./user-types";
 import type { EntryMode } from "./user-types";
 import {
   isScalpPortfolio,
-  portfolioAllowsLive,
   scalpLiveRiskPct,
 } from "./user-types";
 import type { BuyTimingAction, SignalBias } from "./types";
@@ -487,12 +486,8 @@ export async function getTradeSignals(options?: {
   let liveArmed = false;
   try {
     const { isLiveEnvReady } = await import("./hl-live");
-    liveArmed =
-      Boolean(prefs.liveTradeEnabled) &&
-      prefs.portfolios.some(
-        (p) => p.liveTradeEnabled && portfolioAllowsLive(p),
-      ) &&
-      isLiveEnvReady().ok;
+    const { isPrefsLiveArmed } = await import("./user-types");
+    liveArmed = isPrefsLiveArmed(prefs) && isLiveEnvReady().ok;
   } catch {
     liveArmed = false;
   }

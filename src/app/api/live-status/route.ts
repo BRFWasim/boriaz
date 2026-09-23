@@ -2,6 +2,7 @@ import { getLiveConfig, isLiveEnvReady } from "@/lib/hl-live";
 import { bindUserRequest } from "@/lib/bind-request";
 import { loadPrefs } from "@/lib/persist";
 import { liveSidesLabel } from "@/lib/live-side-policy";
+import { isPrefsLiveArmed } from "@/lib/user-types";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -15,6 +16,7 @@ export async function GET() {
   const ready = isLiveEnvReady();
   const prefs = await loadPrefs();
   const boriaz = prefs.portfolios.find((p) => p.id === "boriaz");
+  const togglesOn = isPrefsLiveArmed(prefs);
 
   return Response.json({
     ok: true,
@@ -34,8 +36,9 @@ export async function GET() {
       accountAddress: cfg.accountAddress,
     },
     prefs: {
-      liveTradeEnabled: Boolean(prefs.liveTradeEnabled),
+      liveTradeEnabled: togglesOn,
       boriazLiveTradeEnabled: Boolean(boriaz?.liveTradeEnabled),
+      armed: togglesOn,
     },
     howto: {
       keyWhere:
@@ -43,7 +46,7 @@ export async function GET() {
       agentWallet:
         "Sur app.hyperliquid.xyz → API → créer un Agent Wallet, coller UNIQUEMENT sa private key (pas la seed master).",
       arm:
-        "Mettre HL_LIVE_ENABLED=true + caps HL_MAX_* puis activer les 2 toggles Lab (global + Boriaz).",
+        "HL_LIVE_ENABLED=true + Lab → portefeuille Boriaz → « LIVE HL » (un seul interrupteur).",
       sides:
         "HL_ALLOW_SHORT=true → shorts qualité (continuation D1+H4 deep, conf≥90). false → Long-only.",
       cron: "cron-job.org → /api/cron (ACK <2s, travail en fond). Manage trades d’abord, puis signaux/live. /api/cron/zone = burst WS mids.",

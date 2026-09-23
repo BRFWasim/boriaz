@@ -14,6 +14,7 @@ import {
   storageInfo,
 } from "./persist";
 import type { UserPrefs } from "./user-types";
+import { isPrefsLiveArmed } from "./user-types";
 import { getLiveConfig, isLiveEnvReady } from "./hl-live";
 import { loadLiveJournal } from "./live-journal";
 
@@ -76,7 +77,8 @@ function liveTogglesFromPrefs(prefs: UserPrefs | null | undefined): {
   const boriaz = Boolean(
     prefs?.portfolios?.find((p) => p.id === "boriaz")?.liveTradeEnabled,
   );
-  return { global, boriaz, on: global && boriaz };
+  // Un seul suffit (Boriaz LIVE HL = source de vérité)
+  return { global, boriaz, on: isPrefsLiveArmed(prefs) };
 }
 
 /** Prefs du bot cron (= user `default`) — c’est ce qui arme vraiment le LIVE. */
@@ -208,22 +210,13 @@ export async function getBotBrief(): Promise<BotBriefPayload> {
       at: now,
     });
   } else if (!liveTogglesOn) {
-    const missing: string[] = [];
-    if (!botToggles.global && !sessionToggles.global) {
-      missing.push("toggle global « trade live »");
-    }
-    if (!botToggles.boriaz && !sessionToggles.boriaz) {
-      missing.push("toggle portefeuille Boriaz");
-    }
     items.push({
       id: "live-toggles",
       kind: "live",
       tone: "warn",
-      title: "LIVE armé — active les toggles Lab",
+      title: "LIVE armé — coche LIVE HL (Boriaz)",
       detail:
-        missing.length > 0
-          ? `Manque : ${missing.join(" + ")}. Lab → enregistrer.`
-          : "Active trade live global + Boriaz, puis Enregistrer.",
+        "Lab → portefeuille Boriaz → « LIVE HL » → Enregistrer. Un seul interrupteur.",
       at: now,
     });
   } else {

@@ -428,8 +428,8 @@ export function HomePanel({ onOpenTab }: { onOpenTab?: (tab: string) => void }) 
             }
             tip={
               brief.health.liveOk
-                ? "Env + toggles Lab (global + Boriaz) OK"
-                : "Il faut HL_LIVE_ENABLED + trade live global + portefeuille Boriaz, puis Enregistrer"
+                ? "Env + LIVE HL (Boriaz) OK"
+                : "HL_LIVE_ENABLED + Lab → Boriaz → LIVE HL → Enregistrer"
             }
           />
           {liveAt ? (

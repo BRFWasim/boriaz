@@ -428,7 +428,14 @@ export function LabPanel() {
         ? { ...p, ...finalPatch, id: p.id, isDefault: p.isDefault }
         : p,
     );
-    const next = { ...prefs, portfolios };
+    // Un seul interrupteur : Boriaz LIVE HL ↔ miroir global (legacy)
+    const next: UserPrefs = {
+      ...prefs,
+      portfolios,
+      ...(id === "boriaz" && "liveTradeEnabled" in finalPatch
+        ? { liveTradeEnabled: Boolean(finalPatch.liveTradeEnabled) }
+        : {}),
+    };
     patchPrefs(next);
     // Auto-save immédiat pour les toggles LIVE / paper (sinon le cron ignore)
     if (
@@ -930,24 +937,10 @@ export function LabPanel() {
               />
               Paper trade auto (tous portefeuilles)
             </label>
-            <label className="flex items-center gap-2 text-sm text-amber-700 dark:text-amber-400">
-              <input
-                type="checkbox"
-                checked={Boolean(prefs.liveTradeEnabled)}
-                onChange={(e) => {
-                  const next = {
-                    ...prefs,
-                    liveTradeEnabled: e.target.checked,
-                  };
-                  patchPrefs(next);
-                  void savePrefs(next);
-                }}
-              />
-              LIVE master (legacy — n’active plus Défaut/Scalp)
-            </label>
             <p className="text-[11px] text-muted-foreground sm:col-span-2">
-              LIVE réel : <strong>Boriaz uniquement</strong> (SMC). Défaut /
-              Scalp / Risqué = paper only, jamais HL. Kill-switch env{" "}
+              LIVE réel : un seul interrupteur —{" "}
+              <strong>portefeuille Boriaz → LIVE HL</strong> (ci-dessous). Défaut /
+              Scalp = paper only. Kill-switch env{" "}
               <code className="text-[10px]">HL_LIVE_ENABLED</code> obligatoire.
             </p>
           </div>
@@ -1272,7 +1265,7 @@ export function LabPanel() {
                         />
                         LIVE HL
                         <span className="text-[10px] text-muted-foreground">
-                          (Boriaz seul · illimité)
+                          (seul interrupteur live)
                         </span>
                       </label>
                     ) : (

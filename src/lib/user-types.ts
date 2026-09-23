@@ -62,6 +62,37 @@ export function portfolioAllowsLive(
   return p.id === "boriaz";
 }
 
+/**
+ * LIVE armé côté prefs = Boriaz « LIVE HL » coché.
+ * Le flag global `liveTradeEnabled` est un miroir (legacy) — plus besoin des deux.
+ */
+export function isPrefsLiveArmed(
+  prefs:
+    | Pick<UserPrefs, "liveTradeEnabled" | "portfolios">
+    | null
+    | undefined,
+): boolean {
+  if (!prefs) return false;
+  const boriaz = prefs.portfolios?.find((p) => p.id === "boriaz");
+  if (Boolean(boriaz?.liveTradeEnabled)) return true;
+  // Legacy : ancien master global seul
+  return Boolean(prefs.liveTradeEnabled);
+}
+
+/** Aligne global ↔ Boriaz pour qu’un seul clic Lab suffise. */
+export function syncLiveToggles(prefs: UserPrefs): UserPrefs {
+  const portfolios = ensurePortfolios(prefs.portfolios);
+  const boriaz = portfolios.find((p) => p.id === "boriaz");
+  const armed = Boolean(boriaz?.liveTradeEnabled) || Boolean(prefs.liveTradeEnabled);
+  return {
+    ...prefs,
+    liveTradeEnabled: armed,
+    portfolios: portfolios.map((p) =>
+      p.id === "boriaz" ? { ...p, liveTradeEnabled: armed } : p,
+    ),
+  };
+}
+
 /** Risque live Scalp plafonné très bas (petites mises). */
 export const SCALP_LIVE_RISK_PCT_MAX = 0.35;
 export const SCALP_LIVE_RISK_PCT_DEFAULT = 0.25;
