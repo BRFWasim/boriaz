@@ -19,11 +19,11 @@ export type LiveSmcGateResult = {
   checks: string[];
 };
 
-const GLOBAL_COOLDOWN_MS = 3 * 60_000; // 3 min entre trades globaux
-const COIN_COOLDOWN_MS = 45 * 60_000; // 45 min même coin après open
-/** Après un stop-out OU un close (TP) : pas de revenge / spam 3h sur le coin. */
+const GLOBAL_COOLDOWN_MS = 90_000; // 90s entre trades globaux
+const COIN_COOLDOWN_MS = 25 * 60_000; // 25 min même coin après open
+/** Après SL : 3h. Après TP : géré via noteLiveStopOut(kind). */
 const STOPOUT_COIN_COOLDOWN_MS = 3 * 60 * 60_000;
-const STOPOUT_GLOBAL_COOLDOWN_MS = 20 * 60_000;
+const STOPOUT_GLOBAL_COOLDOWN_MS = 15 * 60_000;
 const COOLDOWN_GLOBAL_KEY = "boriaz:live-cd:global";
 const coinCooldownKey = (coin: string) =>
   `boriaz:live-cd:${coin.toUpperCase()}`;
@@ -34,8 +34,8 @@ const GLOBAL_STOP_KEY = "boriaz:live-stopout:global";
 export function noteLiveOpen(coin: string): void {
   const now = Date.now();
   void import("./arch-guards").then(({ setDurableCooldown }) => {
-    void setDurableCooldown(COOLDOWN_GLOBAL_KEY, now, 180);
-    void setDurableCooldown(coinCooldownKey(coin), now, 3600);
+    void setDurableCooldown(COOLDOWN_GLOBAL_KEY, now, 120);
+    void setDurableCooldown(coinCooldownKey(coin), now, 30 * 60);
   });
 }
 
@@ -204,6 +204,29 @@ export async function validateLiveSmcBeforePlace(opts: {
     };
   }
   checks.push(`confiance ${conf} ≥ ${minConf}`);
+
+  // OI / funding — soft block si overcrowded extrême contre le sens
+  try {
+    const { getPerpFlowBias, flowBlocksSide, applyFlowToConfidence } =
+      await import("./perp-flow");
+    const flow = await getPerpFlowBias(setup.coin);
+    const blocked = flowBlocksSide(setup.order.side, flow);
+    if (blocked.block) {
+      return { ok: false, reason: blocked.why, mid: null, checks };
+    }
+    const adj = applyFlowToConfidence(setup.order.side, conf, flow);
+    if (adj.confidence < minConf) {
+      return {
+        ok: false,
+        reason: `Flow OI/funding baisse conf à ${adj.confidence} < ${minConf} — ${adj.note}`,
+        mid: null,
+        checks,
+      };
+    }
+    checks.push(`flow ${flow.bias} (${adj.note.slice(0, 80)})`);
+  } catch {
+    checks.push("flow n/d");
+  }
 
   if (!scan.liveEligible) {
     return {

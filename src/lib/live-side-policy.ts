@@ -51,24 +51,24 @@ export function isQualityShortSetup(setup: {
   return true;
 }
 
-/** Seuils confiance : shorts plus élevés que longs. */
+/** Seuils confiance : assouplis pour trader + (shorts restent plus exigeants). */
 export function minGateConfidenceForSide(setup: SmcSetup): number {
   if (setup.order?.side === "short") {
-    if (setup.tradeKind === "correction" || setup.counterTrend) return 95;
-    if (setup.h4Lead || setup.entryStyle === "shallow") return 92;
-    return 88; // short continuation deep
+    if (setup.tradeKind === "correction" || setup.counterTrend) return 92;
+    if (setup.h4Lead || setup.entryStyle === "shallow") return 90;
+    return 84; // short continuation deep
   }
-  if (setup.tradeKind === "correction" || setup.counterTrend) return 82;
-  return 75;
+  if (setup.tradeKind === "correction" || setup.counterTrend) return 78;
+  return 70;
 }
 
 export function minLiveConfidenceForSide(setup: SmcSetup): number {
   if (setup.order?.side === "short") {
-    if (setup.tradeKind === "correction" || setup.counterTrend) return 95;
-    if (setup.h4Lead || setup.entryStyle === "shallow") return 92;
-    return 90; // sûr et certain avant short LIVE
+    if (setup.tradeKind === "correction" || setup.counterTrend) return 92;
+    if (setup.h4Lead || setup.entryStyle === "shallow") return 90;
+    return 86; // short LIVE — sûr mais un cran plus accessible
   }
-  if (setup.tradeKind === "correction" || setup.counterTrend) return 88;
-  if (setup.entryStyle === "shallow" || setup.h4Lead) return 86;
-  return 82;
+  if (setup.tradeKind === "correction" || setup.counterTrend) return 82;
+  if (setup.entryStyle === "shallow" || setup.h4Lead) return 80;
+  return 76;
 }

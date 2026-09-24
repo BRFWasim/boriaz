@@ -165,7 +165,7 @@ export function getLiveConfig(): LiveConfigStatus {
     maxOpenPositions: Math.min(
       3,
       Math.floor(
-        envNumAny(["HL_MAX_OPEN_POSITIONS", "HL_MAX_OPEN_POSITIONS"], 1),
+        envNumAny(["HL_MAX_OPEN_POSITIONS", "HL_MAX_OPEN_POSITIONS"], 2),
       ),
     ),
     agentAddress,

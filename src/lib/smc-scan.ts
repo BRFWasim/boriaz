@@ -16,7 +16,7 @@ import {
 } from "./live-side-policy";
 
 /** Rotation watchlist — scan rapide (évite timeout 120s cron). */
-export function pickScanCoins(all: string[], take = 8): string[] {
+export function pickScanCoins(all: string[], take = 12): string[] {
   if (!all.length) return [];
   const must = ["BTC", "ETH", "SOL", "BNB", "SUI", "ONDO", "PENDLE", "ASTER"];
   const priority = must.filter((c) => all.includes(c));
@@ -129,7 +129,11 @@ function parseGateJson(
   };
 }
 
-function smcGatePrompt(setup: SmcSetup, rangeNote?: string): string {
+function smcGatePrompt(
+  setup: SmcSetup,
+  rangeNote?: string,
+  flowNote?: string,
+): string {
   const side = setup.order?.side?.toUpperCase() ?? "?";
   return `${BORIAZ_SMC_SYSTEM_PROMPT}
 
@@ -140,6 +144,7 @@ Sens proposé: ${side}
 Prix: ${setup.price}
 Kind: ${setup.tradeKind ?? "?"}
 Range / macro fourni: ${rangeNote || "non fourni — déduis depuis le rapport"}
+OI / funding / squeeze: ${flowNote || "non fourni"}
 
 Analyse déterministe déjà calculée (à valider ou corriger) :
 
@@ -148,6 +153,7 @@ ${setup.report}
 Si TOUTE la checklist structure est VALIDÉE (Sweep + BOS corps + FVG + ÔTE)
 ET (statut « ORDRE PRÊT À ÊTRE EXÉCUTÉ » OU « EN ATTENTE DE RETRACEMENT » en CONTINUATION — pour pré-armer une limite GTC en zone)
 ET le range BTC/actif n’interdit PAS ce sens (pas de SHORT en vrai bas, pas de LONG en haut D1)
+ET le flux OI/funding n’est PAS extrême CONTRE le sens (ex: long si funding >> 0 overcrowded)
 ET l’espérance de gain est claire,
 approve=true.
 Si EN ATTENTE en CORRECTION / counter-trend → approve=false (pas de limite spéculative).
@@ -171,6 +177,7 @@ async function askClaudeSmcGate(setup: SmcSetup): Promise<GateResult | null> {
 async function askGptSmcGate(
   setup: SmcSetup,
   rangeNote?: string,
+  flowNote?: string,
 ): Promise<GateResult | null> {
   const key = process.env.OPENAI_API_KEY?.trim();
   if (!key) return null;
@@ -179,14 +186,14 @@ async function askGptSmcGate(
     "./arch-guards"
   );
   const budget = await canCallAi(
-    // Checklist 100% + ORDRE PRÊT → on laisse ChatGPT trancher même si conf mécanique ~70
+    // Checklist 100% + ORDRE PRÊT → laisse ChatGPT trancher un cran plus bas
     Math.max(
       setup.confidence,
       setup.checklist.allPass &&
       (setup.status === "ORDRE PRÊT À ÊTRE EXÉCUTÉ" ||
         (setup.status === "EN ATTENTE DE RETRACEMENT" &&
           setup.tradeKind === "continuation"))
-        ? 75
+        ? 68
         : 0,
     ),
   );
@@ -217,9 +224,12 @@ async function askGptSmcGate(
         messages: [
           {
             role: "system",
-            content: `${BORIAZ_SMC_SYSTEM_PROMPT}\n\nRAPPEL SYSTÈME: FAIRE GAGNER DE L'ARGENT — refuse les setups incohérents avec le range macro.`,
+            content: `${BORIAZ_SMC_SYSTEM_PROMPT}\n\nRAPPEL SYSTÈME: FAIRE GAGNER DE L'ARGENT — refuse les setups incohérents avec le range macro / OI crowding.`,
           },
-          { role: "user", content: smcGatePrompt(setup, rangeNote) },
+          {
+            role: "user",
+            content: smcGatePrompt(setup, rangeNote, flowNote),
+          },
         ],
       }),
       signal: AbortSignal.timeout(Math.max(2500, timeoutMs)),
@@ -265,6 +275,7 @@ async function askGptSmcGate(
 async function runSmcAiGates(
   setup: SmcSetup,
   rangeNote?: string,
+  flowNote?: string,
 ): Promise<{
   approved: boolean;
   note: string;
@@ -272,7 +283,7 @@ async function runSmcAiGates(
   model: string;
   confidence: number;
 }> {
-  const gpt = await askGptSmcGate(setup, rangeNote);
+  const gpt = await askGptSmcGate(setup, rangeNote, flowNote);
   void askClaudeSmcGate;
   void CLAUDE_MODEL;
   const gates = [gpt].filter(Boolean) as GateResult[];
@@ -353,10 +364,10 @@ export async function scanSmcWatchlist(input: {
 }): Promise<SmcScanResult> {
   const coins =
     input.coins?.length
-      ? pickScanCoins(input.coins, 8)
+      ? pickScanCoins(input.coins, 12)
       : pickScanCoins(
           WATCHLIST.map((w) => w.coin),
-          8,
+          12,
         );
 
   const cacheKey = `${coins.join(",")}:${Math.round(input.walletEur)}`;
@@ -513,18 +524,46 @@ export async function scanSmcWatchlist(input: {
     }
 
     gatedTried += 1;
-    const gate = await runSmcAiGates(cand, rangeNote);
+    let flowNote = "";
+    try {
+      const { getPerpFlowBias, flowBlocksSide, applyFlowToConfidence } =
+        await import("./perp-flow");
+      const flow = await getPerpFlowBias(cand.coin);
+      flowNote = `${flow.bias} · ${flow.note}`;
+      const blocked = flowBlocksSide(cand.order.side, flow);
+      if (blocked.block) {
+        refusals.push(`${cand.coin}: FLOW ${blocked.why}`.slice(0, 140));
+        aiNote = blocked.why;
+        continue;
+      }
+      void applyFlowToConfidence;
+    } catch {
+      flowNote = "flow n/d";
+    }
+    const gate = await runSmcAiGates(cand, rangeNote, flowNote);
     if (gate.approved) {
       best = cand;
       aiApproved = true;
-      aiNote = `${gate.note} · ${rangeNote}`;
+      let conf = gate.confidence;
+      try {
+        const { getPerpFlowBias, applyFlowToConfidence } = await import(
+          "./perp-flow"
+        );
+        const flow = await getPerpFlowBias(cand.coin);
+        const adj = applyFlowToConfidence(cand.order.side, conf, flow);
+        conf = adj.confidence;
+        flowNote = adj.note;
+      } catch {
+        /* ignore */
+      }
+      aiNote = `${gate.note} · ${rangeNote} · ${flowNote}`;
       aiReport = gate.report;
       model = gate.model;
-      aiConfidence = gate.confidence;
+      aiConfidence = conf;
       if (gate.report) cand.report = gate.report;
       cand.confidence = Math.min(
         95,
-        Math.round((cand.confidence + gate.confidence) / 2),
+        Math.round((cand.confidence + conf) / 2),
       );
       break;
     }

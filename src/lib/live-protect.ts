@@ -14,26 +14,35 @@ import {
 import { InfoClient } from "@nktkas/hyperliquid";
 import { minSlDistancePct } from "./smc";
 
-const STOPOUT_COIN_COOLDOWN_MS = 3 * 60 * 60_000; // 3h après close (TP ou SL)
-const STOPOUT_GLOBAL_COOLDOWN_MS = 20 * 60_000;
+const STOPOUT_COIN_COOLDOWN_MS = 3 * 60 * 60_000; // 3h après SL
+const STOPOUT_COIN_TP_COOLDOWN_MS = 60 * 60_000; // 60 min après TP (reprendre plus vite)
+const STOPOUT_GLOBAL_COOLDOWN_MS = 15 * 60_000;
+const STOPOUT_GLOBAL_TP_COOLDOWN_MS = 8 * 60_000;
 
 function coinStopKey(coin: string) {
   return `boriaz:live-stopout:${coin.toUpperCase()}`;
 }
 const GLOBAL_STOP_KEY = "boriaz:live-stopout:global";
 
-export async function noteLiveStopOut(coin: string): Promise<void> {
+export async function noteLiveStopOut(
+  coin: string,
+  kind: "sl" | "tp" = "sl",
+): Promise<void> {
   const now = Date.now();
+  const coinMs =
+    kind === "tp" ? STOPOUT_COIN_TP_COOLDOWN_MS : STOPOUT_COIN_COOLDOWN_MS;
+  const globalMs =
+    kind === "tp" ? STOPOUT_GLOBAL_TP_COOLDOWN_MS : STOPOUT_GLOBAL_COOLDOWN_MS;
   const { setDurableCooldown } = await import("./arch-guards");
   await setDurableCooldown(
     coinStopKey(coin),
     now,
-    Math.ceil(STOPOUT_COIN_COOLDOWN_MS / 1000) + 60,
+    Math.ceil(coinMs / 1000) + 60,
   );
   await setDurableCooldown(
     GLOBAL_STOP_KEY,
     now,
-    Math.ceil(STOPOUT_GLOBAL_COOLDOWN_MS / 1000) + 60,
+    Math.ceil(globalMs / 1000) + 60,
   );
   // Annuler toute limite d’entrée restante sur ce coin (anti fill immédiat)
   try {
@@ -69,17 +78,21 @@ export async function isInStopOutCooldown(coin: string): Promise<{
 }> {
   const { getDurableCooldown } = await import("./arch-guards");
   const now = Date.now();
+  // La clé Redis expire toute seule (TTL court après TP, long après SL).
   const g = await getDurableCooldown(GLOBAL_STOP_KEY);
-  if (g > 0 && now - g < STOPOUT_GLOBAL_COOLDOWN_MS) {
-    const wait = Math.ceil((STOPOUT_GLOBAL_COOLDOWN_MS - (now - g)) / 1000);
-    return { blocked: true, reason: `Cooldown post-stop global encore ${wait}s` };
-  }
-  const c = await getDurableCooldown(coinStopKey(coin));
-  if (c > 0 && now - c < STOPOUT_COIN_COOLDOWN_MS) {
-    const wait = Math.ceil((STOPOUT_COIN_COOLDOWN_MS - (now - c)) / 60000);
+  if (g > 0) {
+    const ageSec = Math.round((now - g) / 1000);
     return {
       blocked: true,
-      reason: `Cooldown post-stop ${coin.toUpperCase()} encore ~${wait} min — pas de revenge trade`,
+      reason: `Cooldown post-close global (posé il y a ${ageSec}s)`,
+    };
+  }
+  const c = await getDurableCooldown(coinStopKey(coin));
+  if (c > 0) {
+    const ageMin = Math.max(1, Math.round((now - c) / 60_000));
+    return {
+      blocked: true,
+      reason: `Cooldown post-close ${coin.toUpperCase()} (posé il y a ~${ageMin} min)`,
     };
   }
   return { blocked: false };
@@ -235,15 +248,17 @@ export async function detectStopOutsAndArmCooldown(): Promise<{
       continue;
     }
     found += 1;
-    await noteLiveStopOut(entry.coin);
+    const pnl = Number(recent.closedPnl ?? 0);
+    const kind = pnl >= 0 ? "tp" : "sl";
+    await noteLiveStopOut(entry.coin, kind);
     await updateLiveJournalEntry(entry.id, {
       status: "closed",
       closedAt: Number(recent.time) || now,
     });
-    const pnl = Number(recent.closedPnl ?? 0);
-    const kind = pnl >= 0 ? "TP/close+" : "STOP/close-";
+    const label = kind === "tp" ? "TP/close+" : "STOP/close-";
+    const cd = kind === "tp" ? "60 min" : "3h";
     notes.push(
-      `${entry.coin}: ${kind} détecté pnl=${pnl.toFixed(2)}$ → cooldown 3h (anti spam re-entry)`,
+      `${entry.coin}: ${label} détecté pnl=${pnl.toFixed(2)}$ → cooldown ${cd}`,
     );
   }
   return { found, notes };
