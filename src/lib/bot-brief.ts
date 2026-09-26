@@ -191,7 +191,17 @@ export async function getBotBrief(): Promise<BotBriefPayload> {
   }
 
   // —— LIVE ——
-  if (!liveCfg.envArmed) {
+  const { LIVE_TRADES_FORCE_OFF } = await import("./hl-live");
+  if (LIVE_TRADES_FORCE_OFF) {
+    items.push({
+      id: "live-force-off",
+      kind: "live",
+      tone: "info",
+      title: "LIVE désactivé",
+      detail: "Kill-switch code — aucun ordre réel. Paper seul.",
+      at: now,
+    });
+  } else if (!liveCfg.envArmed) {
     items.push({
       id: "live-disarmed",
       kind: "live",
@@ -316,7 +326,11 @@ export async function getBotBrief(): Promise<BotBriefPayload> {
   });
   unique.sort((a, b) => b.at - a.at);
 
-  const liveOk = liveCfg.envArmed && liveReady.ok && liveTogglesOn;
+  const liveOk =
+    !LIVE_TRADES_FORCE_OFF &&
+    liveCfg.envArmed &&
+    liveReady.ok &&
+    liveTogglesOn;
   // Paper OK si Redis OK (un trade ouvert = preuve supplémentaire)
   const paperOk = storageOk;
 

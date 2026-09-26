@@ -177,7 +177,19 @@ export function getLiveConfig(): LiveConfigStatus {
   };
 }
 
+/**
+ * Kill-switch code — LIVE coupé sur demande.
+ * Remettre à false + HL_LIVE_ENABLED=true pour réactiver.
+ */
+export const LIVE_TRADES_FORCE_OFF = true;
+
 export function isLiveEnvReady(): { ok: boolean; reason?: string } {
+  if (LIVE_TRADES_FORCE_OFF) {
+    return {
+      ok: false,
+      reason: "LIVE désactivé (kill-switch code).",
+    };
+  }
   const cfg = getLiveConfig();
   if (!cfg.envArmed) {
     return {

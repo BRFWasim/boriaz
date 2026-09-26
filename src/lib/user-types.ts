@@ -177,7 +177,8 @@ export const BORIAZ_PORTFOLIO: PortfolioProfile = {
   isDefault: false,
   enabled: true,
   paperTradeEnabled: true,
-  liveTradeEnabled: true,
+  /** LIVE coupé par défaut — réactiver via Lab + kill-switch code. */
+  liveTradeEnabled: false,
   bankrollEur: 1000,
   maxLeverage: 8,
   sizePct: 15,
