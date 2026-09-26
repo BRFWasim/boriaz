@@ -54,6 +54,24 @@ export async function runCronWork(phase: CronPhase = "all"): Promise<{
     /* ignore */
   }
 
+  const { ANALYSES_FORCE_OFF, AI_FORCE_OFF, SITE_FORCE_OFF } = await import(
+    "./kill-switches"
+  );
+  if (ANALYSES_FORCE_OFF || AI_FORCE_OFF || SITE_FORCE_OFF) {
+    results.skipped = "site/ai/analyses off";
+    try {
+      await saveCronStatus({
+        at: Date.now(),
+        ok: true,
+        tick: phase,
+        note: "disabled-no-op",
+      });
+    } catch {
+      /* ignore */
+    }
+    return { at: Date.now(), phase, results, ok: true };
+  }
+
   const wantManage = phase === "all" || phase === "manage";
   const wantSignals = phase === "all" || phase === "signals";
 

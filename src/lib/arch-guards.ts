@@ -194,6 +194,10 @@ export async function canCallAi(score: number): Promise<{
   ok: boolean;
   reason: string;
 }> {
+  const { AI_FORCE_OFF } = await import("./kill-switches");
+  if (AI_FORCE_OFF) {
+    return { ok: false, reason: "IA coupée (AI_FORCE_OFF)" };
+  }
   if (process.env.AI_ENABLED?.trim().toLowerCase() === "false") {
     return { ok: false, reason: "AI_ENABLED=false" };
   }
